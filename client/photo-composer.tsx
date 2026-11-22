@@ -10,7 +10,8 @@ import { checkPhotoSelection, clipboardPhotos, isFileDrag, readWorkPhoto, type D
 export function usePhotoDraft() {
   const [photos, setPhotos] = useState<DraftPhoto[]>([]);
   const latest = useRef<DraftPhoto[]>([]);
-  const [error, setError] = useState<PhotoError | null>(null);
+  const failed = useRef(new Map<number | undefined, PhotoError>());
+  const [errors, setErrors] = useState(failed.current);
   const [inputScope, setInputScope] = useState<number>();
   const [reading, setReading] = useState(false);
   const readPending = useRef(false);
@@ -21,12 +22,27 @@ export function usePhotoDraft() {
     setPhotos(next);
   }
 
+  function setFailure(scope: number | undefined, error: PhotoError | null) {
+    const next = new Map(failed.current);
+    if (error) next.set(scope, error);
+    else next.delete(scope);
+    failed.current = next;
+    setErrors(next);
+  }
+
+  // Event handlers may run before React paints the reading/error state.
+  function blocksSubmit() {
+    return readPending.current || failed.current.size > 0;
+  }
+
   async function add(files: File[], questionIndex?: number) {
-    if (!files.length || readPending.current) return;
+    if (readPending.current) return;
     setInputScope(questionIndex);
-    const reason = checkPhotoSelection(latest.current, files);
-    setError(reason);
-    if (reason) return;
+    const reason = files.length ? checkPhotoSelection(latest.current, files) : "read";
+    if (reason) {
+      setFailure(questionIndex, reason);
+      return;
+    }
     readPending.current = true;
     setReading(true);
     try {
@@ -36,8 +52,9 @@ export function usePhotoDraft() {
         batch.push({ id: ++sequence.current, name: file.name, size: file.size, questionIndex, image, preview: `data:${image.mimeType};base64,${image.data}` });
       }
       update([...latest.current, ...batch]);
+      setFailure(questionIndex, null);
     } catch {
-      setError("read");
+      setFailure(questionIndex, "read");
     } finally {
       readPending.current = false;
       setReading(false);
@@ -46,14 +63,15 @@ export function usePhotoDraft() {
 
   function remove(id: number) {
     update(latest.current.filter(photo => photo.id !== id));
-    setError(null);
   }
 
   function clear() {
     update([]);
-    setError(null);
+    failed.current = new Map();
+    setErrors(failed.current);
   }
-  return { photos, latest, error, reading, inputScope, readPending, add, remove, clear };
+  return { photos, latest, errors, reading, inputScope, readPending, blocked: reading || errors.size > 0,
+    blocksSubmit, add, remove, clear, dismissFailure: (scope?: number) => setFailure(scope, null) };
 }
 
 type Props = {
@@ -94,6 +112,7 @@ export function PhotoComposer({ children, theme, disabled, draft, text = "", ope
   const attachLabel = t("첨부 파일 추가", "Add attachment");
   const atLimit = draft.photos.length >= MAX_WORK_IMAGES;
   const readingHere = draft.reading && draft.inputScope === questionIndex;
+  const error = draft.errors.get(questionIndex);
   const errorText = {
     format: t("JPEG, PNG 또는 WebP 사진을 선택해 주세요.", "Choose JPEG, PNG or WebP photos."),
     count: t("사진은 요청당 최대 4장까지 첨부할 수 있습니다.", "Attach up to 4 photos per request."),
@@ -122,8 +141,8 @@ export function PhotoComposer({ children, theme, disabled, draft, text = "", ope
     onPaste={event => {
       if (locked || draft.readPending.current) return;
       const files = clipboardPhotos(event.clipboardData);
-      if (!files.length) return;
-      if (!event.clipboardData.getData("text/plain")) event.preventDefault();
+      if (!files.length && !isFileDrag(event.clipboardData)) return;
+      if (!Array.from(event.clipboardData.types ?? []).includes("text/plain")) event.preventDefault();
       event.stopPropagation();
       void draft.add(files, questionIndex);
     }}>
@@ -133,7 +152,7 @@ export function PhotoComposer({ children, theme, disabled, draft, text = "", ope
         if (locked || draft.readPending.current) return;
         const files = Array.from(event.currentTarget.files ?? []);
         event.currentTarget.value = "";
-        void draft.add(files, questionIndex);
+        if (files.length) void draft.add(files, questionIndex);
       }} />
     <View style={{ ...wrap, alignItems: "center" }}>
       <button type="button" aria-label={attachLabel} title={attachLabel} disabled={locked || atLimit}
@@ -162,6 +181,14 @@ export function PhotoComposer({ children, theme, disabled, draft, text = "", ope
           disabled={locked} onPress={() => draft.remove(photo.id)} />
       </View>;
     })}
-    {draft.error && draft.inputScope === questionIndex && <Text accessibilityLiveRegion="polite" style={{ color: colors.statusDanger }}>{errorText[draft.error]}</Text>}
+    {error && <View style={{ gap: 4 }}>
+      <Text accessibilityLiveRegion="polite" style={{ color: colors.statusDanger }}>{errorText[error]}</Text>
+      <View style={wrap}>
+        <Button theme={theme} label={t("파일 다시 선택", "Choose files again")} disabled={locked || atLimit}
+          onPress={() => fileInput.current?.click()} />
+        <Button theme={theme} label={t("실패한 첨부 취소", "Discard failed attachment")} disabled={locked}
+          onPress={() => draft.dismissFailure(questionIndex)} />
+      </View>
+    </View>}
   </div>;
 }

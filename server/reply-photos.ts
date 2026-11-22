@@ -1,3 +1,4 @@
+import { boardPhotoMessageId } from "../shared/session-photos";
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -69,4 +70,12 @@ export function readLocalPhoto(directory:string, receiptKey:string, index:number
     return {mimeType:ref.mimeType, data:bytes.toString("base64")};
   } catch { return null; }
   finally { if (fd !== undefined) closeSync(fd); }
+}
+
+// Keep using an existing receipt's wire ID, including requests from older releases
+// or a retry that incorrectly reuses a key with a different payload.
+export function photoReceiptId(uuid: string, hasPhotos: boolean, receipts: Record<string, unknown>) {
+  if (Object.hasOwn(receipts, uuid)) return uuid;
+  const photoId = boardPhotoMessageId(uuid);
+  return hasPhotos || Object.hasOwn(receipts, photoId) ? photoId : uuid;
 }

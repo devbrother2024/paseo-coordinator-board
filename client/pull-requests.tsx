@@ -106,8 +106,8 @@ export function TrackedPullStatus({repo, number, projectId, theme, securityGate}
   </View>;
 }
 
-export function PullRequestCard({ pr, projectId, theme, decision = false, securityGate = false, openCoordinator, workSessions, onResult, clarification, priorityLabel }: {
-  pr: PullRequest; projectId: string; theme: Theme; workSessions: WorkSessionLink[]; decision?: boolean; securityGate?: boolean; openCoordinator?: () => void; onResult: (notice: MergeNotice) => void; clarification?: ReactNode; priorityLabel?: string;
+export function PullRequestCard({ pr, projectId, theme, decision = false, showDivider = true, securityGate = false, openCoordinator, workSessions, onResult, clarification, priorityLabel }: {
+  pr: PullRequest; projectId: string; theme: Theme; workSessions: WorkSessionLink[]; decision?: boolean; showDivider?: boolean; securityGate?: boolean; openCoordinator?: () => void; onResult: (notice: MergeNotice) => void; clarification?: ReactNode; priorityLabel?: string;
 }) {
   const { t } = useBoardLanguage();
   const c = theme.colors;
@@ -151,7 +151,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, securi
     finally { locked.current = false; setBusy(null); setPreview(null); setMethod(null); }
     setNotice(feedback); onResult(feedback);
   }
-  return <View style={{gap: 6, borderTopColor: c.border, borderTopWidth: 1, paddingVertical: 8}}>
+  return <View style={[{gap: 6}, showDivider && {borderTopColor: c.border, borderTopWidth: 1, paddingVertical: 8}]}>
     <View style={{ ...wrap, alignItems: "baseline" }}>
       <GitHubPullLink repo={pr.repo} number={pr.number} theme={theme} />
       <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>· {[status, priorityLabel].filter(Boolean).join(" · ")}</Text>

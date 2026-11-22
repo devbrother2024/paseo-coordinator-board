@@ -35,7 +35,7 @@ export function Clarification({card,title,theme,recipientId,recipientTitle,entri
   const history = [...saved,...sent.filter(entry => !saved.some(row => row.messageId === entry.messageId))].sort((a,b) => a.at.localeCompare(b.at));
   const hidden = Math.max(0,prior.length+history.length-visibleCount);
   const hasDraft = !!text.trim() || photos.photos.length > 0;
-  const editing = hasDraft || photos.reading || busy;
+  const editing = hasDraft || photos.blocked || busy;
   useDecisionInteraction(expanded || editing);
   useEffect(() => { onDraftChange?.(editing); }, [editing,onDraftChange]);
   // The conversation stays on the ledger card, while each new question binds its current source revision.
@@ -47,7 +47,7 @@ export function Clarification({card,title,theme,recipientId,recipientTitle,entri
     setExpanded(!expanded);
   }
   async function submit() {
-    if (!card || !recipientId || changed || sending.current || photos.readPending.current) return;
+    if (!card || !recipientId || changed || sending.current || photos.blocksSubmit()) return;
     const attachments = photos.latest.current;
     const question = text.trim();
     if (!question && !attachments.length) return;
@@ -77,7 +77,7 @@ export function Clarification({card,title,theme,recipientId,recipientTitle,entri
           style={{minHeight:48,color:c.foreground,backgroundColor:c.surface0,padding:8,borderWidth:1,borderColor:c.border,borderRadius:7}} /></PhotoComposer>
         {error && <Text accessibilityLiveRegion="polite" style={{color:c.statusWarning}}>{t("질문 전송을 확인하지 못했습니다. 같은 내용으로 다시 시도해 주세요.","Question delivery is unconfirmed. Retry with the same question.")}</Text>}
         <View style={{alignItems:"flex-start"}}><Button theme={theme} label={t("질문 보내기", "Send question")} accessibilityLabel={label("질문 보내기", "Send question")}
-          disabled={busy || photos.reading || changed || !hasDraft} selected onPress={() => void submit()} /></View>
+          disabled={busy || photos.blocked || changed || !hasDraft} selected onPress={() => void submit()} /></View>
       </>}
     </View>}
     {(history.length > 0 || prior.length > 0) && <View style={{width:"100%",gap:7,padding:8,borderRadius:6,backgroundColor:c.surface0}}>

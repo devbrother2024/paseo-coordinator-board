@@ -9,6 +9,8 @@ import { boardScope, boardSnapshot, saveNote, setReporting } from "./shared/cont
 import { BoardLanguageProvider, useBoardLanguage } from "./client/language";
 import { BoardView } from "./client/board";
 import { NoteEditor } from "./client/note-editor";
+import { SessionPhotoMessage } from "./client/session-photos";
+import { boardPhotoMessageSchema, isBoardPhotoMessage } from "./shared/session-photos";
 import type { NoteInput, Snapshot } from "./client/model";
 
 function HostBoard({ host, theme, layout, navigation }: PluginScreenProps) {
@@ -115,7 +117,20 @@ function SidebarItem(props: PluginSidebarItemProps) {
 export default function contribute(client: PluginClientContext): () => void {
   const removeScreen = client.addScreen({ id: "board", title: params => params.language === "en" ? englishBoardTitle : boardTitle, Component: BoardScreen });
   const removeSidebarItem = client.addSidebarHeaderItem({ id: "board", title: boardTitle, Component: SidebarItem });
+  const removePhotoRenderer = client.addTimelineRenderer({
+    kind: "session-photos", version: 1, schema: boardPhotoMessageSchema, Component: SessionPhotoMessage,
+  });
+  const removePhotoTransformer = client.addTimelineTransformer({
+    id: "session-photos", query: { itemType: "user_message" },
+    transform({ item }) {
+      const messageId = item.clientMessageId ?? item.messageId;
+      if (!messageId || !isBoardPhotoMessage(messageId)) return;
+      return { items: [{ type: "plugin", kind: "session-photos", version: 1, data: { messageId, text: item.text } }] };
+    },
+  });
   return () => {
+    removePhotoTransformer();
+    removePhotoRenderer();
     removeSidebarItem();
     removeScreen();
   };

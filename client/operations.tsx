@@ -127,7 +127,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
     }
   }
   async function post(kind: "digest" | "work") {
-    if (!coordinator || pending.current || photoDraft.readPending.current) return;
+    if (!coordinator || pending.current || (kind === "work" ? photoDraft.blocksSubmit() : photoDraft.readPending.current)) return;
     const images = photoDraft.latest.current;
     const message = text.trim();
     if (kind === "work" && !message && !images.length) return;
@@ -147,7 +147,9 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
       },
       kind === "digest"
         ? t("다이제스트를 요청했습니다. 코디네이터 세션에서 답을 확인하세요.", "Digest requested. Open the coordinator session to read the response.")
-        : t("코디네이터에게 맡겼습니다. 세션에서 배정과 진행을 확인하세요.", "Request sent. Open the coordinator session to follow the assignment."),
+        : images.length
+          ? t(`사진 ${images.length}장과 함께 코디네이터에게 요청을 보냈습니다.`, `Sent the request to the coordinator with ${images.length} photo${images.length === 1 ? "" : "s"}.`)
+          : t("첨부 없이 코디네이터에게 요청을 보냈습니다.", "Sent the request to the coordinator without attachments."),
     );
     if (receipt && live.current) {
       delivery.current[kind] = { payload: "", key: "" };
@@ -268,7 +270,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
           editable={!busy} multiline maxLength={24000} onChangeText={setText} />
       </PhotoComposer>
       <View style={wrap}>
-        <Button theme={theme} label={t("코디네이터에 요청 보내기", "Send to coordinator")} selected={hasRequest && configured && !busy && !photoDraft.reading} disabled={busy || !configured || !hasRequest || photoDraft.reading} onPress={() => void post("work")} />
+        <Button theme={theme} label={t("코디네이터에 요청 보내기", "Send to coordinator")} selected={hasRequest && configured && !busy && !photoDraft.blocked} disabled={busy || !configured || !hasRequest || photoDraft.blocked} onPress={() => void post("work")} />
         <Button theme={theme} label={t("다이제스트 요청", "Request digest")} disabled={busy || photoDraft.reading || !configured} onPress={() => void post("digest")} />
       </View>
       <Text style={{ color: muted }}>{!configured ? t("설정에서 관리할 프로젝트를 선택해 주세요.", "Choose a project to manage in Settings.") : t("작업 요청은 코디네이터에게 전달됩니다. 다이제스트는 내 결정과 추천 답장을 모읍니다. 자동 답장이 켜져 있으면 보드에서 확인한 사실 질문도 처리합니다.", "Requests go to the coordinator. A digest gathers decisions and suggested replies. When automatic replies are on, it also answers verified board questions.")}</Text>

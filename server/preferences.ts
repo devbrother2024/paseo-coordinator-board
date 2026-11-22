@@ -73,6 +73,7 @@ export function setCoordinator(scope: Preferences, id: string | null) {
 
 export class PreferenceStore {
   constructor(private readonly path: string) {}
+  get directory() { return dirname(this.path); }
   read(): Preferences {
     try { return schema.parse(JSON.parse(readFileSync(this.path, "utf8"))); }
     catch (error) {

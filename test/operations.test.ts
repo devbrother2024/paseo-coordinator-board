@@ -2,6 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { isBoardPhotoMessage, readSessionPhoto } from "../shared/session-photos";
+import { photoDigest } from "../server/reply-photos";
 import { createPaseoApi } from "@getpaseo/client";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
@@ -237,11 +240,29 @@ test("photo-only work requests reach the installed SDK wire encoder, and an unce
     expect(messages[0]).toMatchObject({type:"send_agent_message_request",agentId:coordinator,text:"",images:input.images});
     expect(messages[1].messageId).toBe(messages[0].messageId);
     expect(messages[1].images).toEqual(messages[0].images);
+    expect(isBoardPhotoMessage(messages[0].messageId)).toBe(true);
+    const lookup = {sessionId: coordinator, messageId: messages[0].messageId, index: 0};
+    for (const [index, image] of input.images.entries()) {
+      expect(await s.call(readSessionPhoto, {...lookup, index})).toEqual({count: 3, image});
+    }
+    expect(await s.call(readSessionPhoto, {...lookup, sessionId: "other-session"})).toEqual({count: 0, image: null});
+    expect(await s.call(readSessionPhoto, {...lookup, index: 3})).toEqual({count: 3, image: null});
     await s.call(requestWork,{...input,requestKey:"new-photos-request",text:"Review these",images:[png]},sdk);
     expect(messages[2]).toMatchObject({text:"Review these",images:[png]});
     const persisted=readFileSync(join(s.dir,"scope.json"),"utf8");
     for(const image of input.images) expect(persisted).not.toContain(image.data);
   } finally {await sdk.dispose();}
+});
+
+test("retries of photo requests reserved by a previous plugin keep the submitted ID", async () => {
+  const s = scenario();
+  const input = {coordinator, text: "Photo", requestKey: "old-photo-request", images: [png]};
+  const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const h = hash([coordinator, input.requestKey, input.text, [photoDigest(png)]]);
+  const legacy = [h.slice(0,8), h.slice(8,12), "4"+h.slice(13,16), "8"+h.slice(17,20), h.slice(20,32)].join("-");
+  s.store.change(scope => { scope.workRequestIds[hash([coordinator, input.requestKey])] = legacy; });
+  await s.call(requestWork, input);
+  expect(s.sent[0].messageId).toBe(legacy);
 });
 
 test("work requests reject malformed, mislabeled and oversized photos without reserving a key or sending",async()=>{

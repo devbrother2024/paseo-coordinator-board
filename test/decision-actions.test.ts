@@ -1,3 +1,5 @@
+import { SessionPhotoStore } from "../server/session-photos";
+import { isBoardPhotoMessage } from "../shared/session-photos";
 import { expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -211,6 +213,12 @@ test("a photo-only decision reply reaches the original session and a lost acknow
   await expect(f.send(request)).rejects.toThrow("전송 결과");
   expect(f.sent).toHaveLength(1);
   expect(f.sent[0]).toMatchObject({id:"worker",images:[replyPng]});
+  const wire = f.sent[0].messageId;
+  expect(isBoardPhotoMessage(wire)).toBe(true);
+  expect(f.prefs.read().decisionReceipts[wire].messageId).toBe(wire);
+  const previews = new SessionPhotoStore(join(f.prefs.directory, "session-photos"));
+  expect(previews.read("worker", wire, 0)).toEqual({count:1,image:replyPng});
+  expect(previews.read("coordinator", wire, 0).count).toBe(0);
   expect(f.sent[0].text).toContain("자막을 한 줄로 할까요?");
   expect(f.sent[0].text).not.toContain(replyPng.data);
   await expect(f.send({...request,images:[replyWebp]})).rejects.toThrow();
@@ -243,4 +251,26 @@ test("an in-flight text reply from before envelopes remains recoverable after th
   expect((await f.send()).messageId).toBe(messageId);
   expect(f.prefs.read().decisionReceipts[messageId].status).toBe("sent");
   expect(f.sent).toBeEmpty();
+});
+
+test("pending and sent photo replies from before the preview upgrade retain the original UUID on retry", async () => {
+  const f = await fixture();
+  const value = {text:"사진 첨부", images:[replyPng]};
+  f.state.loseReceipt = true;
+  await expect(f.send(value)).rejects.toThrow();
+  const wire = f.sent[0].messageId;
+  const h = createHash("sha256").update(JSON.stringify(["coordinator-board/decision", f.input.requestKey])).digest("hex");
+  const oldId = [h.slice(0,8),h.slice(8,12),"4"+h.slice(13,16),"8"+h.slice(17,20),h.slice(20,32)].join("-");
+  f.prefs.change(s => {
+    const { messageId, ...older } = s.decisionReceipts[wire];
+    s.decisionReceipts[oldId] = older;
+    delete s.decisionReceipts[wire];
+  });
+  f.timelines.worker.at(-1).clientMessageId = oldId;
+  const restarted = new DecisionSender(f.prefs, f.notes, new ConversationReader());
+  const input = {...f.input,...value};
+  expect((await restarted.send(f.sdk,input)).messageId).toBe(oldId);
+  expect((await restarted.send(f.sdk,input)).messageId).toBe(oldId);
+  expect(f.sent).toHaveLength(1);
+  expect(f.prefs.read().decisionReceipts[wire]).toBeUndefined();
 });

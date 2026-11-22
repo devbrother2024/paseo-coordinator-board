@@ -14,7 +14,7 @@ import { matchesWorkspace } from "../shared/workspace-pull";
 import type { PullRequestItem } from "../shared/prs";
 import { getPaseoClient, type PluginScreenProps } from "@getpaseo/plugin/client";
 import { remoteScope, readRemoteHistorySession } from "./remote-sessions";
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { DecisionActions, type DecisionReceipt } from "./decision-actions";
 import { Clarification } from "./clarification";
@@ -160,7 +160,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   }
   const renderDecision = (card: Card, embedded = false, rowKey?: string, priority?: string) => <DecisionActions key={JSON.stringify([card.session.projectId, card.session.id, card.session.decision?.version])}
           clarification={!embedded && questionFor(sessionClarificationCard(card.session,card.note),card.session.title)}
-          priorityLabel={priority} card={card} hostLabel={hostLabel} theme={theme} coordinator={snapshot!.coordinator} coordinatorTitle={snapshot!.sessions.find(s => s.id === snapshot!.coordinator)?.title}
+          embedded={embedded} priorityLabel={priority} card={card} hostLabel={hostLabel} theme={theme} coordinator={snapshot!.coordinator} coordinatorTitle={snapshot!.sessions.find(s => s.id === snapshot!.coordinator)?.title}
           open={actions.onOpen} receipt={receipts.find(r => matches(r, card))}
           onSent={result => {
             if (rowKey && result.action === "reply") remember({
@@ -193,7 +193,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     }
     return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions}
       clarification={decision && !embedded && questionFor({kind:"pull",projectId,repo:pr.repo,number:pr.number,updatedAt:pr.updatedAt},pr.repo + " #" + pr.number)}
-      decision={decision} securityGate={securityGate} openCoordinator={openCoordinator} onResult={notice => {
+      decision={decision} showDivider={!decision || embedded} securityGate={securityGate} openCoordinator={openCoordinator} onResult={notice => {
         const { status } = notice;
         const merged = status === "merged" || status === "already-merged";
         if (rowKey && merged) {
@@ -301,7 +301,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         {readiness.decisionTitles.map((title, index) => <Text key={index} numberOfLines={2} style={{ color: c.foreground }}>{title}</Text>)}
         <Text style={{ color: c.foregroundMuted }}>{t("세션과 PR 상태를 확인하고 있어요.", "Checking session and PR status…")}</Text>
       </View>}
-      {!settings && snapshot && configured && <View style={{ gap: 10, padding: 14, borderWidth: 1, borderColor: total ? c.statusWarning : c.border, borderRadius: 10, backgroundColor: c.surface1 }}>
+      {!settings && snapshot && configured && <View style={{ gap: layout.compact ? 12 : 16 }}>
         <Text accessibilityRole="header" style={{ color: c.foreground, fontSize: 17, fontWeight: "700" }}>{filters.length ? t(`내 결정 · ${filteredTotal}건 / 전체 ${total}건`, `My decisions · ${filteredTotal} of ${total}`) : t(`내 결정 · ${total}건`, `My decisions · ${total}`)}</Text>
         {incomplete &&
           <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{t("일부 결정 기록을 읽지 못했습니다. 현재 건수에는 확인한 항목만 포함됩니다.", "Some decision records could not be loaded. The count includes the available items.")}</Text>}
@@ -309,12 +309,12 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         {total === 0 && !incomplete && <Text style={{ color: c.foregroundMuted }}>{t("지금 결정할 일이 없습니다.", "No decisions are waiting for you.")}</Text>}
         {mergeNotice && inFilter(mergeNotice.projectId) && snapshot.projects.some(p => p.selected && p.id === mergeNotice.projectId) && (mergeNotice.status === "merged" || mergeNotice.status === "already-merged" ||
           !readyPrs.some(pr => pr.repo + " #" + pr.number === mergeNotice.target)) && <MergeFeedback notice={mergeNotice} theme={theme} />}
-        {orderedKeys.map(key => <Fragment key={key}>
+        {orderedKeys.map(key => <View key={key} role="article" style={{ gap: 8, padding: layout.compact ? 12 : 16, backgroundColor: c.surface1, borderWidth: 1, borderColor: c.border, borderRadius: 10 }}>
           {scopedReceipts.filter(receipt => receipt.rowKey === key && !receipt.hidden).map(receipt =>
             <InlineDecisionReceipt key={receipt.actionKey} receipt={receipt} theme={theme} onDismiss={() =>
               setInlineReceipts(prior => prior.map(entry => entry === receipt ? { ...entry, hidden: true } : entry))} />)}
           {activeRows.get(key)}
-        </Fragment>)}
+        </View>)}
         {remaining > 0 && <Button theme={theme} label={t(`결정 ${remaining}건 더 보기`, `Show ${remaining} more decisions`)} onPress={() => setDigestLimit(total)} />}
       </View>}
       {!settings && configured && filteredHistory.length>0 && <View>

@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { PreferenceStore } from "../server/preferences";
+import { isBoardPhotoMessage, readSessionPhoto } from "../shared/session-photos";
 import {afterEach,expect,test} from "bun:test";
 import {mkdirSync,mkdtempSync,rmSync,writeFileSync} from "node:fs";
 import {tmpdir} from "node:os";
@@ -55,7 +58,7 @@ async function fixture(matchedQuestion?: string) {
     timelines.get(id)!.at(-1).text = text;
     stamp.set(id, stamp.get(id)! + 1);
   }
-  return {snapshot,replaceReceivedText,running,answer:input=>rpc(sendDecision,input),ask:(input)=>rpc(askClarification,input),sent,append,loseAck:(value:boolean)=>{loseAck=value;},restart:()=>{rpc=load();}};
+  return {snapshot,replaceReceivedText,running,scopePath:join(data,"scope.json"),photo:input=>rpc(readSessionPhoto,input),answer:input=>rpc(sendDecision,input),ask:(input)=>rpc(askClarification,input),sent,append,loseAck:(value:boolean)=>{loseAck=value;},restart:()=>{rpc=load();}};
 }
 
 test("clarifications for two Q3s route, persist, and surface on their original open cards through public RPCs",async()=>{
@@ -67,6 +70,8 @@ test("clarifications for two Q3s route, persist, and surface on their original o
     const card:ClarificationCard={kind:"tracked",source:item.source,projectId:item.projectId,id:item.id,fingerprint:item.fingerprint};
     return {card,recipientId:item.sessionId,question:"Which audio sample supports Q3?",requestKey:"fixture-question-"+item.id};
   });
+  const photo={mimeType:"image/png",data:"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mOYvLAHAAOLAcF4E9p3AAAAAElFTkSuQmCC"};
+  input[1] = {...input[1], images:[photo]};
   const editor=await f.ask(input[0]);
   expect((await f.ask(input[0])).messageId).toBe(editor.messageId);
   f.loseAck(true);
@@ -75,6 +80,10 @@ test("clarifications for two Q3s route, persist, and surface on their original o
   f.restart();
   const writer=await f.ask(input[1]);
   expect(writer.messageId).not.toBe(editor.messageId);
+  expect(isBoardPhotoMessage(editor.messageId)).toBe(false);
+  expect(isBoardPhotoMessage(writer.messageId)).toBe(true);
+  expect(await f.photo({sessionId:"writer",messageId:writer.messageId,index:0})).toEqual({count:1,image:photo});
+  expect(await f.photo({sessionId:"editor",messageId:writer.messageId,index:0})).toEqual({count:0,image:null});
   expect(f.sent.map(m=>m.id)).toEqual(["editor","writer"]);
   for(const [index,m] of f.sent.entries()) {
     expect(m.text).toContain(source[index].id);
@@ -203,4 +212,29 @@ test("reopening the board confirms the exact accepted question before the assist
   f.running.delete(received.id);
   await f.ask(another);
   expect(f.sent).toHaveLength(2);
+});
+
+test("a clarification photo receipt from the previous release reuses its accepted UUID without forwarding twice", async () => {
+  const f = await fixture();
+  const item = (await f.snapshot()).trackedDecisions.items[0];
+  const input = {card:{kind:"tracked",source:item.source,projectId:item.projectId,id:item.id,fingerprint:item.fingerprint},
+    recipientId:item.sessionId,question:"Which reference?",requestKey:"previous-clarification-photo",
+    images:[{mimeType:"image/png",data:"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mOYvLAHAAOLAcF4E9p3AAAAAElFTkSuQmCC"}]};
+  f.loseAck(true);
+  await expect(f.ask(input)).rejects.toThrow();
+  const {messageId:wire,text} = f.sent[0];
+  const h = createHash("sha256").update("coordinator-board/clarification/" + input.requestKey).digest("hex");
+  const oldId = [h.slice(0,8),h.slice(8,12),"4"+h.slice(13,16),"8"+h.slice(17,20),h.slice(20,32)].join("-");
+  new PreferenceStore(f.scopePath).change(state => {
+    state.clarifications[oldId] = {...state.clarifications[wire],messageId:oldId};
+    delete state.clarifications[wire];
+  });
+  f.replaceReceivedText(item.sessionId, "Unrelated delivery");
+  f.append(item.sessionId,{type:"user_message",text,clientMessageId:oldId});
+  f.restart();
+  expect((await f.ask(input)).messageId).toBe(oldId);
+  expect((await f.ask(input)).messageId).toBe(oldId);
+  expect(f.sent).toHaveLength(1);
+  f.append(item.sessionId,{type:"assistant_message",text:"Use the second sample."});
+  expect((await f.snapshot()).clarifications[0]).toMatchObject({messageId:oldId,status:"sent",response:"Use the second sample."});
 });

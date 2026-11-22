@@ -1,5 +1,7 @@
 import { restoreClarifiedDecision } from "./clarifications";
-import { describePhotos } from "./reply-photos";
+import { join } from "node:path";
+import { SessionPhotoStore } from "./session-photos";
+import { describePhotos, photoReceiptId } from "./reply-photos";
 import { sessionReplyMessage } from "./decision-message";
 import { createHash } from "node:crypto";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
@@ -67,7 +69,10 @@ function messageUuid(key: string) {
 export class DecisionSender {
   private active = new Map<string, { fingerprint: string; result: Promise<Receipt> }>();
   private sendingCards = new Set<string>();
-  constructor(private store: PreferenceStore, private notes: NoteStore, private reader: ConversationReader) {}
+  private sessionPhotos: SessionPhotoStore;
+  constructor(private store: PreferenceStore, private notes: NoteStore, private reader: ConversationReader) {
+    this.sessionPhotos = new SessionPhotoStore(join(store.directory, "session-photos"));
+  }
 
   send(paseo: Sdk, input: DecisionInput): Promise<Receipt> {
     const messageId = messageUuid(input.requestKey);
@@ -93,6 +98,7 @@ export class DecisionSender {
   private async deliver(paseo: Sdk, input: DecisionInput, messageId: string, fingerprint: string): Promise<Receipt> {
     const scope = this.store.read();
     requireScope(scope, input);
+    messageId = photoReceiptId(messageId, !!input.images?.length, scope.decisionReceipts);
     const requestId = messageId;
     let earlier = scope.decisionReceipts[messageId];
     if (!earlier) {
@@ -158,7 +164,9 @@ export class DecisionSender {
       restoreClarifiedDecision(row, note, current, evidence);
       if (!row.decision || row.decision.source === "permission" || row.decision.version !== input.version) throw Error(changed);
       text = sessionReplyMessage(row,input);
+      if (input.images?.length) this.sessionPhotos.save(input.recipientId, messageId, input.images);
       current.decisionReceipts[messageId] = {
+        ...(input.images?.length ? {messageId} : {}),
         messageHash:hash(text),
         activity: { origin:{sessionId:row.id, cardId:row.id, revision:input.version, questions:[{id:input.version}]},
           title: row.decision.question || row.title, at: new Date().toISOString(), projectId: input.projectId,

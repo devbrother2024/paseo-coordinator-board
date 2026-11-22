@@ -9,7 +9,9 @@ import {
   type ClarificationInput,
   type ClarificationView,
 } from "../shared/clarifications";
-import { describePhotos } from "./reply-photos";
+import { join } from "node:path";
+import { SessionPhotoStore } from "./session-photos";
+import { describePhotos, photoReceiptId } from "./reply-photos";
 import type { PreferenceStore, Preferences } from "./preferences";
 import type { SessionRow, Note } from "../shared/contract";
 import type { Evidence } from "./conversation";
@@ -140,11 +142,14 @@ export class ClarificationSender {
     string,
     { key: string; fingerprint: string; result: Promise<{ ok: true; messageId: string; recipientId: string }> }
   >();
+  private sessionPhotos: SessionPhotoStore;
   constructor(
     private store: PreferenceStore,
     private getView: (sdk: Sdk, card: ClarificationCard) => Promise<View>,
     private isCurrentRecord: (card: ClarificationCard, view: View) => boolean = () => true,
-  ) {}
+  ) {
+    this.sessionPhotos = new SessionPhotoStore(join(store.directory, "session-photos"));
+  }
 
   send(sdk: Sdk, input: ClarificationInput) {
     const id = requestId(input.requestKey);
@@ -171,6 +176,7 @@ export class ClarificationSender {
     const key = clarificationKey(input.card);
     const scope = this.store.read();
     if (!inScope(scope, input.card)) throw Error(changed);
+    id = photoReceiptId(id, !!input.images?.length, scope.clarifications);
     const previous = scope.clarifications[id];
     const handle = sdk.agents.ref(input.recipientId);
     const receipt = { ok: true as const, messageId: id, recipientId: input.recipientId };
@@ -288,6 +294,7 @@ export class ClarificationSender {
           )
         )
           throw Error(changed);
+        if (input.images?.length) this.sessionPhotos.save(input.recipientId, id, input.images);
         current.clarifications[id] = entry;
       });
       try {

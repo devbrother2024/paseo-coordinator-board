@@ -27,6 +27,7 @@ export async function sendCoordinatorRequest(
   text: string,
   options: {
     images?: WorkImage[];
+    reserveMessage?: (originalId: string) => string;
     beforeSend?: (messageId: string) => void;
   } = {},
 ) {
@@ -50,13 +51,14 @@ export async function sendCoordinatorRequest(
   const id = createHash("sha256")
     .update(JSON.stringify(content))
     .digest("hex");
-  const messageId = [
+  const originalId = [
     id.slice(0, 8),
     id.slice(8, 12),
     "4" + id.slice(13, 16),
     "8" + id.slice(17, 20),
     id.slice(20, 32),
   ].join("-");
+  const messageId = options.reserveMessage?.(originalId) ?? originalId;
   options.beforeSend?.(messageId);
   await handle.send(text, { messageId, activeTurnBehavior: "steer", ...(images?.length ? {images} : {}) });
   return { ok: true };

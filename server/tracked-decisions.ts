@@ -8,6 +8,8 @@ import type { SessionRow } from "../shared/contract";
 import { readReplyPhoto, replyOrigin, type ReplyEntry } from "../shared/reply-history";
 import { MAX_WORK_IMAGES, WORK_IMAGE_MIME_TYPES, type WorkImage } from "../shared/work-images";
 import { describePhotos, readLocalPhoto, saveLocalPhotos } from "./reply-photos";
+import { boardPhotoMessageId } from "../shared/session-photos";
+import { SessionPhotoStore } from "./session-photos";
 import { trackedReplyMessage, trackedReplyOrigin } from "./decision-message";
 import type { Evidence } from "./conversation";
 import type { MergeTarget, PullRequestView } from "../shared/prs";
@@ -66,10 +68,12 @@ function readJson(path:string):{data:unknown;status:"ok"} | {status:"absent"|"in
 }
 
 export class TrackedDecisionStore {
+  private readonly sessionPhotos:SessionPhotoStore;
   private readonly resolutionPath:string;
   private readonly photoDirectory:string;
   constructor(private readonly path:string, private readonly readSources?:ReadSources) {
     const file=parse(path);
+    this.sessionPhotos=new SessionPhotoStore(join(file.dir,"session-photos"));
     this.photoDirectory=join(file.dir, file.name+".photos");
     this.resolutionPath=join(file.dir,file.name+".resolved.json");
   }
@@ -268,13 +272,17 @@ export class TrackedDecisionStore {
     if (previous && (previous.recipientId!==input.recipientId || (previous.answer ?? "")!==(input.answer ?? "") ||
         JSON.stringify(previous.photos ?? [])!==JSON.stringify(photos) || (previous.messageHash && previous.messageHash!==messageHash))) return {status:"changed"};
     if (previous && !previous.pending) return {status:"sent"};
-    const messageId=previous?.messageId ?? randomUUID();
+    const messageId=previous?.messageId ?? (photos.length ? boardPhotoMessageId(randomUUID()) : randomUUID());
     const receipt:Receipt=previous ?? {origin:trackedReplyOrigin(row.item,input),messageHash,...(photos.length ? {photos} : {}),title:row.item.title,coordinator:row.item.where==="human" || row.item.where==="manager",key,fingerprint:input.fingerprint,at:new Date().toISOString(),answer:input.answer,recipientId:input.recipientId,messageId,pending:true};
     try {
       if (previous) {
         if (!(await target.accepted(previous.messageHash ? text : (input.answer ?? ""),messageId))) return {status:"unconfirmed"};
       } else {
         if (!target.ready) return {status:"busy"};
+        if (input.images?.length) {
+          try { this.sessionPhotos.save(input.recipientId, messageId, input.images); }
+          catch { return {status:"unavailable"}; }
+        }
         records.set(version,receipt);
         if (!this.save(records)) return {status:"unavailable"};
         await target.send(text,messageId,input.images);

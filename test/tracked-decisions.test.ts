@@ -1,3 +1,5 @@
+import { SessionPhotoStore } from "../server/session-photos";
+import { isBoardPhotoMessage } from "../shared/session-photos";
 import {afterEach, expect, test} from "bun:test";
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from "node:fs";
 import {join} from "node:path";
@@ -284,7 +286,7 @@ test("two older Q3 cards forwarded to one coordinator keep their own source sess
 const replyPhoto={mimeType:"image/png" as const,data:"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mOYvLAHAAOLAcF4E9p3AAAAAElFTkSuQmCC"};
 const otherPhoto={mimeType:"image/webp" as const,data:"UklGRi4AAABXRUJQVlA4ICIAAABwAQCdASoBAAEAAUAmJZQCdAFAAAD+67eowmknPaRBAAAA"};
 
-test("tracked photo-only replies keep the exact media and the context on retry without persisting the delivered pixels",async()=>{
+test("tracked photo-only replies keep recipient-scoped previews and recover the original delivery on retry",async()=>{
   const f=fixture();
   f.write([row("photo-check",{sessionId:"photo-worker",where:"manager",title:"Which camera frame?"})]);
   const [item]=f.read().items;
@@ -301,6 +303,10 @@ test("tracked photo-only replies keep the exact media and the context on retry w
   expect(receipt).not.toContain(replyPhoto.data);
   expect(calls).toHaveLength(1);
   expect(calls[0].images).toEqual([replyPhoto]);
+  expect(isBoardPhotoMessage(calls[0].messageId)).toBe(true);
+  const previews = new SessionPhotoStore(join(f.dir,"session-photos"));
+  expect(previews.read("coordinator",calls[0].messageId,0)).toEqual({count:1,image:replyPhoto});
+  expect(previews.read("photo-worker",calls[0].messageId,0).count).toBe(0);
   expect(calls[0].body).toContain("Which camera frame?");
   expect((await attempt({...input,images:[otherPhoto]})).status).toBe("changed");
   expect((await attempt()).status).toBe("sent");

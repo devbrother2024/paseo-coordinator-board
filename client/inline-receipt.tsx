@@ -20,7 +20,7 @@ export function InlineDecisionReceipt({ receipt, theme, onDismiss }: {
   const c = theme.colors;
   const words = statusLabel[receipt.status];
   const delivery = mergeNotificationLabel(receipt.notification, t);
-  return <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 5, borderTopWidth: 1, borderTopColor: c.border }}>
+  return <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 5 }}>
     <View accessibilityLiveRegion="polite" style={{ flex: 1, gap: 2 }}>
       <Text selectable style={{ color: c.foreground, fontSize: 14 }}>
         <Text style={{ color: c.statusSuccess, fontWeight: "600" }}>✓ {t(words[0], words[1])}</Text>

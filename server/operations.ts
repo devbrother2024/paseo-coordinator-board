@@ -2,6 +2,9 @@ import { defineAgentTool, type PluginServerContext } from "@getpaseo/plugin/serv
 import { readAccountUsage } from "./usage-routing";
 import { setUsageRouting } from "../shared/usage-routing";
 import { z } from "zod";
+import { join } from "node:path";
+import { boardPhotoMessageId, readSessionPhoto } from "../shared/session-photos";
+import { SessionPhotoStore } from "./session-photos";
 import { createHash } from "node:crypto";
 import { askDigest, operationState, requestWork, setProviderInclusion, setWorkerMode, setupCoordinator, updateRouting } from "../shared/operations";
 import { coordinatorPinSettings, pinCurrentCoordinator, setCoordinatorAutoPin } from "../shared/operations";
@@ -25,6 +28,7 @@ import { sendCoordinatorRequest, digestPrompt, englishDigestPrompt, digestWithFa
 import { PreferenceStore } from "./preferences";
 
 export function createOperations(store: PreferenceStore, workspaceDir: string, facts?: Pick<BoardFacts, "prepareCycle" | "bindMessage">) {
+  const sessionPhotos = new SessionPhotoStore(join(store.directory, "session-photos"));
   const lifecycle = new CoordinatorLifecycle(store, workspaceDir);
   function ownerScope(caller: string) {
     const scope = store.read();
@@ -32,6 +36,7 @@ export function createOperations(store: PreferenceStore, workspaceDir: string, f
     return scope;
   }
   function register(server: PluginServerContext) {
+    server.handle(readSessionPhoto, async ({sessionId, messageId, index}) => sessionPhotos.read(sessionId, messageId, index));
     server.handle(coordinatorPinSettings, (_input, { paseo }) => lifecycle.pinSettings(paseo));
     server.handle(setCoordinatorAutoPin, async ({ enabled }) => {
       store.change(scope => { scope.autoPinCoordinatorWorkspace = enabled; });
@@ -141,15 +146,19 @@ export function createOperations(store: PreferenceStore, workspaceDir: string, f
     server.handle(requestWork, (input, { paseo }) =>
       sendCoordinatorRequest(paseo, store, input.coordinator, input.requestKey, input.text, {
         images: input.images,
-        beforeSend(messageId) {
+        reserveMessage(originalId) {
+          let messageId = input.images?.length ? boardPhotoMessageId(originalId) : originalId;
           const key = createHash("sha256").update(JSON.stringify([input.coordinator, input.requestKey])).digest("hex");
           // Reserve the content before the SDK call so an uncertain or simultaneous
-          // delivery can only be retried with the same message. Never persist photos.
+          // delivery can only be retried with the same message. Retain IDs issued by older hosts.
           store.change(scope => {
             const reserved = scope.workRequestIds[key];
+            if (reserved === originalId) messageId = originalId;
             if (reserved && reserved !== messageId) throw new Error("내용이나 사진이 달라졌습니다. 새 요청으로 보내 주세요.");
             scope.workRequestIds[key] = messageId;
           });
+          if (input.images?.length) sessionPhotos.save(input.coordinator, messageId, input.images);
+          return messageId;
         },
       }),
     );

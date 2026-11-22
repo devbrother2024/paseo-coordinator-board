@@ -33,19 +33,26 @@ export async function readWorkPhoto(file: File): Promise<WorkImage> {
     reader.onabort = reader.onerror = () => reject(Error("read"));
     reader.readAsDataURL(file);
   });
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  if (!encoded.length || encoded.length % 4 !== 0 || encoded.length / 4 * 3 - padding !== file.size) throw Error("read");
   return { mimeType, data: encoded };
 }
 
 export function clipboardPhotos(data: DataTransfer): File[] {
-  const files = Array.from(data.files);
-  if (files.length) return files;
-  return Array.from(data.items).flatMap(item => {
-    const file = item.kind === "file" ? item.getAsFile() : null;
-    return file ? [file] : [];
-  });
+  try {
+    const files = Array.from(data.files ?? []);
+    const fileItems = Array.from(data.items ?? []).filter(item => item.kind === "file");
+    if (files.length && files.length >= fileItems.length) return files;
+    const resolved = fileItems.map(item => item.getAsFile());
+    return resolved.every((file): file is File => file !== null) ? resolved : [];
+  } catch {
+    // Some native drags advertise a file that the WebView cannot read.
+    return [];
+  }
 }
 
 export function isFileDrag(data: DataTransfer): boolean {
   // Browsers hide the FileList until drop, but expose the drag's type during dragover.
-  return Array.from(data.types).includes("Files") || data.files.length > 0 || Array.from(data.items).some(item => item.kind === "file");
+  return Array.from(data.types ?? []).some(type => type === "Files" || type.startsWith("image/")) ||
+    data.files?.length > 0 || Array.from(data.items ?? []).some(item => item.kind === "file");
 }

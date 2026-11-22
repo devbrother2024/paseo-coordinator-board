@@ -1,5 +1,5 @@
 import { useDecisionInteraction } from "./decision-editing";
-import { TextInput } from "@getpaseo/plugin/client/ui";
+import { DecisionReplyInput } from "./decision-reply";
 import { useRpc } from "@getpaseo/plugin/client";
 import { useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
@@ -52,8 +52,8 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
   const [confirming, setConfirming] = useState(false);
   const [confirmedOwner, setConfirmedOwner] = useState(item.sourceCoordinatorId);
   const [skipped, setSkipped] = useState<Record<number, boolean>>({});
-  const [freeReply, setFreeReply] = useState("");
-  const [typed, setTyped] = useState<Record<number, string>>({});
+  const [editedReply, setEditedReply] = useState<string | null>(null);
+  const [typed, setTyped] = useState<Record<number, string | undefined>>({});
   const [selected, setSelected] = useState<Record<number, number[]>>({});
   const [result, setResult] = useState<Resolution | null>(null);
   const [refreshFailed, setRefreshFailed] = useState(false);
@@ -77,37 +77,43 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
   const recordActions = !item.matchedSessionId || !!item.questions.length;
   const isClosed = result === "sent" || result === "closed" || result === "already-closed";
   const needsRefresh = result === "changed" || result === "out-of-scope" || result === "unavailable";
-  const replies = item.questions.map((question, index) => {
+  const suggested = suggestedTrackedReply(item);
+  const template = /<[^>]+>/.test(suggested);
+  const freeReply = editedReply ?? (template ? "" : suggested);
+  const questionText = item.questions.map((question, index) => typed[index] ?? question.options
+    .filter((_, choice) => selected[index]?.includes(choice))
+    .map(option => option.key + " · " + option.text).join(", "));
+  const replies = questionText.map((value, index) => {
     if (skipped[index]) return "";
-    const text = typed[index]?.trim() || question.options.filter((_, choice) => selected[index]?.includes(choice)).map(option => option.key + " · " + option.text).join(", ");
+    const text = value.trim();
     const positions = attachments.photos.flatMap((photo, position) => photo.questionIndex === index ? [position + 1] : []);
     return [text, positions.length ? t("첨부 사진 ", "Attached photos ") + positions.join(", ") : ""].filter(Boolean).join(" · ");
   });
   const outstanding = replies.some((value, index) => !value && !skipped[index]);
   const answer = trackedAnswerText(item, replies, freeReply);
-  const suggested = suggestedTrackedReply(item);
-  const quickReply = suggested && suggested.length <= 4000 && !/<[^>]+>/.test(suggested) ? suggested : "";
   const followupOnly = isMerge && item.questions.length > 0;
   const owned = usesSourceCoordinator(item);
   const changedOwner = owned && item.sourceCoordinatorId !== confirmedOwner;
   const sendLabel = owned
-    ? followupOnly ? t("운영 코디네이터에 후속 답변 보내기", "Send follow-up to ledger owner") : t("운영 코디네이터에 답 보내기", "Send answer to ledger owner")
+    ? followupOnly ? t("운영 코디네이터에 후속 답장 보내기", "Send follow-up reply to ledger owner") : t("운영 코디네이터에 답장 보내기", "Send reply to ledger owner")
     : item.where === "session"
-    ? followupOnly ? t("담당 세션에 후속 답변만 보내기", "Send follow-up answer only to assigned session") : t("담당 세션에 답장 보내기", "Send reply to assigned session")
-    : followupOnly ? t("코디네이터에 후속 답변만 보내기", "Send follow-up answer only to coordinator") : t("코디네이터에 답 보내기", "Send answer to coordinator");
+    ? followupOnly ? t("담당 세션에 후속 답장 보내기", "Send follow-up reply to assigned session") : t("담당 세션에 답장 보내기", "Send reply to assigned session")
+    : followupOnly ? t("코디네이터에 후속 답장 보내기", "Send follow-up reply to coordinator") : t("코디네이터에 답장 보내기", "Send reply to coordinator");
   const hasPhotos = attachments.photos.length > 0;
   const hasAnswer = Boolean(answer || hasPhotos);
-  const sendText = answer || (hasPhotos ? "" : quickReply);
   const tooLong = answer.length > 4000;
   const humanCheck = item.kind === "check" && item.where === "human" && !item.questions.length && !item.matchedSessionId;
-  const hasDraft = hasQuestionDraft || hasAnswer || freeReply.length > 0 || Object.values(typed).some(value => value.length > 0);
+  // A suggestion is visible before the person edits. Checking a record sends no reply.
+  const hasDraft = hasQuestionDraft || hasPhotos || !!editedReply?.trim() || questionText.some(value => !!value.trim());
+  const answerDisabled = busy || attachments.blocked || !hasAnswer || outstanding || tooLong;
   const inputFocus = useDecisionInteraction(!isClosed && !needsRefresh &&
-    (hasDraft || attachments.reading || busy || confirming || Object.values(skipped).some(Boolean)));
+    (hasDraft || editedReply !== null || Object.values(typed).some(value => value !== undefined) ||
+      attachments.blocked || busy || confirming || Object.values(skipped).some(Boolean)));
   const checkLabel = t("확인했어요", "I checked this");
 
   function choose(index: number, choice: number, multi: boolean) {
     setConfirming(false); setSkipped(previous => ({ ...previous, [index]: false }));
-    setTyped(previous => ({...previous,[index]:""}));
+    setTyped(previous => ({...previous,[index]:undefined}));
     setSelected(previous => {
       const group = previous[index] ?? [];
       const next = multi ? group.includes(choice) ? group.filter(value => value !== choice) : [...group, choice] : [choice];
@@ -117,7 +123,7 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
   function skip(index: number) {
     setConfirming(false); setSkipped(previous => ({ ...previous, [index]: !previous[index] }));
     setSelected(previous => ({ ...previous, [index]: [] }));
-    setTyped(previous => ({ ...previous, [index]: "" }));
+    setTyped(previous => ({ ...previous, [index]: undefined }));
   }
   async function refreshRecord() {
     if (pending.current || !result) return;
@@ -129,8 +135,8 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
   async function acknowledge(mode: ResolutionMode) {
     const send = mode === "send";
     if (send && (!recipientId || changedOwner)) return;
-    const text = send ? sendText : answer;
-    if (pending.current || attachments.readPending.current || isClosed || needsRefresh || outstanding || tooLong) return;
+    const text = mode === "review" ? "" : answer;
+    if (pending.current || attachments.blocksSubmit() || isClosed || needsRefresh || outstanding || (mode !== "review" && tooLong)) return;
     if (mode === "review" ? hasDraft || attachments.latest.current.length > 0 || item.matchedSessionId : !text && !hasPhotos) return;
     pending.current = true; setBusy(true);
     let status: Resolution;
@@ -148,7 +154,7 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
     finally { pending.current = false; setBusy(false); }
   }
 
-  return <View style={{ paddingVertical: 10, gap: 7, borderTopWidth: 1, borderTopColor: c.border }}>
+  return <View style={{ gap: 7 }}>
     <View style={{ ...wrap, alignItems: "center" }}>
       <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[source || t("보드 공통", "Board-wide"), t(words[0], words[1]), where, item.owner, priorityLabel].filter(Boolean).join(" · ")}</Text>
       {open && <SessionChip theme={theme} label={t("연결 세션", "Linked session")} accessibilityLabel={named(t("연결된 세션 열기", "Open linked session")).accessibilityLabel} onPress={open} />}
@@ -183,26 +189,24 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
           </Pressable>;
         })}
         {!skipped[index] && <PhotoComposer theme={theme} disabled={busy} draft={attachments} questionIndex={index}>
-          {!question.options.some(option=>option.recommended) && <TextInput {...inputFocus} value={typed[index] ?? ""} editable={!busy} multiline maxLength={4000}
-          accessibilityLabel={item.title + " · " + question.text + " · " + t("기록할 답", "Answer to record")}
-          onChangeText={text => { setConfirming(false); setTyped(previous => ({ ...previous, [index]: text })); if (text.trim()) setSelected(previous=>({...previous,[index]:[]})); }}
-          placeholder={question.options.length ? t("다른 답 직접 입력", "Write another answer") : t("내 답을 입력하세요", "Write your answer")} placeholderTextColor={c.foregroundMuted}
-          style={{ color: c.foreground, padding: 8, borderColor: c.border, borderWidth: 1, borderRadius: 6 }} />}
+          <DecisionReplyInput {...inputFocus} theme={theme} value={questionText[index]} disabled={busy} maxLength={4000}
+            accessibilityLabel={item.title + " · " + question.text + " · " + t("답장 내용", "Reply text")}
+            onChangeText={text => { setConfirming(false); setTyped(previous => ({...previous,[index]:text})); setSelected(previous => ({...previous,[index]:[]})); }}
+            placeholder={question.options.length ? t("선택하거나 직접 답을 입력하세요", "Choose an option or write your reply") : t("내 답을 입력하세요", "Write your reply")} />
         </PhotoComposer>}
         <View style={wrap}><Button theme={theme} label={skipped[index] ? t("건너뛰기 취소", "Undo skip") : t("이 질문 건너뛰기", "Skip this question")}
           accessibilityLabel={item.title + " · " + question.text + " · " + t("건너뛰기", "Skip")} selected={!!skipped[index]}
-          disabled={busy || attachments.reading || attachments.photos.some(photo => photo.questionIndex === index)} onPress={() => skip(index)} /></View>
+          disabled={busy || attachments.reading || attachments.errors.has(index) || attachments.photos.some(photo => photo.questionIndex === index)} onPress={() => skip(index)} /></View>
       </View>)}
       {!item.questions.length && !item.matchedSessionId && <>
-        <PhotoComposer theme={theme} disabled={busy} draft={attachments}><TextInput {...inputFocus} accessibilityLabel={item.title + " · " + t("직접 답변", "Your reply")} value={freeReply} editable={!busy}
-          multiline maxLength={4000} onChangeText={value => { setFreeReply(value); setConfirming(false); }}
-          placeholder={t("내 답을 입력하세요", "Write your answer")} placeholderTextColor={c.foregroundMuted}
-          style={{ minHeight: 46, padding: 8, color: c.foreground, borderColor: c.border, borderWidth: 1, borderRadius: 7, backgroundColor: c.surface0 }} /></PhotoComposer>
-        {!!suggested && (!recipientId || !quickReply) && <View style={wrap}><Button theme={theme} disabled={busy}
-          label={t("답안 사용", "Use reply") + " · " + item.howToAnswer}
-          onPress={() => { setFreeReply(item.howToAnswer!); setConfirming(false); }} /></View>}
+        <PhotoComposer theme={theme} disabled={busy} draft={attachments}>
+          <DecisionReplyInput {...inputFocus} theme={theme} accessibilityLabel={item.title + " · " + t("답장 내용", "Reply text")}
+            value={freeReply} disabled={busy} maxLength={4000} onChangeText={value => { setEditedReply(value); setConfirming(false); }}
+            placeholder={t("내 답을 입력하세요", "Write your reply")} />
+        </PhotoComposer>
+        {template && editedReply === null && <View style={wrap}><Button theme={theme} disabled={busy} label={t("답장 양식 불러오기", "Load reply template")}
+          onPress={() => { setEditedReply(suggested); setConfirming(false); }} /></View>}
       </>}
-      {!!answer && !!item.questions.length && <Lines theme={theme} title={isMerge ? t("선택한 후속 답변", "Selected follow-up answer") : t("기록할 답", "Answers to record")} lines={[answer]} />}
       {tooLong && <Text style={{ color: c.statusWarning }}>{t("답을 4,000자 이내로 줄여 주세요.", "Shorten the answer to 4,000 characters.")}</Text>}
       <View style={{ gap: 6 }}>
         {owned && item.sourceCoordinatorId && <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>
@@ -216,17 +220,17 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
           onPress={() => setConfirmedOwner(item.sourceCoordinatorId)} />}
         {outstanding && <Text style={{ color: c.foregroundMuted }}>{t("각 질문에 답하거나 건너뛰기를 선택하세요.", "Answer or explicitly skip each question.")}</Text>}
         <View style={wrap}>
-          {recipientId && recordActions && <Button theme={theme} {...named(sendLabel + (!hasAnswer && quickReply ? " · " + quickReply : ""))}
-            selected={!!(sendText || hasPhotos) && !outstanding} disabled={busy || changedOwner || attachments.reading || (!sendText && !hasPhotos) || outstanding || tooLong} onPress={() => void acknowledge("send")} />}
-          {hasAnswer && <Button theme={theme} {...named(t("보드에 답 기록하고 닫기", "Save answer on board and close"))}
-            selected={!recipientId} disabled={busy || attachments.reading || outstanding || tooLong} onPress={() => void acknowledge("save")} />}
+          {recipientId && recordActions && <Button theme={theme} {...named(sendLabel)}
+            selected={!answerDisabled && !changedOwner} disabled={answerDisabled || changedOwner} onPress={() => void acknowledge("send")} />}
+          {recordActions && (!recipientId || hasAnswer) && <Button theme={theme} {...named(t("보드에만 저장", "Save on board only"))}
+            selected={!recipientId && !answerDisabled} disabled={answerDisabled} onPress={() => void acknowledge("save")} />}
           {humanCheck && !hasDraft && (Platform.OS === "web" ? <label style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: 5, fontSize: 13, color: c.foregroundMuted }}>
             <input type="checkbox" aria-label={named(checkLabel).accessibilityLabel} checked={false}
-              disabled={busy || attachments.reading} onChange={() => void acknowledge("review")} />{checkLabel}
+              disabled={busy || attachments.blocked} onChange={() => void acknowledge("review")} />{checkLabel}
           </label> : <Pressable accessibilityRole="checkbox" aria-checked={false}
             accessibilityLabel={named(checkLabel).accessibilityLabel}
             accessibilityHint={t("직접 확인한 것으로 보드에 기록합니다.", "Records your personal check on the board.")}
-            accessibilityState={{ checked: false, disabled: busy || attachments.reading }} disabled={busy || attachments.reading}
+            accessibilityState={{ checked: false, disabled: busy || attachments.blocked }} disabled={busy || attachments.blocked}
             onPress={() => void acknowledge("review")} style={{ ...wrap, alignItems: "center", padding: 5 }}>
             <View style={{ width: 15, height: 15, borderRadius: 3, borderWidth: 1, borderColor: c.foregroundMuted }} />
             <Text style={{ color: c.foregroundMuted, fontSize: 13 }}>{checkLabel}</Text>
@@ -263,7 +267,7 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
       {!isClosed && !needsRefresh && !humanCheck && !item.matchedSessionId && !hasDraft && !outstanding && <View style={wrap}>
         {confirming && <Text style={{ color: c.foregroundMuted }}>{t("답변 전송 없이 이 보드 기록을 닫습니다.", "Close this board record without sending a reply.")}</Text>}
         <Button theme={theme} {...named(confirming ? t("기록 닫기 확정", "Confirm closing record") : t("기록 닫기", "Close record"))}
-          disabled={busy || attachments.reading} onPress={() => confirming ? void acknowledge("review") : setConfirming(true)} />
+          disabled={busy || attachments.blocked} onPress={() => confirming ? void acknowledge("review") : setConfirming(true)} />
         {confirming && <Button theme={theme} {...named(t("취소", "Cancel"))} disabled={busy} onPress={() => setConfirming(false)} />}
       </View>}
     </View>}

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { checkPhotoSelection, clipboardPhotos, isFileDrag } from "../client/work-photos";
+import { checkPhotoSelection, clipboardPhotos, isFileDrag, readWorkPhoto } from "../client/work-photos";
 import { MAX_WORK_IMAGE_BYTES, MAX_WORK_IMAGES, MAX_WORK_IMAGES_BYTES } from "../shared/operations";
 
 const png = {type: "image/png", name: "shot.png", size: 100};
@@ -38,4 +38,33 @@ test("file dragging recognizes protected dragover and actual dropped files while
   expect(isFileDrag(transfer([], [], [{kind:"file"}]))).toBe(true);
   expect(isFileDrag(transfer([], [shot], []))).toBe(true);
   expect(isFileDrag(transfer(["text/plain", "text/uri-list"], [], [{kind:"string"}]))).toBe(false);
+});
+
+test("an inaccessible advertised file remains an attachment attempt without admitting a partial batch", () => {
+  const file = new File(["x"], "one.png", {type:"image/png"});
+  const unreadable = {files:[],types:["image/png"],items:[{kind:"file",getAsFile:()=>file},{kind:"file",getAsFile:()=>null}]} as unknown as DataTransfer;
+  expect(isFileDrag(unreadable)).toBe(true);
+  expect(clipboardPhotos(unreadable)).toEqual([]);
+  expect(clipboardPhotos({files:[],items:[{kind:"file", getAsFile:()=>{throw Error("unavailable");}}]} as unknown as DataTransfer)).toEqual([]);
+});
+
+test("rejects a native read that finishes with empty or truncated data", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "FileReader");
+  let encoded = "";
+  class Reader {
+    result = "";
+    onload = () => {};
+    readAsDataURL() { this.result = "data:image/png;base64," + encoded; this.onload(); }
+  }
+  Object.defineProperty(globalThis, "FileReader", {value:Reader, configurable:true});
+  try {
+    const source = new File(["abcd"], "four.png", {type:"image/png"});
+    await expect(readWorkPhoto(source)).rejects.toThrow("read");
+    encoded = "YQ==";
+    await expect(readWorkPhoto(source)).rejects.toThrow("read");
+    encoded = "YWJjZA==";
+    expect(await readWorkPhoto(source)).toEqual({mimeType:"image/png",data:encoded});
+  } finally {
+    if (original) Object.defineProperty(globalThis, "FileReader", original); else Reflect.deleteProperty(globalThis, "FileReader");
+  }
 });
