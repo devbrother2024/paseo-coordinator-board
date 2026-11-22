@@ -16,10 +16,11 @@ const ws=(id:string,projectId:string,repo?:string,changes: Record<string,unknown
 }) as unknown as WS;
 
 test("동일한 프로젝트 ID 또는 양 호스트에서 유일한 GitHub 저장소만 연결한다",()=>{
- const entries=[ag("one","remote-a"),ag("two","remote-b"),ag("named","new"),ag("excluded","hidden")];
+ const updatedAt="2026-11-22T13:30:00Z";
+ const entries=[ag("one","remote-a",{updatedAt}),ag("two","remote-b"),ag("named","new"),ag("excluded","hidden")];
  const spaces=[ws("remote-a","a"),ws("remote-b","x","Test/Beta"),ws("new","other"),ws("hidden","excluded","test/alpha")];
  expect(matchRemoteSessions(entries,spaces,scope)).toEqual([
-  {sessionId:"one",projectId:"a",title:"실제 원격 작업"},
+  {sessionId:"one",projectId:"a",title:"실제 원격 작업",activityAt:updatedAt},
   {sessionId:"two",projectId:"b",title:"실제 원격 작업"},
  ]);
 });

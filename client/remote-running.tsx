@@ -7,7 +7,7 @@ import { SessionChip, type Theme } from "./controls";
 import { useBoardLanguage } from "./language";
 
 type Open = (serverId: string, sessionId: string) => void;
-type RemoteGroup = { host: BoardHost; rows: RemoteSession[]; failed: boolean };
+export type RemoteGroup = { host: BoardHost; rows: RemoteSession[]; failed: boolean };
 
 export function useRemoteRunning(current: {id:string;label:string}, projects:LocalProject[], repositories:Repository[], enabled:boolean) {
   const hosts = useHosts();
@@ -40,7 +40,8 @@ export function useRemoteRunning(current: {id:string;label:string}, projects:Loc
     });
     return () => { active = false; timers.forEach(clearInterval); };
   }, [key]);
-  return cache.key === key ? cache.groups : [];
+  const groups = cache.key === key ? cache.groups : [];
+  return { groups, loading: enabled && (visibility.status === "loading" || groups.length < registered.length) };
 }
 
 export function RemoteRunning({groups, projects, theme, open}: {groups:RemoteGroup[];projects:LocalProject[];theme:Theme;open?:Open}) {

@@ -11,7 +11,7 @@ type Workspace = Awaited<ReturnType<Client["workspaces"]["list"]>>["entries"][nu
 export type LocalProject = { id: string; title: string; selected: boolean };
 export type Repository = Pick<PullRequestView["projects"][number],"projectId"|"repo"|"mode">;
 export type RemoteScope = { selected: string[]; known: string[]; repos: [string,string][] };
-export type RemoteSession = { sessionId: string; projectId: string; title: string; workspacePull?: WorkspacePull };
+export type RemoteSession = { sessionId: string; projectId: string; title: string; activityAt?: string; workspacePull?: WorkspacePull };
 
 export function remoteScope(projects: LocalProject[], repositories: Repository[]): RemoteScope {
   const selected = projects.filter(p => p.selected).map(p => p.id).sort();
@@ -68,7 +68,8 @@ export function matchRemoteSessions(entries: AgentEntry[], workspaces: Workspace
       matched = local[0][0];
     }
     const work = workspacePull(ws);
-    result.set(agent.id, {...(work ? {workspacePull:work} : {}),sessionId: agent.id, projectId: matched, title: agent.title?.trim() ?? ""});
+    result.set(agent.id, {...(work ? {workspacePull:work} : {}),sessionId: agent.id, projectId: matched, title: agent.title?.trim() ?? "",
+      ...(agent.updatedAt && {activityAt: agent.updatedAt})});
   }
   return [...result.values()];
 }
