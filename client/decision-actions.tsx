@@ -6,6 +6,7 @@ import { sendDecision, type DecisionInput } from "../shared/decision-actions";
 import { requestRecommendation } from "../shared/recommendation";
 import { HistoryMarkdown } from "./history-markdown";
 import { DecisionReplyInput } from "./decision-reply";
+import { SendButton } from "./send-input";
 import { sessionReplyDraft } from "./decision-reply-state";
 import { decisionSummary } from "./decision-summary";
 import { Button, SessionChip, type Theme } from "./controls";
@@ -57,7 +58,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   const chosen = selection === null ? null : decision?.options?.[selection];
   const proposed = chosen?.reply || (decision?.needsInput ? undefined : decision?.recommendation);
   const reply = sessionReplyDraft(proposed, draft, reviewedReply, !!replyPhotos.photos.length);
-  const sendDisabled = busy || replyPhotos.blocked || !reply.canSend;
+  const sendReply = { disabled: busy || replyPhotos.blocked || !reply.canSend, onPress: () => void submit("reply", reply.text, session.id, replyPhotos) };
   const inputFocus = useDecisionInteraction(!!coordination || (draft !== null && draft !== (proposed ?? "")) ||
     selection !== null || !!reviewedReply || busy || replyPhotos.blocked || !!replyPhotos.photos.length ||
     editorPhotos.blocked || !!editorPhotos.photos.length);
@@ -111,6 +112,10 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   }
 
   const targetChanged = !!coordination && coordination.recipientId !== coordinator;
+  const sendCoordination = {
+    disabled: busy || editorPhotos.blocked || targetChanged || (!coordination?.text.trim() && !editorPhotos.photos.length),
+    onPress: () => { if (coordination) void submit("coordinate", coordination.text, coordination.recipientId, editorPhotos); },
+  };
   const canCoordinate = !!coordinator && coordinator !== session.id;
   const canRestore = !!decision?.recommendation && !decision.needsInput && (selection !== null || draft !== null);
   const sourceExcerpts = evidence.filter(text => text !== headline);
@@ -137,14 +142,13 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
             accessibilityLabel={named(t("선택", "Choose") + " · " + option.label).accessibilityLabel} disabled={busy}
             onPress={() => selectReply(index)} />)}</View>}
         <PhotoComposer theme={theme} draft={replyPhotos} disabled={busy}>
-          <DecisionReplyInput {...inputFocus} theme={theme} value={reply.text} onChangeText={setDraft}
+          <DecisionReplyInput {...inputFocus} send={sendReply} theme={theme} value={reply.text} onChangeText={setDraft}
             accessibilityLabel={named(t("답장 내용", "Reply text")).accessibilityLabel}
             placeholder={t("담당 세션에 보낼 답을 입력하세요", "Write a reply to the assigned session")}
             maxLength={24000} disabled={busy} reviewRequired={reply.needsReview} onReview={() => setReviewedReply(proposed ?? null)} />
         </PhotoComposer>
         <View style={{ ...wrap, alignItems: "center" }}>
-          <Button theme={theme} {...named(t("담당 세션에 답장 보내기", "Send reply to assigned session"))}
-            disabled={sendDisabled} selected={!sendDisabled} onPress={() => { if (!sendDisabled) void submit("reply", reply.text, session.id, replyPhotos); }} />
+          <SendButton theme={theme} {...named(t("담당 세션에 답장 보내기", "Send reply to assigned session"))} send={sendReply} selected={!sendReply.disabled} />
           {clarification}
         </View>
         <View style={{ ...wrap, alignItems: "center" }}>
@@ -163,14 +167,12 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
         <Text style={{ color: c.foregroundMuted }}>{t("받는 곳", "Recipient")} · {targetChanged ? coordination.recipientId : coordinatorTitle || coordinator}</Text>
         {targetChanged && <Text style={{ color: c.statusWarning }}>{t("코디네이터가 교체되었습니다. 취소하고 새 수신자를 확인해 주세요.", "The coordinator changed. Cancel and check the new recipient.")}</Text>}
         <PhotoComposer theme={theme} disabled={busy || targetChanged} draft={editorPhotos}>
-          <DecisionReplyInput {...inputFocus} theme={theme} accessibilityLabel={named(t("조율 요청 내용", "Coordination request text")).accessibilityLabel}
+          <DecisionReplyInput {...inputFocus} send={sendCoordination} theme={theme} accessibilityLabel={named(t("조율 요청 내용", "Coordination request text")).accessibilityLabel}
             placeholder={t("조율 요청 내용을 입력하세요", "Write your coordination request")} value={coordination.text}
             disabled={busy || targetChanged} maxLength={24000} onChangeText={text => setCoordination({ ...coordination, text })} />
         </PhotoComposer>
         <View style={wrap}>
-          <Button theme={theme} {...named(busy ? t("전송 중…", "Sending…") : t("코디네이터에 조율 요청 보내기", "Send request to coordinator"))}
-            disabled={busy || editorPhotos.blocked || targetChanged || (!coordination.text.trim() && !editorPhotos.photos.length)}
-            onPress={() => void submit("coordinate", coordination.text, coordination.recipientId, editorPhotos)} />
+          <SendButton theme={theme} {...named(busy ? t("전송 중…", "Sending…") : t("코디네이터에 조율 요청 보내기", "Send request to coordinator"))} send={sendCoordination} />
           <Button theme={theme} {...named(t("취소", "Cancel"))} disabled={busy || editorPhotos.reading} onPress={() => { setCoordination(null); setError(null); editorPhotos.clear(); }} />
         </View>
       </View>}

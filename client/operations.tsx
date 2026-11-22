@@ -1,5 +1,5 @@
 import { useRpc } from "@getpaseo/plugin/client";
-import { TextInput } from "@getpaseo/plugin/client/ui";
+import { SendButton, SendTextInput } from "./send-input";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Text, useWindowDimensions, View } from "react-native";
 import {
@@ -54,6 +54,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   const { height: windowHeight } = useWindowDimensions();
   const photoDraft = usePhotoDraft();
   const hasRequest = Boolean(text.trim() || photoDraft.photos.length);
+  const sendRequest = { disabled: busy || !configured || !hasRequest || photoDraft.blocked, onPress: () => void post("work") };
   const [inputFocused, setInputFocused] = useState(false);
   const [feedbackArea, setFeedbackArea] = useState<"provider" | "routing" | "coordinator">("provider");
   const pending = useRef(false),
@@ -262,7 +263,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
       </View>
       <PhotoComposer theme={theme} disabled={busy} draft={photoDraft} text={text} showHint
         openSession={openCoordinator ? () => openCoordinator(coordinator) : undefined}>
-        <TextInput accessibilityLabel={t("코디네이터에게 맡길 일", "Request for the coordinator")} placeholder={t("예: 초안 작성과 자료 검증을 나눠 맡겨 주세요", "Example: Assign the first draft and source checks separately.")} value={text}
+        <SendTextInput send={sendRequest} accessibilityLabel={t("코디네이터에게 맡길 일", "Request for the coordinator")} placeholder={t("예: 초안 작성과 자료 검증을 나눠 맡겨 주세요", "Example: Assign the first draft and source checks separately.")} value={text}
           placeholderTextColor={muted} style={{ minHeight: 64, height: editorExpanded ? Math.min(480, Math.max(160, Math.round(windowHeight * 0.48))) : undefined,
             padding: 10, textAlignVertical: "top", color,
             backgroundColor: theme.colors.surface0, borderColor: inputFocused ? theme.colors.accent : muted, borderWidth: 2, borderRadius: 7 }}
@@ -270,7 +271,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
           editable={!busy} multiline maxLength={24000} onChangeText={setText} />
       </PhotoComposer>
       <View style={wrap}>
-        <Button theme={theme} label={t("코디네이터에 요청 보내기", "Send to coordinator")} selected={hasRequest && configured && !busy && !photoDraft.blocked} disabled={busy || !configured || !hasRequest || photoDraft.blocked} onPress={() => void post("work")} />
+        <SendButton theme={theme} label={t("코디네이터에 요청 보내기", "Send to coordinator")} send={sendRequest} selected={!sendRequest.disabled} />
         <Button theme={theme} label={t("다이제스트 요청", "Request digest")} disabled={busy || photoDraft.reading || !configured} onPress={() => void post("digest")} />
       </View>
       <Text style={{ color: muted }}>{!configured ? t("설정에서 관리할 프로젝트를 선택해 주세요.", "Choose a project to manage in Settings.") : t("작업 요청은 코디네이터에게 전달됩니다. 다이제스트는 내 결정과 추천 답장을 모읍니다. 자동 답장이 켜져 있으면 보드에서 확인한 사실 질문도 처리합니다.", "Requests go to the coordinator. A digest gathers decisions and suggested replies. When automatic replies are on, it also answers verified board questions.")}</Text>

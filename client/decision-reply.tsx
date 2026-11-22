@@ -1,4 +1,4 @@
-import { TextInput } from "@getpaseo/plugin/client/ui";
+import { SendTextInput, type SendAction } from "./send-input";
 import { useState } from "react";
 import { useWindowDimensions, View } from "react-native";
 import { Button, type Theme } from "./controls";
@@ -6,6 +6,7 @@ import { isLongReply } from "./decision-reply-state";
 import { useBoardLanguage } from "./language";
 
 type ReplyInputProps = {
+  send: SendAction;
   theme: Theme;
   value: string;
   onChangeText: (value: string) => void;
@@ -20,7 +21,7 @@ type ReplyInputProps = {
 };
 
 export function DecisionReplyInput({
-  theme, value, onChangeText, accessibilityLabel, placeholder, maxLength, disabled,
+  theme, value, onChangeText, accessibilityLabel, placeholder, maxLength, disabled, send,
   onFocus, onBlur, reviewRequired = false, onReview,
 }: ReplyInputProps) {
   const { t } = useBoardLanguage();
@@ -31,7 +32,7 @@ export function DecisionReplyInput({
   const toggleLabel = showFull ? t("입력창 접기", "Collapse editor") : t("답장 전문 보기", "View full reply");
   const c = theme.colors;
   return <View style={{ gap: 4 }}>
-    <TextInput value={value} onChangeText={onChangeText} multiline editable={!disabled} maxLength={maxLength}
+    <SendTextInput send={send} value={value} onChangeText={onChangeText} multiline editable={!disabled} maxLength={maxLength}
       accessibilityLabel={accessibilityLabel} placeholder={placeholder} placeholderTextColor={c.foregroundMuted}
       onFocus={onFocus} onBlur={onBlur}
       style={{ minHeight: 56, height: showFull ? Math.max(168, Math.min(480, height * 0.48)) : undefined,

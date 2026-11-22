@@ -1,5 +1,6 @@
 import { useDecisionInteraction } from "./decision-editing";
 import { DecisionReplyInput } from "./decision-reply";
+import { SendButton } from "./send-input";
 import { useRpc } from "@getpaseo/plugin/client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
@@ -112,6 +113,7 @@ function DecisionRecord({ item, theme, open, openOwner, recipientId, onResolved,
   // A suggestion is visible before the person edits. Checking a record sends no reply.
   const hasDraft = hasQuestionDraft || hasPhotos || !!editedReply?.trim() || questionText.some(value => !!value.trim());
   const answerDisabled = busy || attachments.blocked || !hasAnswer || outstanding || tooLong;
+  const sendReply = { disabled: !recipientId || !recordActions || answerDisabled || changedOwner, onPress: () => void acknowledge("send") };
   const inputFocus = useDecisionInteraction(!queue && !isClosed && !needsRefresh &&
     (hasDraft || editedReply !== null || Object.values(typed).some(value => value !== undefined) ||
       attachments.blocked || busy || confirming || Object.values(skipped).some(Boolean)));
@@ -215,7 +217,7 @@ function DecisionRecord({ item, theme, open, openOwner, recipientId, onResolved,
           </Pressable>;
         })}
         {!skipped[index] && <PhotoComposer theme={theme} disabled={busy} draft={attachments} questionIndex={index}>
-          <DecisionReplyInput {...inputFocus} theme={theme} value={questionText[index]} disabled={busy} maxLength={4000}
+          <DecisionReplyInput {...inputFocus} send={sendReply} theme={theme} value={questionText[index]} disabled={busy} maxLength={4000}
             accessibilityLabel={item.title + " · " + question.text + " · " + t("답장 내용", "Reply text")}
             onChangeText={text => { setConfirming(false); setTyped(previous => ({...previous,[index]:text})); setSelected(previous => ({...previous,[index]:[]})); }}
             placeholder={question.options.length ? t("선택하거나 직접 답을 입력하세요", "Choose an option or write your reply") : t("내 답을 입력하세요", "Write your reply")} />
@@ -226,7 +228,7 @@ function DecisionRecord({ item, theme, open, openOwner, recipientId, onResolved,
       </View>)}
       {!item.questions.length && !item.matchedSessionId && <>
         <PhotoComposer theme={theme} disabled={busy} draft={attachments}>
-          <DecisionReplyInput {...inputFocus} theme={theme} accessibilityLabel={item.title + " · " + t("답장 내용", "Reply text")}
+          <DecisionReplyInput {...inputFocus} send={sendReply} theme={theme} accessibilityLabel={item.title + " · " + t("답장 내용", "Reply text")}
             value={freeReply} disabled={busy} maxLength={4000} onChangeText={value => { setEditedReply(value); setConfirming(false); }}
             placeholder={t("내 답을 입력하세요", "Write your reply")} />
         </PhotoComposer>
@@ -246,8 +248,7 @@ function DecisionRecord({ item, theme, open, openOwner, recipientId, onResolved,
           onPress={() => setConfirmedOwner(item.sourceCoordinatorId)} />}
         {outstanding && <Text style={{ color: c.foregroundMuted }}>{t("각 질문에 답하거나 건너뛰기를 선택하세요.", "Answer or explicitly skip each question.")}</Text>}
         <View style={wrap}>
-          {recipientId && recordActions && <Button theme={theme} {...named(sendLabel)}
-            selected={!answerDisabled && !changedOwner} disabled={answerDisabled || changedOwner} onPress={() => void acknowledge("send")} />}
+          {recipientId && recordActions && <SendButton theme={theme} {...named(sendLabel)} send={sendReply} selected={!sendReply.disabled} />}
           {recordActions && (!recipientId || hasAnswer) && <Button theme={theme} {...named(t("보드에만 저장", "Save on board only"))}
             selected={!recipientId && !answerDisabled} disabled={answerDisabled} onPress={() => void acknowledge("save")} />}
           {humanCheck && !hasDraft && (Platform.OS === "web" ? <label style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: 5, fontSize: 13, color: c.foregroundMuted }}>

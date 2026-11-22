@@ -1,6 +1,6 @@
 import { useDecisionInteraction } from "./decision-editing";
 import { useRpc } from "@getpaseo/plugin/client";
-import { TextInput } from "@getpaseo/plugin/client/ui";
+import { SendButton, SendTextInput } from "./send-input";
 import { useEffect, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { askClarification, clarificationKey, type ClarificationCard, type ClarificationEntry } from "../shared/clarifications";
@@ -41,6 +41,7 @@ export function Clarification({card,title,theme,recipientId,recipientTitle,entri
   // The conversation stays on the ledger card, while each new question binds its current source revision.
   const target = JSON.stringify([card,recipientId]);
   const changed = draftTarget !== target;
+  const sendQuestion = { disabled: busy || photos.blocked || changed || !hasDraft, onPress: () => void submit() };
   function toggle() {
     if (sending.current || photos.readPending.current) return;
     if (!expanded && !hasDraft) setDraftTarget(target);
@@ -71,13 +72,13 @@ export function Clarification({card,title,theme,recipientId,recipientTitle,entri
         <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>{t("질문 받을 세션", "Question recipient")} · {recipientTitle || recipientId}</Text>
         {changed && <Button theme={theme} label={t("바뀐 질문과 수신자 확인", "Confirm updated question and recipient")}
           onPress={() => { setDraftTarget(target); setError(false); }} />}
-        <PhotoComposer theme={theme} disabled={busy || changed} draft={photos}><TextInput multiline maxLength={4000} editable={!busy}
+        <PhotoComposer theme={theme} disabled={busy || changed} draft={photos}><SendTextInput send={sendQuestion} multiline maxLength={4000} editable={!busy}
           accessibilityLabel={label("질문 내용", "Question text")} value={text} onChangeText={setText}
           placeholder={t("결정하기 전에 궁금한 점을 적어 주세요", "What would you like to ask before deciding?")} placeholderTextColor={c.foregroundMuted}
           style={{minHeight:48,color:c.foreground,backgroundColor:c.surface0,padding:8,borderWidth:1,borderColor:c.border,borderRadius:7}} /></PhotoComposer>
         {error && <Text accessibilityLiveRegion="polite" style={{color:c.statusWarning}}>{t("질문 전송을 확인하지 못했습니다. 같은 내용으로 다시 시도해 주세요.","Question delivery is unconfirmed. Retry with the same question.")}</Text>}
-        <View style={{alignItems:"flex-start"}}><Button theme={theme} label={t("질문 보내기", "Send question")} accessibilityLabel={label("질문 보내기", "Send question")}
-          disabled={busy || photos.blocked || changed || !hasDraft} selected onPress={() => void submit()} /></View>
+        <View style={{alignItems:"flex-start"}}><SendButton theme={theme} label={t("질문 보내기", "Send question")} accessibilityLabel={label("질문 보내기", "Send question")}
+          send={sendQuestion} selected /></View>
       </>}
     </View>}
     {(history.length > 0 || prior.length > 0) && <View style={{width:"100%",gap:7,padding:8,borderRadius:6,backgroundColor:c.surface0}}>
