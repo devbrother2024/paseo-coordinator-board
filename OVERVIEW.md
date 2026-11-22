@@ -23,7 +23,7 @@ For a registry installation, preview a new reviewed release with `paseo plugin u
 
 Open the board from the sidebar and select the projects you want in your digest. To manage just one session from another project, open **Settings → Link a session from another project**. Search for the session, check its ID and source workspace, select a managed destination, then click **Link to this project**. The card appears once under its destination. The session keeps its original ID, workspace, files and conversation. **Unlink from project** removes the link. The card returns to its source project if that project is also managed.
 
-In the desktop app and on the web, press **⌘+Enter** on Mac or **Ctrl+Enter** on Windows and Linux to send from the current request, reply or question field. **Enter** inserts a line break.
+In the desktop app and on the web, press **⌘+Enter** on Mac or **Ctrl+Enter** on Windows and Linux to send from the current request, reply or question field. **Enter** inserts a line break. Hover over the send button or focus it with Tab to see the shortcut for your device.
 
 **My decisions** shows overdue and urgent items first, followed by work waiting for a response or permission. Other items are ordered by deadline. Within a priority, the oldest known wait comes first. A card stays in place while you compose a reply or review a merge. Questions and explanations preserve line breaks and render Markdown lists, links, and inline code.
 
