@@ -1,10 +1,11 @@
+import { VerifiedSessionChip } from "./verified-session-chip";
 import { useEffect, useRef, useState } from "react";
 import { useRpc } from "@getpaseo/plugin/client";
 import { Image, Text, View } from "react-native";
 import { pullUrl } from "../shared/prs";
 import { mergeNotificationLabel } from "./merge-notification";
 import { readReplyPhoto, type ReplyEntry } from "../shared/reply-history";
-import { Button, SessionChip, type Theme } from "./controls";
+import { Button, type Theme } from "./controls";
 import type { HistoryLinks, HistorySession } from "./history-sessions";
 import { HistoryMarkdown } from "./history-markdown";
 import { useBoardLanguage } from "./language";
@@ -41,10 +42,6 @@ function LocalPhoto({ entryKey, index, theme }: { entryKey: string; index: numbe
 
 function SessionReference({session,state,open,openRemote,theme}:Pick<Props,"open"|"openRemote"|"theme"> & {session:HistorySession;state?:string}) {
   const {t} = useBoardLanguage();
-  const [checking,setChecking] = useState(false);
-  const [failed,setFailed] = useState(false);
-  const active = useRef(true);
-  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   const role = {source:t("원래 세션","Source session"), received:t("받은 세션","Recipient session"), target:t("전송 대상","Intended recipient")}[session.role];
   const title = session.title || session.id;
   const label = [role,session.hostLabel ?? session.host,title,state].filter(Boolean).join(" · ");
@@ -52,21 +49,8 @@ function SessionReference({session,state,open,openRemote,theme}:Pick<Props,"open
   const navigate = host ? openRemote && (() => openRemote(host,session.id)) : open && (() => open(session.id));
   if ((!session.available && !session.verify) || !navigate) return <Text selectable style={{color:theme.colors.foregroundMuted,fontSize:12}}>
     {label}{!session.available && " · " + t("연결 미확인","Connection unverified")}</Text>;
-  async function visit() {
-    if (!navigate || checking) return;
-    if (session.available) { navigate(); return; }
-    setChecking(true); setFailed(false);
-    try {
-      const verified = await session.verify?.();
-      if (active.current) { if (verified) navigate(); else setFailed(true); }
-    } catch { if (active.current) setFailed(true); }
-    finally { if (active.current) setChecking(false); }
-  }
-  return <View style={{maxWidth:"100%",gap:2}}>
-    <SessionChip theme={theme} label={label} accessibilityLabel={t(role+" 열기 · "+title,"Open "+role+" · "+title)} onPress={() => void visit()} />
-    {(checking || failed) && <Text accessibilityLiveRegion="polite" style={{color:theme.colors.foregroundMuted,fontSize:12}}>{checking
-      ? t("세션 확인 중…","Checking session…") : t("이 호스트에서 세션 연결을 확인하지 못했습니다.","Could not verify this session on its host.")}</Text>}
-  </View>;
+  return <VerifiedSessionChip theme={theme} label={label} accessibilityLabel={t(role+" 열기 · "+title,"Open "+role+" · "+title)}
+    onPress={navigate} verify={session.available ? undefined : session.verify} />;
 }
 
 export function ReplyCard({entry, theme, links, open, openRemote}:Props) {

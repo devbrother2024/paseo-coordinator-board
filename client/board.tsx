@@ -1,6 +1,8 @@
 import type { BoardReadiness } from "../shared/readiness";
 import { matchesProject, historySessionLinks, type HistoryLinks } from "./history-sessions";
 import { ReplyHistory } from "./reply-history";
+import { trackedSessionTargets } from "./tracked-session-targets";
+import type { TrackedSessionLinks } from "./tracked-session-chips";
 import { TrackedDecisionCard } from "./tracked-decisions";
 import { mentionsSecurityGate, trackedCoverage, trackedRecipient, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
 import { MergeFeedback, PullRequestCard, PullRequestSettings, type MergeNotice, type WorkSessionLink } from "./pull-requests";
@@ -180,6 +182,21 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     const local = snapshot?.sessions.find(s => s.id === id && (matchesProject(s.projectId,item.projectId,historyRepos) || s.id === item.matchedSessionId));
     return local && actions.onOpen ? () => actions.onOpen!(local.id) : undefined;
   }
+  function recordLinks(item: TrackedDecision, showSource = true): TrackedSessionLinks {
+    if (!snapshot) return {};
+    const { ownerId, sameSession } = trackedSessionTargets(item, snapshot.coordinator, hostId);
+    const open = actions.onOpen;
+    const ownerKnown = ownerId === snapshot.coordinator || snapshot.sessions.some(session => session.id === ownerId);
+    const owner = ownerId && open && (ownerKnown || hostId) ? {
+      id: ownerId,
+      open: () => open(ownerId),
+      verify: !ownerKnown && hostId ? async () => {
+        const entry = await getPaseoClient(hostId).agents.ref(ownerId).refresh();
+        return entry?.agent.id === ownerId && !entry.agent.internal && !entry.agent.archivedAt;
+      } : undefined,
+    } : undefined;
+    return { owner, source: showSource && !(owner && sameSession) ? linkedSession(item) : undefined };
+  }
   function renderPull(pr:PullRequestItem, projectId:string, decision=false, securityGate=false, embedded=false, rowKey?: string, scope: (string | null)[] = pr.projectIds, priority?: string) {
     const workSessions:WorkSessionLink[] = [];
     for (const s of snapshot?.sessions ?? []) {
@@ -211,14 +228,11 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             (!item.projectId || pr.projectIds.includes(item.projectId)) && (pr.reason !== "ready" || item.matchedPull));
           const recipient = trackedRecipient(item,snapshot!.coordinator,snapshot!.sessions);
           const replyRecipient = native && !item.questions.length ? undefined : recipient;
-          const owner = (item.where==="manager" || item.where==="human") && recipient;
-          const sourceId = item.matchedSessionId || item.sessionId;
-          const sameSession = owner===sourceId && (!item.sessionHost || item.sessionHost===hostId);
-          return <TrackedDecisionCard openOwner={owner && actions.onOpen ? ()=>actions.onOpen!(owner) : undefined} key={item.key} item={item} theme={theme} priorityLabel={priority}
+          return <TrackedDecisionCard links={recordLinks(item, !native)} key={item.key} item={item} theme={theme} priorityLabel={priority}
             renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined)}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
               : pr && renderPull(pr, pr.projectIds.includes(item.projectId ?? "") ? item.projectId! : pr.projectIds[0], true, mentionsSecurityGate(item), true, rowKey, [item.projectId])}
-            recipientId={replyRecipient} open={!native && !sameSession ? linkedSession(item) : undefined} onResolved={(status,mode,answer)=>{
+            recipientId={replyRecipient} onResolved={(status,mode,answer)=>{
               if (rowKey && mode && (status === "sent" || status === "closed" || status === "already-closed")) {
                 remember({ rowKey, actionKey: recordRowKey(item), projectIds: [item.projectId],
                   status: status === "closed" ? (mode === "save" ? "saved" : "reviewed") : status,
@@ -330,8 +344,8 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       {!settings && (visibleProjects.length > 0 || showHostWide) && <Text accessibilityRole="header" style={{ color: c.foreground, fontSize: 19, fontWeight: "700" }}>{t("프로젝트별 진행", "Project progress")}</Text>}
       {!settings && showHostWide && <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId="" title={t("공통","Host-wide")} cards={[]} requests={[]} history={history.filter(entry=>entry.projectId === null)}
         records={records.filter(item=>item.projectId === null)} decisions={byProject.get(null) ?? 0} renderRecord={renderRecord} renderPull={renderPull}
-        openRecord={linkedSession} compact={layout.compact} theme={theme} {...actions} />}
-      {!settings && visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} history={history.filter(entry=>entry.projectId===p.id)} records={records.filter(r => r.projectId === p.id)} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} openRecord={linkedSession} requests={pullRequests?.items.filter(pr => pr.projectIds.includes(p.id)) ?? []} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
+        recordLinks={recordLinks} compact={layout.compact} theme={theme} {...actions} />}
+      {!settings && visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} history={history.filter(entry=>entry.projectId===p.id)} records={records.filter(r => r.projectId === p.id)} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={pullRequests?.items.filter(pr => pr.projectIds.includes(p.id)) ?? []} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
       {!settings && hostId && snapshot && configured && <RemoteRunning groups={peers.map(group => ({...group, rows:group.rows.filter(row => inFilter(row.projectId))}))}
         projects={snapshot.projects} open={onOpenHostSession} theme={theme} />}
     </ScrollView>

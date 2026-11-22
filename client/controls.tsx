@@ -15,9 +15,9 @@ export function Button({ label, accessibilityLabel, onPress, theme, selected = f
   );
 }
 
-export function SessionChip({ label, accessibilityLabel, onPress, theme }: {
-  label: string; accessibilityLabel: string; onPress: () => void; theme: Theme;
-}) {
+export type SessionChipProps = { label: string; accessibilityLabel: string; onPress: () => void; theme: Theme };
+
+export function SessionChip({ label, accessibilityLabel, onPress, theme }: SessionChipProps) {
   const c = theme.colors;
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} onPress={onPress}
     style={({ pressed }) => ({ alignSelf: "flex-start", maxWidth: "100%", minHeight: 26, justifyContent: "center",

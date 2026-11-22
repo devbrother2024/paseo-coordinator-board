@@ -8,6 +8,7 @@ import type { TrackedDecision } from "../shared/tracked-decisions";
 import { factStatus, laneLabel, noteLabel, sessionDetail, type Card, type Lane } from "./model";
 import type { ReplyEntry } from "../shared/reply-history";
 import type { HistoryLinks } from "./history-sessions";
+import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session-chips";
 import { plainDecisionTitle } from "./decision-summary";
 import { HistoryMarkdown } from "./history-markdown";
 import { ReplyCard } from "./reply-history";
@@ -77,14 +78,16 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
 
 type Entry = {key:string; content: ReactNode};
 
-function RecordPreview({item,theme,render,open}: {item:TrackedDecision;theme:Theme;render:(item:TrackedDecision)=>ReactNode;open?:()=>void}) {
+function RecordPreview({item,theme,render,links}: {item:TrackedDecision;theme:Theme;render:(item:TrackedDecision)=>ReactNode;links:TrackedSessionLinks}) {
   const [expanded,setExpanded] = useState(false);
   const {t} = useBoardLanguage();
   const title = useMemo(() => plainDecisionTitle(item.title), [item.title]);
   return <View style={{gap:4}}>
     <Button theme={theme} label={expanded ? t("결정 카드 접기","Hide decision card") : title}
       accessibilityLabel={t(`결정 카드 · ${title}`,`Decision card · ${title}`)} onPress={()=>setExpanded(v=>!v)} />
-    {open && !expanded && <SessionChip theme={theme} label={t("연결 세션","Linked session")} accessibilityLabel={title+" · "+t("연결된 세션 열기","Open linked session")} onPress={open} />}
+    {!expanded && (links.owner || links.source) && <View style={{flexDirection:"row",flexWrap:"wrap",gap:6}}>
+      <TrackedSessionChips theme={theme} title={title} links={links} />
+    </View>}
     {expanded && render(item)}
   </View>;
 }
@@ -105,10 +108,10 @@ function Column({lane,entries,theme}: {lane:ColumnKind;entries:Entry[];theme:The
 }
 
 type Props = Actions & {projectId:string; title:string; history?:ReplyEntry[]; historyLinks:HistoryLinks; openRemote?:(host:string,id:string)=>void; decisions:number; cards:Card[]; records:TrackedDecision[]; requests:PullRequestItem[];
-  renderRecord:(item:TrackedDecision)=>ReactNode; theme:Theme; compact:boolean; openRecord:(item:TrackedDecision)=>(()=>void)|undefined; renderPull:(pr:PullRequestItem,projectId:string)=>ReactNode};
+  renderRecord:(item:TrackedDecision)=>ReactNode; theme:Theme; compact:boolean; recordLinks:(item:TrackedDecision)=>TrackedSessionLinks; renderPull:(pr:PullRequestItem,projectId:string)=>ReactNode};
 const order:ColumnKind[] = ["running","review","human","history","idle","done","unknown"];
 
-export function Project({projectId,title,decisions,cards,records,history=[],historyLinks,openRemote,requests,renderRecord,theme,compact,openRecord,renderPull,...actions}:Props) {
+export function Project({projectId,title,decisions,cards,records,history=[],historyLinks,openRemote,requests,renderRecord,theme,compact,recordLinks,renderPull,...actions}:Props) {
   const {t} = useBoardLanguage();
   const [width,setWidth] = useState(0);
   const groups:Record<ColumnKind,Entry[]> = {history: history.map(entry=>({key:entry.key,content:<ReplyCard links={historyLinks} openRemote={openRemote} entry={entry} theme={theme} open={actions.onOpen} />})),running:[],review:[],human:[],idle:[],done:[],unknown:[]};
@@ -116,7 +119,7 @@ export function Project({projectId,title,decisions,cards,records,history=[],hist
     const since = Date.parse(item.since ?? "");
     const answered = item.replyHistory.some(reply => Date.parse(reply.at ?? "") >= since);
     const lane = answered && !item.matchedSessionId ? "review" : "human";
-    groups[lane].push({key:"decision:"+item.key,content:<RecordPreview item={item} theme={theme} render={renderRecord} open={openRecord(item)} />});
+    groups[lane].push({key:"decision:"+item.key,content:<RecordPreview item={item} theme={theme} render={renderRecord} links={recordLinks(item)} />});
   }
   for(const card of cards) {
     if(card.lane==="human" && records.some(item=>item.matchedSessionId===card.session.id)) continue;

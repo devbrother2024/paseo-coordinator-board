@@ -21,7 +21,7 @@ paseo plugin ls coordinator-board
 
 레지스트리로 설치한 보드의 새 버전을 확인하려면 `paseo plugin update coordinator-board --check`를 실행하세요. 업데이트하려면 `paseo plugin update coordinator-board`를 실행하고 제안된 변경을 확인합니다.
 
-**Git·ZIP 설치**도 가능합니다. Git이 있는 호스트에서는 `paseo plugin install git:devbrother2024/paseo-coordinator-board --ref main`으로 기본 브랜치를 설치합니다. 이 문서의 버전을 설치하려면 `main` 자리에 `v0.5.20`를 넣으세요. 전체 커밋 SHA도 사용할 수 있습니다. ZIP은 압축을 푼 뒤 `paseo-plugin.json`이 있는 폴더에서 `paseo plugin install .`을 실행하고 그 폴더를 보관하세요. [Paseo 플러그인 안내](https://paseo.sh/docs/plugins)
+**Git·ZIP 설치**도 가능합니다. Git이 있는 호스트에서는 `paseo plugin install git:devbrother2024/paseo-coordinator-board --ref main`으로 기본 브랜치를 설치합니다. 이 문서의 버전을 설치하려면 `main` 자리에 `v0.5.21`를 넣으세요. 전체 커밋 SHA도 사용할 수 있습니다. ZIP은 압축을 푼 뒤 `paseo-plugin.json`이 있는 폴더에서 `paseo plugin install .`을 실행하고 그 폴더를 보관하세요. [Paseo 플러그인 안내](https://paseo.sh/docs/plugins)
 
 **내 결정**에서는 기한이 지났거나 지금 처리해야 하는 카드가 맨 위에 옵니다. 그다음은 답변이나 권한 승인을 기다리는 작업이고, 나머지 카드는 오늘, 이번 주, 그 이후에 기한이 있는 작업, 기한 없는 작업 순으로 표시합니다. 같은 순위에서는 대기를 시작한 시각이 확인된 오래된 카드부터 표시합니다. 처음에는 다섯 장이 보입니다. 답변을 쓰거나 병합을 확인하는 동안에는 갱신이 와도 해당 카드의 자리를 유지합니다.
 
@@ -100,7 +100,7 @@ ZIP에는 TypeScript 원본이 들어 있습니다. 기본 모델과 추론 강�
 
 ### 결정 카드에서 답하거나 조율 요청하기
 
-원장 카드에서 **운영 코디네이터**를 누르면 실제 답장을 받을 세션이 열립니다. 원래 작업 세션도 확인되면 두 링크가 함께 표시됩니다.
+원장 카드 위의 **운영 코디네이터**를 누르면 그 원장을 관리하는 세션이 열립니다. **원래 작업 세션**이 따로 있으면 두 칩 중에서 고를 수 있습니다. 프로젝트별 진행에서 카드를 접어 두어도 칩을 누를 수 있습니다. 답장을 받을 세션은 전송 버튼에서 확인하세요.
 
 운영 코디네이터가 Claude 또는 Codex로 작업 중이어도 여러 카드에 연이어 답할 수 있습니다. 각 답장은 해당 카드와 질문 ID를 유지합니다. 권한 확인 중이거나 담당 작업 세션이 바쁘면 원장 카드에 **전송 대기**가 표시됩니다. 보드를 닫아도 예약은 유지되며, 받는 세션이 준비되면 원래 질문과 수신자를 다시 확인하고 전송합니다. 전송 전에는 카드에서 취소할 수 있습니다.
 

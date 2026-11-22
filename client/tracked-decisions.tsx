@@ -5,16 +5,18 @@ import { useRpc } from "@getpaseo/plugin/client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
 import { cancelQueuedReply, resolveTrackedDecision, mentionsSecurityGate, suggestedTrackedReply, trackedAnswerText, trackedPullTarget, usesSourceCoordinator, type TrackedDecision } from "../shared/tracked-decisions";
-import { Button, SessionChip, type Theme } from "./controls";
+import { Button, type Theme } from "./controls";
 import { HistoryMarkdown } from "./history-markdown";
 import { TrackedPullStatus } from "./pull-requests";
 import { useBoardLanguage } from "./language";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
 
+import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session-chips";
+
 type Resolution = ReturnType<typeof resolveTrackedDecision.output.parse>["status"];
 type ResolutionMode = "send" | "save" | "review";
 type Props = {
-  item: TrackedDecision; theme: Theme; priorityLabel?: string; recipientId?:string|null; openOwner?:()=>void; open?: () => void; children?: ReactNode; pull?: ReactNode;
+  item: TrackedDecision; theme: Theme; priorityLabel?: string; recipientId?:string|null; links: TrackedSessionLinks; children?: ReactNode; pull?: ReactNode;
   renderClarification?: (onDraftChange:(active:boolean) => void) => ReactNode;
   onResolved: (result: Resolution, mode?: ResolutionMode, answer?: string) => Promise<void> | void;
 };
@@ -47,7 +49,7 @@ export function TrackedDecisionCard(props: Props) {
   return <DecisionRecord key={JSON.stringify([props.item.key, props.item.fingerprint])} {...props} />;
 }
 
-function DecisionRecord({ item, theme, open, openOwner, recipientId, onResolved, children, pull, renderClarification, priorityLabel }: Props) {
+function DecisionRecord({ item, theme, links, recipientId, onResolved, children, pull, renderClarification, priorityLabel }: Props) {
   const { t } = useBoardLanguage();
   const resolve = useRpc(resolveTrackedDecision);
   const cancel = useRpc(cancelQueuedReply);
@@ -175,8 +177,7 @@ function DecisionRecord({ item, theme, open, openOwner, recipientId, onResolved,
   return <View style={{ gap: 7 }}>
     <View style={{ ...wrap, alignItems: "center" }}>
       <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[source || t("보드 공통", "Board-wide"), t(words[0], words[1]), where, item.owner, priorityLabel].filter(Boolean).join(" · ")}</Text>
-      {openOwner && <SessionChip theme={theme} label={t("운영 코디네이터","Operating coordinator")} accessibilityLabel={named(t("운영 코디네이터 세션 열기","Open operating coordinator session")).accessibilityLabel} onPress={openOwner} />}
-      {open && <SessionChip theme={theme} label={openOwner ? t("원래 작업 세션","Source work session") : t("연결 세션", "Linked session")} accessibilityLabel={named(openOwner ? t("원래 작업 세션 열기", "Open source work session") : t("연결된 세션 열기", "Open linked session")).accessibilityLabel} onPress={open} />}
+      <TrackedSessionChips title={item.title} theme={theme} links={links} />
     </View>
     <HistoryMarkdown theme={theme} source={isMerge ? t("PR 병합", "PR merge") : item.title} heading />
     {!!headline && headline !== item.title && <HistoryMarkdown theme={theme} source={headline} />}
@@ -237,7 +238,7 @@ function DecisionRecord({ item, theme, open, openOwner, recipientId, onResolved,
       </>}
       {tooLong && <Text style={{ color: c.statusWarning }}>{t("답을 4,000자 이내로 줄여 주세요.", "Shorten the answer to 4,000 characters.")}</Text>}
       <View style={{ gap: 6 }}>
-        {owned && !openOwner && item.sourceCoordinatorId && <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>
+        {owned && !links.owner && item.sourceCoordinatorId && <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>
           {t("원장 소유 세션", "Ledger owner session")} · {item.sourceCoordinatorId}
         </Text>}
         {!recipientId && !item.matchedSessionId && <Text style={{color:c.foregroundMuted,fontSize:12}}>
@@ -271,7 +272,7 @@ function DecisionRecord({ item, theme, open, openOwner, recipientId, onResolved,
       <Text style={{ color: c.foregroundMuted, textDecorationLine: "underline", fontSize: 12 }}>{expanded ? t("근거·이력 접기", "Hide evidence and history") : t("근거·이력 보기", "Evidence and history")}</Text>
     </Pressable>
     {expanded && <View style={{ gap: 8, padding: 8, borderRadius: 7, backgroundColor: c.surface0 }}>
-      {openOwner && item.sourceCoordinatorId && <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>
+      {links.owner && item.sourceCoordinatorId && <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>
         {t("운영 코디네이터 세션 ID","Operating coordinator session ID")} · {item.sourceCoordinatorId}
       </Text>}
       {!!item.since && <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>
