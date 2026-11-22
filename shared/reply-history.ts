@@ -18,7 +18,7 @@ export const replyDetails = z.object({
 
 export const replyEntry = replyDetails.extend({
   pullMerge: pullMergeEvidence.optional(),
-  key: z.string(), status: z.enum(["sent", "pending", "recorded", "closed"]),
+  key: z.string(), status: z.enum(["sent", "pending", "recorded", "closed", "unsent"]),
   messageId: z.string().optional(), response: z.string().optional(),
   recipientTitle: z.string().optional(), recipientState: z.enum(["running","idle","closed","error","unknown"]).optional(),
   canOpen: z.boolean().optional(),

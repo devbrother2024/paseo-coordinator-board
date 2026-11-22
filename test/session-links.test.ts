@@ -1,20 +1,22 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import contribute from "../index.server";
 import { boardScope, boardSnapshot, saveNote } from "../shared/contract";
+import { resolveTrackedDecision } from "../shared/tracked-decisions";
 import { linkSession, listSessionLinks } from "../shared/session-links";
 import { sendDecision } from "../shared/decision-actions";
 
 function fixture() {
-  const handlers = new Map(), hooks = [];
+  const handlers = new Map(), hooks = [], hooksByName=new Map();
   const oldHome = process.env.PASEO_HOME;
   process.env.PASEO_HOME = mkdtempSync(join(tmpdir(), "session-links-"));
+  const dataDir=join(process.env.PASEO_HOME,"plugin-data","coordinator-board");
   try {
     contribute({
       registerSettings() {}, handle(c, handler) { handlers.set(c.name, handler); },
-      addHook(key, hook) { hooks.push(hook); return () => {}; },
+      addHook(key, hook) { hooks.push(hook); hooksByName.set(key,hook); return () => {}; },
     });
   } finally {
     if (oldHome === undefined) delete process.env.PASEO_HOME;
@@ -25,7 +27,8 @@ function fixture() {
     projectId: id, projectCustomName: id === "other" ? "다른" : "동명 프로젝트", projectRootPath: "/" + id,
   }));
   const actors = { worker: "origin", sibling: "origin", coord: "public", other: "other" };
-  const agent = id => ({ id, title: id === "coord" ? "코디네이터" : "동명 작업", workspaceId: "w-" + actors[id], status: "idle", updatedAt: "1", pendingPermissions: [] });
+  const live=new Map();
+  const agent = id => ({ id, title: id === "coord" ? "코디네이터" : "동명 작업", workspaceId: "w-" + actors[id], status: "idle", updatedAt: "1", pendingPermissions: [],...live.get(id) });
   const page = entries => ({ entries, pageInfo: { hasMore: false, nextCursor: null } });
   const signals = { afterRead: async () => {} };
   const sdk = {
@@ -56,7 +59,7 @@ function fixture() {
     const actions = (await Promise.all(hooks.map(h=>h({request:req})))).flatMap(v=>v?.tools ?? []);
     return (name, input) => actions.find(t=>t.name===name).execute(input,{paseo:sdk,agent:{id:"coord"}});
   }
-  return { actors, reads, sent, signals, rpc, select, link, board, tools };
+  return { actors, reads, sent, signals, rpc, select, link, board, tools, live, dataDir, emit:(name,id)=>hooksByName.get(name)({agent:{id}},{paseo:sdk}) };
 }
 
 test("선택한 기존 세션 하나만 재분류하며 원래 프로젝트와 워크스페이스, 대화 ID를 그대로 유지한다", async () => {
@@ -115,4 +118,25 @@ test("대상 프로젝트 해제·연결 철회가 발췌 중에도 효력을 �
   await f.link();await f.select("public",false);await f.select("public");
   expect((await f.board()).sessions.map(s=>s.id)).toEqual(["coord"]);
   expect((await f.rpc(listSessionLinks,{})).sessions.find(s=>s.sessionId==="worker").targetProjectId).toBeNull();
+});
+
+test("the permission hook delivers multiple card replies into the running coordinator with no open board",async()=>{
+  const f=fixture();await f.select("public");
+  await f.rpc(boardScope,{kind:"coordinator",sessionId:"coord"});
+  mkdirSync(f.dataDir,{recursive:true});
+  const records=["one","two","three","four"].map(id=>({source:"studio",projectId:"public",id,title:id,where:"manager"}));
+  writeFileSync(join(f.dataDir,"tracked-decisions.json"),JSON.stringify(records));
+  const cards=(await f.board()).trackedDecisions.items;
+  const send=card=>f.rpc(resolveTrackedDecision,{source:card.source,projectId:card.projectId,id:card.id,
+    fingerprint:card.fingerprint,recipientId:"coord",answer:"Answer "+card.id});
+  const running={provider:"claude",status:"running",activeTurn:{turnId:"turn"}};
+  f.live.set("coord",{...running,pendingPermissions:[{id:"perm"}]});
+  expect((await Promise.all(cards.slice(0,2).map(send))).map(r=>r.status)).toEqual(["queued","queued"]);
+  expect(f.sent).toBeEmpty();
+  await f.emit("agent.turn.after","sibling");expect(f.sent).toBeEmpty();
+  f.live.set("coord",running);
+  await Promise.all([f.emit("agent.permission.after","coord"),f.emit("agent.turn.after","coord")]);
+  expect(f.sent.map(([id,body])=>[id,JSON.parse(body.split("\n")[1]).cardId])).toEqual([["coord","one"],["coord","two"]]);
+  expect((await Promise.all(cards.slice(2).map(send))).map(r=>r.status)).toEqual(["sent","sent"]);
+  expect(f.sent).toHaveLength(4);
 });

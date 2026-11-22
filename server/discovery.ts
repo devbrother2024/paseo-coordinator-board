@@ -12,6 +12,14 @@ type Entry = AgentPage["entries"][number];
 type WorkspacePage = Awaited<ReturnType<Sdk["workspaces"]["list"]>>;
 type Workspace = WorkspacePage["entries"][number];
 
+// Only foreground coordinators with native mid-turn input can accept another
+// card immediately. Other providers and ordinary workers wait for idle.
+export function canReceiveBoardInput(agent:Pick<Entry["agent"],"status"|"activeTurn"|"pendingPermissions"|"attentionReason"|"provider">, coordinator:boolean) {
+  if (agent.pendingPermissions.length || agent.attentionReason==="permission" || agent.attentionReason==="error") return false;
+  if (agent.status==="idle" && !agent.activeTurn) return true;
+  return coordinator && agent.status==="running" && !!agent.activeTurn && (agent.provider==="claude" || agent.provider==="codex");
+}
+
 export function permissionVersion(agent: Entry["agent"]) {
   const requests = agent.pendingPermissions.map(p => [p.id, p.title, p.name, p.description]);
   if (!requests.length && (agent.attentionReason !== "permission" || !agent.updatedAt)) return undefined;

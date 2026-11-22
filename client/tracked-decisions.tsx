@@ -1,9 +1,9 @@
 import { useDecisionInteraction } from "./decision-editing";
 import { DecisionReplyInput } from "./decision-reply";
 import { useRpc } from "@getpaseo/plugin/client";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
-import { resolveTrackedDecision, mentionsSecurityGate, suggestedTrackedReply, trackedAnswerText, trackedPullTarget, usesSourceCoordinator, type TrackedDecision } from "../shared/tracked-decisions";
+import { cancelQueuedReply, resolveTrackedDecision, mentionsSecurityGate, suggestedTrackedReply, trackedAnswerText, trackedPullTarget, usesSourceCoordinator, type TrackedDecision } from "../shared/tracked-decisions";
 import { Button, SessionChip, type Theme } from "./controls";
 import { HistoryMarkdown } from "./history-markdown";
 import { TrackedPullStatus } from "./pull-requests";
@@ -13,7 +13,7 @@ import { PhotoComposer, usePhotoDraft } from "./photo-composer";
 type Resolution = ReturnType<typeof resolveTrackedDecision.output.parse>["status"];
 type ResolutionMode = "send" | "save" | "review";
 type Props = {
-  item: TrackedDecision; theme: Theme; priorityLabel?: string; recipientId?:string|null; open?: () => void; children?: ReactNode; pull?: ReactNode;
+  item: TrackedDecision; theme: Theme; priorityLabel?: string; recipientId?:string|null; openOwner?:()=>void; open?: () => void; children?: ReactNode; pull?: ReactNode;
   renderClarification?: (onDraftChange:(active:boolean) => void) => ReactNode;
   onResolved: (result: Resolution, mode?: ResolutionMode, answer?: string) => Promise<void> | void;
 };
@@ -23,6 +23,7 @@ const kinds = {
 } as const;
 const messages = {
   sent: ["답을 전송하고 기록을 닫았습니다.", "Reply sent and record closed."],
+  queued: ["자동 전송 대기 중", "Queued for automatic delivery"],
   busy: ["받는 세션이 작업 중이거나 권한 확인을 기다립니다. 대기 상태가 되면 보낼 수 있습니다.", "The recipient is busy or waiting for permission. Send when it is idle."],
   unconfirmed: ["전송 결과를 아직 확인할 수 없습니다. 같은 답으로 다시 누르면 수신 내역을 확인합니다.", "Delivery is unconfirmed. Retry the same answer to check the recipient’s history."],
   closed: ["결정 기록을 닫았습니다.", "Decision record closed."],
@@ -45,9 +46,11 @@ export function TrackedDecisionCard(props: Props) {
   return <DecisionRecord key={JSON.stringify([props.item.key, props.item.fingerprint])} {...props} />;
 }
 
-function DecisionRecord({ item, theme, open, recipientId, onResolved, children, pull, renderClarification, priorityLabel }: Props) {
+function DecisionRecord({ item, theme, open, openOwner, recipientId, onResolved, children, pull, renderClarification, priorityLabel }: Props) {
   const { t } = useBoardLanguage();
   const resolve = useRpc(resolveTrackedDecision);
+  const cancel = useRpc(cancelQueuedReply);
+  const queue = item.queuedReply;
   const [expanded, setExpanded] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [confirmedOwner, setConfirmedOwner] = useState(item.sourceCoordinatorId);
@@ -56,6 +59,9 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
   const [typed, setTyped] = useState<Record<number, string | undefined>>({});
   const [selected, setSelected] = useState<Record<number, number[]>>({});
   const [result, setResult] = useState<Resolution | null>(null);
+  useEffect(()=>{
+    if (queue && result==="queued") setResult(null);
+  },[queue,result]);
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [hasQuestionDraft, setHasQuestionDraft] = useState(false);
@@ -106,7 +112,7 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
   // A suggestion is visible before the person edits. Checking a record sends no reply.
   const hasDraft = hasQuestionDraft || hasPhotos || !!editedReply?.trim() || questionText.some(value => !!value.trim());
   const answerDisabled = busy || attachments.blocked || !hasAnswer || outstanding || tooLong;
-  const inputFocus = useDecisionInteraction(!isClosed && !needsRefresh &&
+  const inputFocus = useDecisionInteraction(!queue && !isClosed && !needsRefresh &&
     (hasDraft || editedReply !== null || Object.values(typed).some(value => value !== undefined) ||
       attachments.blocked || busy || confirming || Object.values(skipped).some(Boolean)));
   const checkLabel = t("확인했어요", "I checked this");
@@ -132,11 +138,21 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
     catch { setRefreshFailed(true); }
     finally { pending.current = false; setBusy(false); }
   }
+  async function cancelWaiting() {
+    if (!queue || pending.current) return;
+    pending.current=true; setBusy(true);
+    try {
+      const {canceled}=await cancel({source:item.source,id:item.id,projectId:item.projectId,fingerprint:item.fingerprint,messageId:queue.messageId});
+      setResult(canceled ? null : "changed");
+      await onResolved(canceled ? "queued" : "changed");
+    } catch { setRefreshFailed(true); }
+    finally { pending.current=false; setBusy(false); }
+  }
   async function acknowledge(mode: ResolutionMode) {
     const send = mode === "send";
     if (send && (!recipientId || changedOwner)) return;
     const text = mode === "review" ? "" : answer;
-    if (pending.current || attachments.blocksSubmit() || isClosed || needsRefresh || outstanding || (mode !== "review" && tooLong)) return;
+    if (queue || pending.current || attachments.blocksSubmit() || isClosed || needsRefresh || outstanding || (mode !== "review" && tooLong)) return;
     if (mode === "review" ? hasDraft || attachments.latest.current.length > 0 || item.matchedSessionId : !text && !hasPhotos) return;
     pending.current = true; setBusy(true);
     let status: Resolution;
@@ -157,7 +173,8 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
   return <View style={{ gap: 7 }}>
     <View style={{ ...wrap, alignItems: "center" }}>
       <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[source || t("보드 공통", "Board-wide"), t(words[0], words[1]), where, item.owner, priorityLabel].filter(Boolean).join(" · ")}</Text>
-      {open && <SessionChip theme={theme} label={t("연결 세션", "Linked session")} accessibilityLabel={named(t("연결된 세션 열기", "Open linked session")).accessibilityLabel} onPress={open} />}
+      {openOwner && <SessionChip theme={theme} label={t("운영 코디네이터","Operating coordinator")} accessibilityLabel={named(t("운영 코디네이터 세션 열기","Open operating coordinator session")).accessibilityLabel} onPress={openOwner} />}
+      {open && <SessionChip theme={theme} label={openOwner ? t("원래 작업 세션","Source work session") : t("연결 세션", "Linked session")} accessibilityLabel={named(openOwner ? t("원래 작업 세션 열기", "Open source work session") : t("연결된 세션 열기", "Open linked session")).accessibilityLabel} onPress={open} />}
     </View>
     <HistoryMarkdown theme={theme} source={isMerge ? t("PR 병합", "PR merge") : item.title} heading />
     {!!headline && headline !== item.title && <HistoryMarkdown theme={theme} source={headline} />}
@@ -166,7 +183,16 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
       : <Text selectable style={{color:c.foregroundMuted}}>{t("PR 링크와 병합 상태 미확인", "Pull request link and merge status unavailable")}</Text>))}
     {children}
     {!isMerge && <Lines theme={theme} title={t("추천", "Recommendation")} lines={item.recommend.filter(line => line !== headline && line !== item.howToAnswer)} />}
-    {!isClosed && !needsRefresh && <View style={{ gap: 8 }}>
+    {queue && <View style={{gap:5, padding:10, borderRadius:7, backgroundColor:c.surface0}}>
+      <Text accessibilityLiveRegion="polite" style={{color:queue.stopped ? c.statusWarning : c.foreground,fontWeight:"600"}}>
+        {queue.stopped ? t("자동 전송 중단 · 카드와 수신 세션을 확인해 주세요.", "Delivery paused. Check the card and its recipient.")
+          : t("전송 대기 · 세션이 준비되면 자동으로 보냅니다.", "Queued · sends automatically when the session is ready.")}
+      </Text>
+      {!!queue.answer && <Text selectable style={{color:c.foreground}}>{queue.answer}</Text>}
+      {!!queue.imageCount && <Text style={{color:c.foregroundMuted}}>{t("첨부 사진 "+queue.imageCount+"장","Attached photos · "+queue.imageCount)}</Text>}
+      <View style={wrap}><Button theme={theme} {...named(t("전송 대기 취소","Cancel queued reply"))} disabled={busy} onPress={()=>void cancelWaiting()} /></View>
+    </View>}
+    {!queue && !isClosed && !needsRefresh && <View style={{ gap: 8 }}>
       {isMerge && !!item.questions.length && <Text accessibilityRole="header" style={{color:c.foreground, borderTopWidth:1, borderTopColor:c.border, paddingTop:10, fontSize:16, fontWeight:"600"}}>{followupTitle}</Text>}
       {item.questions.map((question, index) => <View key={index} style={{ gap: 6 }}>
         <HistoryMarkdown theme={theme} source={question.text} heading />
@@ -209,7 +235,7 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
       </>}
       {tooLong && <Text style={{ color: c.statusWarning }}>{t("답을 4,000자 이내로 줄여 주세요.", "Shorten the answer to 4,000 characters.")}</Text>}
       <View style={{ gap: 6 }}>
-        {owned && item.sourceCoordinatorId && <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>
+        {owned && !openOwner && item.sourceCoordinatorId && <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>
           {t("원장 소유 세션", "Ledger owner session")} · {item.sourceCoordinatorId}
         </Text>}
         {!recipientId && !item.matchedSessionId && <Text style={{color:c.foregroundMuted,fontSize:12}}>
@@ -244,6 +270,9 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
       <Text style={{ color: c.foregroundMuted, textDecorationLine: "underline", fontSize: 12 }}>{expanded ? t("근거·이력 접기", "Hide evidence and history") : t("근거·이력 보기", "Evidence and history")}</Text>
     </Pressable>
     {expanded && <View style={{ gap: 8, padding: 8, borderRadius: 7, backgroundColor: c.surface0 }}>
+      {openOwner && item.sourceCoordinatorId && <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>
+        {t("운영 코디네이터 세션 ID","Operating coordinator session ID")} · {item.sourceCoordinatorId}
+      </Text>}
       {!!item.since && <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>
         {t("기록 시각", "Recorded at")} · {item.since}
       </Text>}
@@ -264,14 +293,14 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
         </View>)}
       </View>}
       <Lines theme={theme} title={t("이전 답변", "Previous replies")} lines={item.replyHistory.map(entry => [entry.at, entry.text].filter(Boolean).join(" · "))} />
-      {!isClosed && !needsRefresh && !humanCheck && !item.matchedSessionId && !hasDraft && !outstanding && <View style={wrap}>
+      {!queue && !isClosed && !needsRefresh && !humanCheck && !item.matchedSessionId && !hasDraft && !outstanding && <View style={wrap}>
         {confirming && <Text style={{ color: c.foregroundMuted }}>{t("답변 전송 없이 이 보드 기록을 닫습니다.", "Close this board record without sending a reply.")}</Text>}
         <Button theme={theme} {...named(confirming ? t("기록 닫기 확정", "Confirm closing record") : t("기록 닫기", "Close record"))}
           disabled={busy || attachments.blocked} onPress={() => confirming ? void acknowledge("review") : setConfirming(true)} />
         {confirming && <Button theme={theme} {...named(t("취소", "Cancel"))} disabled={busy} onPress={() => setConfirming(false)} />}
       </View>}
     </View>}
-    {result && <Text accessibilityLiveRegion="polite" style={{ color: isClosed ? c.statusSuccess : c.statusWarning }}>{t(messages[result][0], messages[result][1])}</Text>}
+    {result && !(result==="queued" && queue) && <Text accessibilityLiveRegion="polite" style={{ color: isClosed ? c.statusSuccess : c.statusWarning }}>{t(messages[result][0], messages[result][1])}</Text>}
     {needsRefresh && <View style={wrap}><Button theme={theme} {...named(t("결정 기록 새로 고침", "Refresh decision record"))}
       disabled={busy} onPress={() => void refreshRecord()} /></View>}
     {refreshFailed && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{t("최신 목록을 다시 불러오지 못했습니다. 보드를 새로 고쳐 주세요.", "Could not reload the list. Refresh the board.")}</Text>}

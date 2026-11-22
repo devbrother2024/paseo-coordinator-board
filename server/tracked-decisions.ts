@@ -7,14 +7,14 @@ import { sortTrackedByPriority } from "../shared/decision-priority";
 import type { SessionRow } from "../shared/contract";
 import { readReplyPhoto, replyOrigin, type ReplyEntry } from "../shared/reply-history";
 import { MAX_WORK_IMAGES, WORK_IMAGE_MIME_TYPES, type WorkImage } from "../shared/work-images";
-import { describePhotos, readLocalPhoto, saveLocalPhotos } from "./reply-photos";
+import { describePhotos, readLocalPhoto, removeLocalPhotos, saveLocalPhotos } from "./reply-photos";
 import { boardPhotoMessageId } from "../shared/session-photos";
 import { SessionPhotoStore } from "./session-photos";
 import { trackedReplyMessage, trackedReplyOrigin } from "./decision-message";
 import type { Evidence } from "./conversation";
 import type { MergeTarget, PullRequestView } from "../shared/prs";
 import {
-  resolveTrackedDecision, trackedDecisionInputSchema, trackedPullTarget, trackedKey, trackedMatches, usesSourceCoordinator,
+  cancelQueuedReply, resolveTrackedDecision, trackedDecisionInputSchema, trackedPullTarget, trackedKey, trackedMatches, usesSourceCoordinator,
   type RoutedTrackedDecision, type TrackedDecisionInput, type TrackedDecisionView, type TrackedResolution,
 } from "../shared/tracked-decisions";
 
@@ -24,6 +24,8 @@ const sourceAuthority = z.object({sourceCoordinatorId:z.string().min(1).max(256)
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const photoReference = z.object({mimeType:z.enum(WORK_IMAGE_MIME_TYPES), digest:sha256});
 const receipt = z.object({
+  queue:z.object({source:z.string(),projectId:z.string().nullable(),id:z.string(),owner:z.string().nullish(),
+    questionIndexes:z.array(z.number().int().nonnegative()).max(128).optional(),stopped:z.boolean().default(false)}).optional(),
   legacySession:replyOrigin.pick({sessionId:true,sessionHost:true,sessionProjectId:true}).optional(),
   origin:replyOrigin.optional(), messageHash:sha256.optional(), photos:z.array(photoReference).max(MAX_WORK_IMAGES).optional(),
   reviewedBy:z.string().optional(), reviewReason:z.string().optional(), title:z.string().optional(), coordinator:z.boolean().optional(), response:z.string().optional(),key:z.string(),fingerprint:z.string().regex(/^[a-f0-9]{64}$/),at:z.string().datetime(),answer:z.string().max(4000).optional(), recipientId:z.string().optional(), messageId:z.string().uuid().optional(), pending:z.boolean().optional()});
@@ -32,7 +34,7 @@ type SourceStatus = TrackedDecisionView["status"];
 type InputRow = {key:string;fingerprint:string;item:RoutedTrackedDecision};
 type Receipt = z.output<typeof receipt>;
 type PendingDelivery = { ready:boolean; send:(answer:string,messageId:string,images?:WorkImage[])=>Promise<void>; accepted:(answer:string,messageId:string)=>Promise<boolean>; stillCurrent:()=>boolean };
-type Attempt = z.output<typeof resolveTrackedDecision.output>;
+type Attempt = z.output<typeof resolveTrackedDecision.output> & {queueId?:string};
 type AdditionalSources = unknown[] | {items:unknown[];partial:boolean};
 type ReadSources = (selected:Set<string>)=>AdditionalSources;
 
@@ -71,6 +73,7 @@ export class TrackedDecisionStore {
   private readonly sessionPhotos:SessionPhotoStore;
   private readonly resolutionPath:string;
   private readonly photoDirectory:string;
+  private readonly draining = new Map<string,Promise<boolean>>();
   constructor(private readonly path:string, private readonly readSources?:ReadSources) {
     const file=parse(path);
     this.sessionPhotos=new SessionPhotoStore(join(file.dir,"session-photos"));
@@ -143,7 +146,7 @@ export class TrackedDecisionStore {
     const resolved = this.recorded();
     if (!resolved) return [];
     const pending = [...rows.values()]
-      .filter(({key, fingerprint}) => !resolved.has(receiptKey(key, fingerprint)))
+      .filter(({key, fingerprint}) => { const record=resolved.get(receiptKey(key,fingerprint)); return !record || !!record.queue; })
       .map(row => row.item);
     return sortTrackedByPriority(pending).slice(0, 3).map(item => item.title);
   }
@@ -155,6 +158,7 @@ export class TrackedDecisionStore {
     const history: ReplyEntry[] = [];
     let updated = false;
     for (const [version, receipt] of resolved) {
+      if (receipt.queue && !receipt.queue.stopped) continue;
       let reference: unknown;
       try { reference = JSON.parse(receipt.key); } catch { continue; }
       if (!Array.isArray(reference) || reference.length !== 3) continue;
@@ -164,7 +168,12 @@ export class TrackedDecisionStore {
       const original = source?.fingerprint === receipt.fingerprint ? source.item : undefined;
       const title = receipt.title ?? original?.title ?? id;
       const coordinator = receipt.coordinator ?? (original ? original.where === "manager" || original.where === "human" : undefined);
-      const response = receipt.recipientId && receipt.messageId && !receipt.pending
+      if (receipt.pending && receipt.recipientId && receipt.messageId && receipt.messageHash &&
+          evidence.get(receipt.recipientId)?.boardMessageHashes?.get(receipt.messageId)===receipt.messageHash) {
+        receipt.pending=false;
+        updated=true;
+      }
+      const response = receipt.recipientId && receipt.messageId && !receipt.pending && !receipt.queue
         ? evidence.get(receipt.recipientId)?.replies?.get(receipt.messageId) : undefined;
       // Older receipts can recover a source from the exact recorded version, even after a restart.
       // Their selected question indexes were not stored.
@@ -183,7 +192,7 @@ export class TrackedDecisionStore {
         recipientId:receipt.recipientId, messageId:receipt.messageId, response:receipt.response,
         ...(receipt.photos?.length ? {imageCount:receipt.photos.length, localPhotos:!receipt.recipientId} : {}),
         ...(receipt.reviewedBy ? {reviewedBy:receipt.reviewedBy, reviewReason:receipt.reviewReason} : {}),
-        status:receipt.pending ? "pending" : receipt.recipientId ? "sent" : (receipt.answer || receipt.photos?.length) ? "recorded" : "closed"});
+        status:receipt.queue ? "unsent" : receipt.pending ? "pending" : receipt.recipientId ? "sent" : (receipt.answer || receipt.photos?.length) ? "recorded" : "closed"});
     }
     if (updated) this.save(resolved);
     const scopedSessions=sessions.filter(s=>selected.has(s.projectId));
@@ -191,8 +200,11 @@ export class TrackedDecisionStore {
     const items=[];
     for(const {key,fingerprint,item} of rows.values()){
       const previous=resolved.get(receiptKey(key,fingerprint));
-      if(previous && !previous.pending)continue;
-      items.push({...item,key,fingerprint,...trackedMatches(item,scopedSessions,scopedPrs)});
+      if(previous && !previous.pending && !previous.queue)continue;
+      const queuedReply=previous?.queue && previous.messageId && previous.recipientId
+        ? {messageId:previous.messageId,recipientId:previous.recipientId,answer:previous.answer,
+          imageCount:previous.photos?.length ?? 0,stopped:previous.queue.stopped} : undefined;
+      items.push({...item,key,fingerprint,...(queuedReply ? {queuedReply} : {}),...trackedMatches(item,scopedSessions,scopedPrs)});
     }
     return {items,status,...(history.length ? {history} : {})};
   }
@@ -222,7 +234,7 @@ export class TrackedDecisionStore {
     if(!allowed(getScope()))return {status:"out-of-scope"};
     const version=receiptKey(row.key,row.fingerprint);
     const previous=records.get(version);
-    if(previous?.pending || input.recipientId)return {status:"unconfirmed"};
+    if(previous?.pending || previous?.queue || input.recipientId)return {status:"unconfirmed"};
     const photos=describePhotos(input.images);
     const origin=trackedReplyOrigin(row.item,input);
     if(previous) {
@@ -251,40 +263,61 @@ export class TrackedDecisionStore {
     return true;
   }
 
-  async deliver(input:TrackedResolution, getScope:()=>Set<string>, prepare:(row:RoutedTrackedDecision)=>Promise<PendingDelivery|null>):Promise<Attempt> {
+  async deliver(input:TrackedResolution, getScope:()=>Set<string>, prepare:(row:RoutedTrackedDecision)=>Promise<PendingDelivery|null>, queuedId?:string):Promise<Attempt> {
     const selected=getScope();
     if (!selected.size || (input.projectId && !selected.has(input.projectId))) return {status:"out-of-scope"};
     const key=trackedKey(input), version=receiptKey(key,input.fingerprint);
-    const current=()=>this.load(getScope()).rows.get(key);
-    const row=current();
+    const current=()=>{
+      const scope=getScope();
+      if (!scope.size || (input.projectId && !scope.has(input.projectId))) return {};
+      const source=this.load(scope), row=source.rows.get(key);
+      return {row,unavailable:source.status==="invalid" || source.status==="unavailable" || (source.status==="partial" && !row)};
+    };
+    const {row,unavailable}=current();
+    if (unavailable) return {status:"unavailable"};
     if (!row || row.fingerprint!==input.fingerprint || !validQuestions(row.item,input) || (!input.answer?.trim() && !input.images?.length) || !input.recipientId) return {status:"changed"};
     if (usesSourceCoordinator(row.item) && row.item.sourceCoordinatorId !== input.recipientId) return {status:"changed"};
     const target=await prepare(row.item);
-    const latestRow=current();
+    const currentSource=current();
+    if (currentSource.unavailable) return {status:"unavailable"};
+    const latestRow=currentSource.row;
     if (!target || !target.stillCurrent() || latestRow?.fingerprint!==input.fingerprint ||
         latestRow.item.sourceCoordinatorId !== row.item.sourceCoordinatorId) return {status:"changed"};
     const records=this.recorded();
     if (!records) return {status:"unavailable"};
     const previous=records.get(version);
+    if (queuedId && (!previous?.queue || previous.queue.stopped || previous.messageId!==queuedId)) return {status:"changed"};
+    if (previous?.queue && previous.queue.owner!==row.item.sourceCoordinatorId) return {status:"changed"};
     const photos=describePhotos(input.images);
     const text=trackedReplyMessage(row.item,input);
     const messageHash=createHash("sha256").update(text).digest("hex");
     if (previous && (previous.recipientId!==input.recipientId || (previous.answer ?? "")!==(input.answer ?? "") ||
         JSON.stringify(previous.photos ?? [])!==JSON.stringify(photos) || (previous.messageHash && previous.messageHash!==messageHash))) return {status:"changed"};
-    if (previous && !previous.pending) return {status:"sent"};
+    if (previous && !previous.pending && !previous.queue) return {status:"sent"};
+    if (previous?.queue && !queuedId) return {status:previous.queue.stopped ? "changed" : "queued",queueId:previous.messageId};
     const messageId=previous?.messageId ?? (photos.length ? boardPhotoMessageId(randomUUID()) : randomUUID());
     const receipt:Receipt=previous ?? {origin:trackedReplyOrigin(row.item,input),messageHash,...(photos.length ? {photos} : {}),title:row.item.title,coordinator:row.item.where==="human" || row.item.where==="manager",key,fingerprint:input.fingerprint,at:new Date().toISOString(),answer:input.answer,recipientId:input.recipientId,messageId,pending:true};
     try {
-      if (previous) {
+      if (previous && !previous.queue) {
         if (!(await target.accepted(previous.messageHash ? text : (input.answer ?? ""),messageId))) return {status:"unconfirmed"};
       } else {
-        if (!target.ready) return {status:"busy"};
+        if (!target.ready) {
+          if (previous?.queue) return {status:"queued"};
+          const {source,projectId,id,questionIndexes}=input;
+          records.set(version,{...receipt,pending:false,queue:{source,projectId,id,questionIndexes,owner:row.item.sourceCoordinatorId,stopped:false}});
+          const saved=saveLocalPhotos(this.photoDirectory,messageId,input.images ?? [],()=>this.save(records));
+          return saved ? {status:"queued",queueId:messageId} : {status:"unavailable"};
+        }
         if (input.images?.length) {
           try { this.sessionPhotos.save(input.recipientId, messageId, input.images); }
           catch { return {status:"unavailable"}; }
         }
+        if (receipt.queue) receipt.at=new Date().toISOString();
+        delete receipt.queue;
+        receipt.pending=true;
         records.set(version,receipt);
         if (!this.save(records)) return {status:"unavailable"};
+        if (queuedId) removeLocalPhotos(this.photoDirectory,messageId,photos.length);
         await target.send(text,messageId,input.images);
       }
     } catch { return {status:"unconfirmed"}; }
@@ -295,15 +328,116 @@ export class TrackedDecisionStore {
     return {status:this.save(latest) ? "sent" : "unconfirmed"};
   }
 
+  cancelQueued(input:z.output<typeof cancelQueuedReply.input>, scope:Set<string>) {
+    if (!scope.size || (input.projectId && !scope.has(input.projectId))) return false;
+    const version=receiptKey(trackedKey(input),input.fingerprint);
+    const records=this.recorded(), previous=records?.get(version);
+    if (!records || !previous?.queue || previous.messageId!==input.messageId) return false;
+    records.delete(version);
+    if (!this.save(records)) return false;
+    removeLocalPhotos(this.photoDirectory,input.messageId,previous.photos?.length ?? 0);
+    return true;
+  }
+
+  hasWaitingReplies(id?:string) {
+    const records=this.recorded();
+    return !!records && [...records.values()].some(record=>record.queue && !record.queue.stopped && (!id || record.recipientId===id));
+  }
+
+  async resumeQueued(getScope:()=>Set<string>,prepare:(row:RoutedTrackedDecision,target:string)=>Promise<PendingDelivery|null>,recipientId?:string) {
+    const records=this.recorded();
+    if (!records) return false;
+    const waiting=new Map<string,[string,Receipt][]>();
+    for (const entry of records) {
+      const {queue,recipientId:id}=entry[1];
+      if (!queue || queue.stopped || !id || (recipientId && recipientId!==id)) continue;
+      const group=waiting.get(id) ?? [];
+      group.push(entry);
+      waiting.set(id,group);
+    }
+    const results=await Promise.all([...waiting].map(async ([id,entries])=>{
+      const active=this.draining.get(id);
+      if (active && !recipientId) return active;
+      // A permission/turn hook may arrive while the previous check is still
+      // observing a busy session. Run the newer check after that observation.
+      const run=Promise.resolve(active).then(async ()=>{
+        let changed=false;
+        for (const [version,record] of entries) {
+          const outcome=await this.resumeOne(getScope,prepare,version,record,id);
+          if (outcome==="queued") break;
+          if (outcome==="sent" || outcome==="unconfirmed" || outcome==="stopped") changed=true;
+        }
+        return changed;
+      }).catch(()=>false);
+      this.draining.set(id,run);
+      try { return await run; }
+      finally { if (this.draining.get(id)===run) this.draining.delete(id); }
+    }));
+    return results.some(Boolean);
+  }
+
+  private async resumeOne(getScope:()=>Set<string>,prepare:(row:RoutedTrackedDecision,id:string)=>Promise<PendingDelivery|null>,
+    version:string,record:Receipt,id:string):Promise<Attempt["status"]|"stopped"> {
+    const queue=record.queue!, messageId=record.messageId!;
+    const scope=getScope();
+    const visible=scope.size>0 && (!queue.projectId || scope.has(queue.projectId));
+    const source=visible ? this.load(scope) : undefined;
+    if (source?.status==="unavailable" || source?.status==="invalid" || (source?.status==="partial" && !source.rows.has(record.key))) return "unavailable";
+    const row=source?.rows.get(record.key);
+    if (row && row.fingerprint===record.fingerprint && row.item.sourceCoordinatorId===queue.owner) {
+      const target=await prepare(row.item,id);
+      if (target && target.stillCurrent()) {
+        if (!target.ready) return "queued";
+        const images:WorkImage[]=[];
+        for (const [index,photo] of (record.photos ?? []).entries()) {
+          const image=readLocalPhoto(this.photoDirectory,messageId,index,photo);
+          if (!image) break;
+          images.push(image);
+        }
+        if (images.length===(record.photos?.length ?? 0)) {
+          const input={source:queue.source,projectId:queue.projectId,id:queue.id,fingerprint:record.fingerprint,
+            recipientId:id,answer:record.answer,questionIndexes:queue.questionIndexes,...(images.length ? {images} : {})};
+          const result=await this.deliver(input,getScope,async()=>target,messageId);
+          if (result.status!=="changed" && result.status!=="out-of-scope") return result.status;
+        }
+      }
+    }
+    const latest=this.recorded(), current=latest?.get(version);
+    if (latest && current?.queue && current.messageId===messageId) {
+      current.queue.stopped=true;
+      if(this.save(latest)) {
+        removeLocalPhotos(this.photoDirectory,messageId,record.photos?.length ?? 0);
+        return "stopped";
+      }
+    }
+    return "unavailable";
+  }
+
   register(server:PluginServerContext,getScope:()=>Set<string>,onChange?:()=>void,
     prepare?: (row:RoutedTrackedDecision, target:string, ctx:import("@getpaseo/plugin/server").PluginHandlerContext)=>Promise<PendingDelivery|null>) {
+    server.handle(cancelQueuedReply,input=>{
+      const canceled=this.cancelQueued(input,getScope());
+      if (canceled) onChange?.();
+      return {canceled};
+    });
     server.handle(readReplyPhoto,({key,index})=>({image:this.readPhoto(key,index,getScope())}));
     server.handle(resolveTrackedDecision,async (input,ctx)=>{
       const result=input.recipientId && prepare
         ? await this.deliver(input,getScope,row=>prepare(row,input.recipientId!,ctx))
         : this.resolve(input,getScope);
-      if(result.status==="closed" || result.status==="sent")onChange?.();
-      return result;
+      // Close the window where the ready event fired after the live check but
+      // before the queue was persisted. Re-read the receipt using its same ID.
+      if (result.status==="queued" && prepare && input.recipientId) {
+        await this.resumeQueued(getScope,(row,target)=>prepare(row,target,ctx),input.recipientId);
+        const receipt=this.recorded()?.get(receiptKey(trackedKey(input),input.fingerprint));
+        if (!receipt || receipt.messageId!==result.queueId || receipt.queue?.stopped) result.status="changed";
+        else if (!receipt.queue) result.status=receipt.pending ? "unconfirmed" : "sent";
+      }
+      if(result.status==="closed" || result.status==="sent" || result.status==="queued")onChange?.();
+      return {status:result.status};
     });
+    return async (ctx:import("@getpaseo/plugin/server").PluginHandlerContext,id?:string)=>{
+      if (prepare && await this.resumeQueued(getScope,(row,target)=>prepare(row,target,ctx),id)) onChange?.();
+    };
   }
 }

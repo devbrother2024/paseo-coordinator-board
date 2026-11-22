@@ -53,6 +53,12 @@ export function saveLocalPhotos(directory:string, receiptKey:string, images: Wor
   return false;
 }
 
+export function removeLocalPhotos(directory:string, key:string, count:number) {
+  for (let index=0; index<count; index++) {
+    try { rmSync(photoFile(directory,key,index),{force:true}); } catch { /* Best-effort cleanup after the receipt commit. */ }
+  }
+}
+
 export function readLocalPhoto(directory:string, receiptKey:string, index:number, ref:PhotoReference): WorkImage|null {
   let fd:number|undefined;
   try {

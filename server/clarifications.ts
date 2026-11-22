@@ -16,7 +16,7 @@ import type { PreferenceStore, Preferences } from "./preferences";
 import type { SessionRow, Note } from "../shared/contract";
 import type { Evidence } from "./conversation";
 import { isCurrentMembership, managedSessions } from "./session-links";
-import { discoverSessions, permissionVersion } from "./discovery";
+import { canReceiveBoardInput, discoverSessions, permissionVersion } from "./discovery";
 import { isManagedCoordinator } from "./preferences";
 
 type Sdk = PluginHandlerContext["paseo"];
@@ -217,11 +217,7 @@ export class ClarificationSender {
         !destination ||
         destination.id !== input.recipientId ||
         destination.archivedAt ||
-        destination.internal ||
-        destination.activeTurn ||
-        destination.status !== "idle" ||
-        destination.pendingPermissions.length ||
-        destination.attentionReason === "permission"
+        destination.internal || destination.status==="closed" || destination.status==="error"
       )
         throw Error("질문을 받을 수 있는 대기 중인 세션을 확인해 주세요.");
       const view = await this.getView(sdk, input.card);
@@ -238,10 +234,7 @@ export class ClarificationSender {
         if (!live || live.id !== sessionId || live.archivedAt || live.internal) throw Error(changed);
         if (
           sessionId === input.recipientId &&
-          (live.status !== "idle" ||
-            live.activeTurn ||
-            live.pendingPermissions.length ||
-            live.attentionReason === "permission")
+          !canReceiveBoardInput(live,target.recipientId===view.coordinator || target.recipientId===target.sourceCoordinatorId)
         )
           throw Error(changed);
         if (

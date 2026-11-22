@@ -11,6 +11,7 @@ export type Evidence = {
   id: string; turns: Turn[];
   replies?: Map<string, string>;
   lastInputIds?: string[];
+  boardMessageHashes?: Map<string,string>;
   clarificationMessages?: Map<string, ClarificationObservation>;
   laterInput?: boolean;
   deliveries?: { id: string; sender: string; bodyHash: string }[];
@@ -26,6 +27,7 @@ export function excerpt(page: Page): Evidence {
   const laterInputs: string[] = [];
   const deliveries: NonNullable<Evidence["deliveries"]> = [];
   const replies = new Map<string, string>();
+  const boardMessageHashes=new Map<string,string>();
   let messageIds: string[] = [];
   let clarification: ClarificationObservation | undefined;
   const clarificationMessages = new Map<string, ClarificationObservation>();
@@ -45,6 +47,10 @@ export function excerpt(page: Page): Evidence {
     const text = item.text.trim();
     if (item.type === "user_message") {
       messageIds = [item.messageId, item.clientMessageId].filter((id): id is string => !!id);
+      if (messageIds.length && text.startsWith("[Coordinator Board · ")) {
+        const hash=createHash("sha256").update(item.text).digest("hex");
+        for (const id of messageIds) boardMessageHashes.set(id,hash);
+      }
       clarification = text.startsWith("[Coordinator Board · 추가 질문]")
         ? { bodyHash: createHash("sha256").update(item.text).digest("hex") } : undefined;
       if (clarification) {
@@ -63,6 +69,7 @@ export function excerpt(page: Page): Evidence {
   return { id: digest.digest("hex").slice(0, 24), turns: turns.slice(-4),
     ...(clarification && messageIds.length ? { lastInputIds: messageIds } : {}),
     ...(clarificationMessages.size ? { clarificationMessages } : {}),
+    ...(boardMessageHashes.size ? {boardMessageHashes} : {}),
     ...(replies.size ? { replies } : {}), ...(laterInputs.length ? {laterInput:true} : {}), ...(deliveries.length ? {deliveries} : {}) };
 }
 

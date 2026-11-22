@@ -274,3 +274,20 @@ test("pending and sent photo replies from before the preview upgrade retain the 
   expect(f.sent).toHaveLength(1);
   expect(f.prefs.read().decisionReceipts[wire]).toBeUndefined();
 });
+
+test("active coordinators can take independent board inputs; pending permissions and running workers still wait",async()=>{
+  const {canReceiveBoardInput}=await import("../server/discovery");
+  const active={status:"running",activeTurn:{id:"turn"},pendingPermissions:[],provider:"claude"};
+  for (const provider of ["claude","codex"]) {
+    expect(canReceiveBoardInput({...active,provider},true)).toBe(true);
+    expect(canReceiveBoardInput({...active,provider},false)).toBe(false);
+    expect(canReceiveBoardInput({...active,provider,pendingPermissions:[{id:"permission"}]},true)).toBe(false);
+    expect(canReceiveBoardInput({...active,provider,attentionReason:"permission"},true)).toBe(false);
+  }
+  expect(canReceiveBoardInput({...active,provider:"custom"},true)).toBe(false);
+  expect(canReceiveBoardInput({...active,status:"closed"},true)).toBe(false);
+  const f=await fixture();
+  Object.assign(f.actors.coordinator,active);
+  await f.send({action:"coordinate",recipientId:"coordinator",text:"이 질문을 확인해 주세요."});
+  expect(f.sent[0].id).toBe("coordinator");
+});

@@ -11,7 +11,7 @@ import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { boardDecisionCount, boardScope, boardSnapshot, reportingKey, saveNote, setReporting } from "./shared/contract";
-import { discoverSessions } from "./server/discovery";
+import { canReceiveBoardInput, discoverSessions } from "./server/discovery";
 import { attachReportTool } from "./server/reporting";
 import { ConversationReader, excerpt } from "./server/conversation";
 import { isManagedCoordinator, setCoordinator, PreferenceStore } from "./server/preferences";
@@ -94,6 +94,9 @@ export default function contribute(server: PluginServerContext) {
     if (coordinatorRow && coordinatorRow.id === latest.coordinator) targets.set(coordinatorRow.id, coordinatorRow);
     for (const id of evidence.keys()) if (!targets.has(id)) evidence.delete(id);
     const {history = [], ...trackedDecisions} = tracked.read(selected, visible, pullRequests, evidence);
+    if (tracked.hasWaitingReplies()) {
+      void resumeReplies({paseo}).catch(()=>console.warn("Could not check waiting board replies."));
+    }
     const activity: ReplyEntry[] = [...history];
     for (const [key, receipt] of Object.entries(latest.pullMergeHistory)) {
       if (selected.has(receipt.projectId)) activity.push({...receipt, key, status:"recorded"});
@@ -193,11 +196,23 @@ export default function contribute(server: PluginServerContext) {
   });
   prs.register(server, invalidateCount,mergeNotifications);
   const onRecipientAvailable = async (event: {agent?: {id:string}}, context: PluginHandlerContext) => {
-    if (event.agent?.id) await mergeNotifications.resume(context.paseo,event.agent.id);
+    if (!event.agent?.id) return;
+    const id=event.agent.id;
+    if (tracked.hasWaitingReplies(id)) {
+      await resumeReplies(context,id);
+      // The completion hook can precede the daemon's idle projection.
+      if (tracked.hasWaitingReplies(id)) {
+        await new Promise(resolve=>setTimeout(resolve,250));
+        await resumeReplies(context,id);
+      }
+    }
+    await mergeNotifications.resume(context.paseo,event.agent.id);
   };
   const removeMergeTurn = server.addHook("agent.turn.after",onRecipientAvailable);
+  const removeReplyClose = server.addHook("agent.close.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });
+  const removeReplyArchive = server.addHook("agent.archive.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });
   const removeMergePermission = server.addHook("agent.permission.after",onRecipientAvailable);
-  tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, async (item,targetId,{paseo}) => {
+  const resumeReplies = tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, async (item,targetId,{paseo}) => {
     let rows = await discoverSessions(paseo);
     const owned = usesSourceCoordinator(item);
     const current = () => {
@@ -210,9 +225,9 @@ export default function contribute(server: PluginServerContext) {
     };
     if (!current()) return null;
     const handle=paseo.agents.ref(targetId);
-    const agent=(await handle.refresh())?.agent;
     if (owned) rows = await discoverSessions(paseo);
-    if (!current() || !agent || agent.id!==targetId || agent.internal || agent.archivedAt) return null;
+    const agent=(await handle.refresh())?.agent;
+    if (!current() || !agent || agent.id!==targetId || agent.internal || agent.archivedAt || agent.status==="closed" || agent.status==="error") return null;
     return {
       stillCurrent:current,
       send:async (answer,messageId,images)=>{
@@ -223,7 +238,7 @@ export default function contribute(server: PluginServerContext) {
         return !page.error && !page.gap && !page.staleCursor && page.entries.some(({item:m})=>m.type==="user_message" &&
           (m.messageId===messageId || m.clientMessageId===messageId) && m.text===answer);
       },
-      ready:agent.status==="idle" && !agent.activeTurn && !agent.pendingPermissions.length && agent.attentionReason!=="permission",
+      ready:canReceiveBoardInput(agent,owned || targetId===prefs.read().coordinator),
     };
   });
   server.handle(boardSnapshot, (input, { paseo }) => reads.read(() => buildSnapshot(paseo), input.fresh));
@@ -278,5 +293,5 @@ export default function contribute(server: PluginServerContext) {
   });
   const removeReport = attachReportTool(server, notes);
   const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount)]);
-  return () => { removeMergeTurn(); removeMergePermission(); removeCoordinator(); removeReport(); };
+  return () => { removeMergeTurn(); removeMergePermission(); removeReplyClose(); removeReplyArchive(); removeCoordinator(); removeReport(); };
 }

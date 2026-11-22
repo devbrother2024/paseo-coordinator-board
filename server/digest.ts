@@ -1,3 +1,4 @@
+import { canReceiveBoardInput } from "./discovery";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { createHash } from "node:crypto";
 import { photoDigest } from "./reply-photos";
@@ -28,6 +29,7 @@ export async function sendCoordinatorRequest(
   options: {
     images?: WorkImage[];
     reserveMessage?: (originalId: string) => string;
+    allowActiveCoordinator?: boolean;
     beforeSend?: (messageId: string) => void;
   } = {},
 ) {
@@ -38,9 +40,8 @@ export async function sendCoordinatorRequest(
   if (
     !snapshot ||
     snapshot.archivedAt ||
-    snapshot.status !== "idle" ||
-    snapshot.activeTurn ||
-    snapshot.pendingPermissions.length
+    snapshot.internal ||
+    !canReceiveBoardInput(snapshot,options.allowActiveCoordinator===true)
   ) {
     throw new Error("코디네이터가 대기 상태일 때 요청할 수 있습니다. 세션에서 현재 작업을 확인하세요.");
   }

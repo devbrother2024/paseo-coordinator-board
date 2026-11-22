@@ -22,7 +22,7 @@ function localState(row: Local): State {
 }
 
 // Two selected checkouts can have different Paseo project IDs for the same repository.
-function matchesProject(id:string, expected:string | null, repos:ReadonlyMap<string,string>) {
+export function matchesProject(id:string, expected:string | null, repos:ReadonlyMap<string,string>) {
   return expected !== null && (id === expected || (!!repos.get(expected) && repos.get(expected) === repos.get(id)));
 }
 

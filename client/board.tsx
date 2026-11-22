@@ -1,5 +1,5 @@
 import type { BoardReadiness } from "../shared/readiness";
-import { historySessionLinks, type HistoryLinks } from "./history-sessions";
+import { matchesProject, historySessionLinks, type HistoryLinks } from "./history-sessions";
 import { ReplyHistory } from "./reply-history";
 import { TrackedDecisionCard } from "./tracked-decisions";
 import { mentionsSecurityGate, trackedCoverage, trackedRecipient, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
@@ -177,7 +177,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       const peer = peers.find(g => g.host.serverId === item.sessionHost && g.rows.some(s => s.sessionId === id && s.projectId === item.projectId));
       return peer && onOpenHostSession ? () => onOpenHostSession(peer.host.serverId,id) : undefined;
     }
-    const local = snapshot?.sessions.find(s => s.id === id && (s.projectId === item.projectId || s.id === item.matchedSessionId));
+    const local = snapshot?.sessions.find(s => s.id === id && (matchesProject(s.projectId,item.projectId,historyRepos) || s.id === item.matchedSessionId));
     return local && actions.onOpen ? () => actions.onOpen!(local.id) : undefined;
   }
   function renderPull(pr:PullRequestItem, projectId:string, decision=false, securityGate=false, embedded=false, rowKey?: string, scope: (string | null)[] = pr.projectIds, priority?: string) {
@@ -209,11 +209,15 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           const pr = item.kind === "merge" && item.mergeTarget && pullRequests?.items.find(pr =>
             pr.repo === item.mergeTarget?.repo && pr.number === item.mergeTarget.number &&
             (!item.projectId || pr.projectIds.includes(item.projectId)) && (pr.reason !== "ready" || item.matchedPull));
-          return <TrackedDecisionCard key={item.key} item={item} theme={theme} priorityLabel={priority}
+          const recipient = trackedRecipient(item,snapshot!.coordinator,snapshot!.sessions);
+          const owner = (item.where==="manager" || item.where==="human") && recipient;
+          const sourceId = item.matchedSessionId || item.sessionId;
+          const sameSession = owner===sourceId && (!item.sessionHost || item.sessionHost===hostId);
+          return <TrackedDecisionCard openOwner={owner && actions.onOpen ? ()=>actions.onOpen!(owner) : undefined} key={item.key} item={item} theme={theme} priorityLabel={priority}
             renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined)}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
               : pr && renderPull(pr, pr.projectIds.includes(item.projectId ?? "") ? item.projectId! : pr.projectIds[0], true, mentionsSecurityGate(item), true, rowKey, [item.projectId])}
-            recipientId={native && !item.questions.length ? undefined : trackedRecipient(item,snapshot!.coordinator,snapshot!.sessions)} open={!native ? linkedSession(item) : undefined} onResolved={(status,mode,answer)=>{
+            recipientId={native && !item.questions.length ? undefined : recipient} open={!native && !sameSession ? linkedSession(item) : undefined} onResolved={(status,mode,answer)=>{
               if (rowKey && mode && (status === "sent" || status === "closed" || status === "already-closed")) {
                 remember({ rowKey, actionKey: recordRowKey(item), projectIds: [item.projectId],
                   status: status === "closed" ? (mode === "save" ? "saved" : "reviewed") : status,

@@ -9,7 +9,7 @@ import type { Decision, DecisionInput } from "../shared/decision-actions";
 import type { Note, SessionRow } from "../shared/contract";
 import { classify, ConversationReader, lastConversationQuestion, type Evidence } from "./conversation";
 import { isCurrentMembership, managedSessions } from "./session-links";
-import { discoverSessions } from "./discovery";
+import { canReceiveBoardInput, discoverSessions } from "./discovery";
 import type { NoteStore } from "./notes";
 import { verifiedBoardFact } from "./board-facts";
 import { isManagedCoordinator, type Preferences, type PreferenceStore } from "./preferences";
@@ -148,8 +148,7 @@ export class DecisionSender {
       id, agent: (await paseo.agents.ref(id).refresh())?.agent,
     })));
     for (const { id, agent } of latest) {
-      if (!agent || agent.id !== id || agent.internal || agent.archivedAt || agent.status !== "idle" || agent.activeTurn ||
-          agent.pendingPermissions.length || agent.attentionReason === "permission") throw Error(blocked);
+      if (!agent || agent.id !== id || agent.internal || agent.archivedAt || !canReceiveBoardInput(agent,input.action==="coordinate" && id===input.recipientId && id!==input.sessionId)) throw Error(blocked);
       if (id === input.sessionId && row.activityAt !== agent.updatedAt) throw Error(changed);
     }
     const note = this.notes.visible(new Set([row.id]))[row.id];

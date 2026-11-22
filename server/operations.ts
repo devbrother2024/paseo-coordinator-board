@@ -145,6 +145,7 @@ export function createOperations(store: PreferenceStore, workspaceDir: string, f
     });
     server.handle(requestWork, (input, { paseo }) =>
       sendCoordinatorRequest(paseo, store, input.coordinator, input.requestKey, input.text, {
+        allowActiveCoordinator:true,
         images: input.images,
         reserveMessage(originalId) {
           let messageId = input.images?.length ? boardPhotoMessageId(originalId) : originalId;

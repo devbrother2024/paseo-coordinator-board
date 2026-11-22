@@ -5,7 +5,7 @@ import {mkdtempSync, readFileSync, rmSync, writeFileSync} from "node:fs";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {TrackedDecisionStore} from "../server/tracked-decisions";
-import {mentionsSecurityGate, resolveTrackedDecision, suggestedTrackedReply, trackedAnswerText, trackedPullTarget, trackedRecipient, trackedCoverage, trackedDecisionViewSchema} from "../shared/tracked-decisions";
+import {cancelQueuedReply, mentionsSecurityGate, resolveTrackedDecision, suggestedTrackedReply, trackedAnswerText, trackedPullTarget, trackedRecipient, trackedCoverage, trackedDecisionViewSchema} from "../shared/tracked-decisions";
 import type {SessionRow} from "../shared/contract";
 import type {PullRequestView} from "../shared/prs";
 import {readReplyPhoto} from "../shared/reply-history";
@@ -142,11 +142,11 @@ test("an unavailable source preserves healthy cards and never acknowledges a mis
   expect(f.close(healthy).status).toBe("unavailable");
 });
 
-test("only resolution and receipt-photo reads are exposed and failed scope checks cannot acknowledge content",async()=>{
+test("only resolution, queued cancellation and receipt-photo reads are exposed and failed scope checks cannot acknowledge content",async()=>{
   const f=fixture();f.write([row("a",{ask:["Deploy it"]})]);const item=f.read().items[0];
   const map=new Map(),calls:string[]=[];let changes=0;
   f.service.register({handle:(def,fn)=>{map.set(def.name,fn);calls.push(def.name);}},()=>f.selected,()=>changes++);
-  expect(calls.sort()).toEqual([resolveTrackedDecision.name,readReplyPhoto.name].sort());
+  expect(calls.sort()).toEqual([resolveTrackedDecision.name,readReplyPhoto.name,cancelQueuedReply.name].sort());
   const input={source:item.source,projectId:item.projectId,id:item.id,fingerprint:item.fingerprint};
   expect(resolveTrackedDecision.input.safeParse({...input,answer:"x".repeat(4001)}).success).toBe(false);
   f.selected.clear();expect((await map.get(resolveTrackedDecision.name)(input,{})).status).toBe("out-of-scope");expect(changes).toBe(0);
@@ -174,9 +174,10 @@ test("busy, rotated and uncertain recipients keep the card; a retry checks recei
   let sends=0, confirmed=false;
   const target={ready:false,stillCurrent:()=>true,accepted:async()=>confirmed,send:async()=>{sends++;throw Error("Lost reply");}};
   const send=()=>f.service.deliver(input,()=>f.selected,async()=>target);
-  expect((await send()).status).toBe("busy");
+  expect((await send()).status).toBe("queued");
   expect((await f.service.deliver(input,()=>f.selected,async()=>null)).status).toBe("changed");
   target.ready=true;
+  await f.service.resumeQueued(()=>f.selected,async()=>target);
   expect((await send()).status).toBe("unconfirmed");
   expect((await send()).status).toBe("unconfirmed");
   expect(f.close(first).status).toBe("unconfirmed");expect(f.read().items).toHaveLength(1);
@@ -401,4 +402,88 @@ test("legacy history recovers a source only from the originally answered revisio
   expect(f.service.resolve({...original[0],answer:"Confirmed",questionIndexes:[0]},()=>f.selected)).toEqual({status:"already-closed"});
   f.write([]);
   expect(f.read().history?.[0].origin?.sessionId).toBe("original");
+});
+
+test("two queued card replies survive a restart with their original photos, recipients and questions",async()=>{
+  const f=fixture();
+  f.write(["left","right"].map(id=>row(id,{where:"manager",questions:[{id:"Q3",text:"Which version?"}]})));
+  const requests=f.read().items.map(item=>({source:item.source,projectId:item.projectId,id:item.id,fingerprint:item.fingerprint,
+    recipientId:"coord",questionIndexes:[0],answer:item.id,images:[replyPhoto]}));
+  const calls:{id:string;body:string;images:unknown}[]=[];
+  let ready=false;
+  const prepare=async()=>({ready,stillCurrent:()=>true,accepted:async()=>false,
+    send:async(body:string,id:string,images:unknown)=>{calls.push({id,body,images});}});
+  const results=await Promise.all(requests.map(request=>f.service.deliver(request,()=>f.selected,prepare)));
+  expect(results.map(r=>r.status)).toEqual(["queued","queued"]);
+  expect(f.read().history ?? []).toHaveLength(0);
+  expect(f.read().items.map(i=>i.queuedReply?.answer)).toEqual(["left","right"]);
+  const restarted=new TrackedDecisionStore(f.path);
+  const resume=()=>restarted.resumeQueued(()=>f.selected,prepare,"coord");
+  await resume();expect(calls).toHaveLength(0);
+  ready=true;
+  await Promise.all([resume(),resume()]);await resume();
+  expect(calls.map(call=>JSON.parse(call.body.split("\n")[1]).cardId)).toEqual(["left","right"]);
+  expect(calls.every(call=>JSON.parse(call.body.split("\n")[1]).questions[0].id==="Q3")).toBe(true);
+  expect(calls.map(c=>c.images)).toEqual([[replyPhoto],[replyPhoto]]);
+  expect(new Set(calls.map(c=>c.id)).size).toBe(2);
+  expect(f.read().history?.map(r=>r.status)).toEqual(["sent","sent"]);
+});
+
+test("cancel a reservation during recovery without resurrecting it or canceling a replacement",async()=>{
+  const f=fixture();f.write([row("one",{where:"manager"})]);
+  const [item]=f.read().items;
+  const input={source:item.source,projectId:item.projectId,id:item.id,fingerprint:item.fingerprint,recipientId:"c",answer:"Original"};
+  let calls=0;
+  const target={ready:false,stillCurrent:()=>true,accepted:async()=>false,send:async()=>{calls++;}};
+  expect((await f.service.deliver(input,()=>f.selected,async()=>target)).status).toBe("queued");
+  const waiting=f.read().items[0].queuedReply!;
+  const cancel={...input,messageId:waiting.messageId};
+  expect(f.service.cancelQueued(cancel,new Set(["other"]))).toBe(false);
+  expect(f.close(item).status).toBe("unconfirmed");
+  const resume=f.service.resumeQueued(()=>f.selected,async()=>{
+    expect(f.service.cancelQueued(cancel,f.selected)).toBe(true);
+    await f.service.deliver({...input,answer:"Updated"},()=>f.selected,async()=>target);
+    return {...target,ready:true};
+  });
+  await resume;
+  expect(calls).toBe(0);
+  expect(f.service.cancelQueued(cancel,f.selected)).toBe(false);
+  expect(f.read().items[0].queuedReply?.answer).toBe("Updated");
+});
+
+test("a queued reply never follows a changed card, new ledger owner or withdrawn project",async()=>{
+  for(const change of ["revision","owner","scope"]) {
+    let owner="old";
+    let card=row("one",{where:"manager"});
+    const f=fixture(()=>[{...card,sourceCoordinatorId:owner}]);const [item]=f.read().items;
+    const input={source:item.source,projectId:item.projectId,id:item.id,fingerprint:item.fingerprint,recipientId:owner,answer:"Original"};
+    const calls:string[]=[];
+    const target={ready:false,stillCurrent:()=>true,accepted:async()=>false,send:async(body:string)=>{calls.push(body);}};
+    expect((await f.service.deliver(input,()=>f.selected,async()=>target)).status).toBe("queued");
+    if(change==="revision") card={...card,title:"Updated question"};
+    if(change==="owner") owner="new";
+    if(change==="scope") f.selected.clear();
+    await f.service.resumeQueued(()=>f.selected,async()=>({...target,ready:true}));
+    f.selected.add("p");
+    expect(calls).toBeEmpty();
+    expect(f.read().history?.[0].status).toBe("unsent");
+    expect(f.service.hasWaitingReplies()).toBe(false);
+  }
+});
+
+test("snapshot delivery evidence settles a lost acknowledgement only for the same recipient, ID and body",async()=>{
+  const f=fixture();f.write([row("uncertain",{where:"manager"})]);const item=f.read().items[0];
+  const input={source:item.source,id:item.id,projectId:item.projectId,fingerprint:item.fingerprint,recipientId:"coord",answer:"Yes"};
+  let id="",body="";
+  const target={ready:true,stillCurrent:()=>true,accepted:async()=>false,send:async(text:string,messageId:string)=>{
+    body=text;id=messageId;throw Error("Lost acknowledgement");
+  }};
+  expect((await f.service.deliver(input,()=>f.selected,async()=>target)).status).toBe("unconfirmed");
+  const {createHash}=await import("node:crypto");
+  const evidence=(recipient:string,text:string)=>new Map([[recipient,{id:"e",turns:[],boardMessageHashes:new Map([[id,createHash("sha256").update(text).digest("hex")]])}]]);
+  for(const [recipient,text] of [["other",body],["coord","Yes"]]) {
+    expect(f.service.read(f.selected,[],{items:[],projects:[]},evidence(recipient,text)).history?.[0].status).toBe("pending");
+  }
+  expect(f.service.read(f.selected,[],{items:[],projects:[]},evidence("coord",body)).history?.[0].status).toBe("sent");
+  expect(f.read().items).toBeEmpty();
 });

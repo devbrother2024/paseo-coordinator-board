@@ -82,6 +82,7 @@ export function ReplyCard({entry, theme, links, open, openRemote}:Props) {
     ? (merge.status === "merged" ? t("보드에서 병합함", "Merged from board") : t("이미 병합됨", "Already merged"))
     : {
     sent:t("전송됨","Sent"), pending:t("전송 확인 중","Delivery unconfirmed"),
+    unsent:t("전송 중단 · 카드 또는 수신 상태 확인 필요","Not sent · review the card or recipient"),
     recorded:t("보드에 기록함","Saved on board"), closed:entry.reviewedBy ? t("코디네이터가 확인함","Reviewed by coordinator") : t("기록 닫음","Record closed"),
   }[entry.status];
   const states = {running:t("진행 중","Running"), idle:t("대기 중","Idle"), closed:t("대화 종료","Closed"),

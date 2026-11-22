@@ -32,6 +32,8 @@ export const trackedDecisionInputSchema = reference.extend({
 export type TrackedDecisionInput = z.output<typeof trackedDecisionInputSchema>;
 export type RoutedTrackedDecision = TrackedDecisionInput & { sourceCoordinatorId?: string | null };
 export const trackedDecisionSchema = trackedDecisionInputSchema.extend({
+  queuedReply:z.object({messageId:z.string().uuid(),recipientId:id,answer:z.string().optional(),
+    imageCount:z.number().int().nonnegative(), stopped:z.boolean()}).optional(),
   sourceCoordinatorId:id.nullable().optional(), key:z.string(), fingerprint, matchedSessionId:id.nullable(), matchedPull:target.nullable(),
 });
 export type TrackedDecision = z.output<typeof trackedDecisionSchema>;
@@ -94,7 +96,12 @@ export function trackedRecipient(item:RoutedTrackedDecision, coordinator:string|
 export const resolveTrackedDecision = defineRpc({
   name:"board.resolve-tracked-decision",
   input: reference.extend({fingerprint,answer:z.string().max(4000).optional(),recipientId:id.optional(),images:workImages.optional(),questionIndexes:z.array(z.number().int().min(0).max(127)).max(128).optional()}).strict().refine(v => !v.recipientId || !!v.answer?.trim() || !!v.images?.length),
-  output:z.object({status:z.enum(["closed","already-closed","changed","out-of-scope","unavailable","sent","busy","unconfirmed"])}),
+  output:z.object({status:z.enum(["closed","already-closed","changed","out-of-scope","unavailable","sent","queued","busy","unconfirmed"])}),
+});
+export const cancelQueuedReply = defineRpc({
+  name:"board.cancel-queued-reply",
+  input:reference.extend({fingerprint,messageId:z.string().uuid()}).strict(),
+  output:z.object({canceled:z.boolean()}),
 });
 export type TrackedResolution = z.output<typeof resolveTrackedDecision.input>;
 export const trackedKey = (row:z.output<typeof reference>) => JSON.stringify([row.source,row.projectId,row.id]);
