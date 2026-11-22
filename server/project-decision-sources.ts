@@ -20,6 +20,7 @@ const entry = z.object({
     key:nonempty,text:nonempty,recommended:z.boolean().default(false),does:lines,pros:lines,cons:lines,note:z.string().nullish(),
   })) })).default([]),
   pr: z.number().int().positive().nullish(), since:z.string().nullish(), howToAnswer:z.string().nullish(), answerLead:z.string().nullish(), urgency:z.string().nullish(),
+  dueAt:z.string().max(64).nullish(), blocksWork:z.boolean().nullish(),
 });
 const ledger = z.object({ items: z.array(entry) });
 function localFile(path: string, optional = false, ownerFile = false) {
@@ -103,7 +104,7 @@ function readLedger(source: z.infer<typeof manifest>["sources"][number], selecte
     return {
       sourceCoordinatorId, source: source.source, projectId: source.projectId, projectTitle: source.projectTitle,
       id:row.id,title:row.title,kind,where:row.where,ask:row.ask,recommend:row.recommend,why:row.why,risk:row.risk,steps:row.steps,
-      since:row.since, urgency:row.urgency, howToAnswer:row.howToAnswer, answerLead:row.answerLead, sessionId:row.agentId ?? null, sessionHost:row.sessionHost ?? null,
+      dueAt:row.dueAt, blocksWork:row.blocksWork, since:row.since, urgency:row.urgency, howToAnswer:row.howToAnswer, answerLead:row.answerLead, sessionId:row.agentId ?? null, sessionHost:row.sessionHost ?? null,
       questions:row.questions.map(q => ({...q, multi:q.multi ?? /복수|여러\s*개|여럿|select (?:all|multiple)/i.test(q.text)})),
       qa, replyHistory:(answers.get(row.id) ?? []).filter(current),
       mergeTarget:kind === "merge" && source.repository && row.pr ? {repo:source.repository,number:row.pr} : undefined,

@@ -74,6 +74,7 @@ export async function discoverSessions(paseo: Pick<Sdk, "agents" | "workspaces">
       ...(agent.metadata?.[reportingKey] === true ? { reporting: true } : {}),
       status: agent.status, activityAt: agent.updatedAt,
       ...observedState(agent),
+      ...(agent.attentionReason === "permission" && agent.attentionTimestamp ? {decisionRequestedAt:agent.attentionTimestamp} : {}),
       ...(permission ? { permissionVersion: permission } : {}),
     });
   }

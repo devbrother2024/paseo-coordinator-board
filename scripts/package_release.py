@@ -25,6 +25,7 @@ required = {
     "server/board-facts.ts", "shared/board-facts.ts", "client/fact-reply-controls.tsx",
     "server/recommendation.ts", "shared/recommendation.ts", "client/decision-summary.ts",
     "server/session-links.ts", "shared/session-links.ts", "client/session-links.tsx", "client/language.tsx",
+    "shared/decision-priority.ts", "client/decision-priority.ts", "client/decision-editing.tsx", "client/decision-edit-order.ts",
     "client/decision-receipts.ts", "client/inline-receipt.tsx", "client/merge-notification.ts",
     "client/pull-requests.tsx", "client/decision-badge.tsx", "shared/decision-count.ts", "shared/prs.ts", "server/prs.ts",
     "shared/tracked-decisions.ts", "server/tracked-decisions.ts", "server/project-decision-sources.ts", "server/pr-merge.ts", "server/merge-notifications.ts",

@@ -81,3 +81,12 @@ test("a follow-up belongs to the exact sent message and stops at the next indepe
   expect(result.replies?.get("expected")).toBe("Access restored");
   expect(result.replies?.get("unrelated")).toBe("Unrelated response");
 });
+
+test("uses the timestamp of this exact question across a coordinator rewording", () => {
+  const at="2026-11-22T03:00:00Z", later="2026-11-22T05:00:00Z";
+  const evidence={id:"seen",turns:[{role:"assistant" as const,text:"Which version would you prefer?",at}]};
+  expect(classify(evidence,row).decisionRequestedAt).toBe(at);
+  const judgment={kind:"question" as const,projectId:"p",evidenceId:"seen",text:"Which version?",requestedAt:later};
+  expect(classify(evidence,row,judgment).decisionRequestedAt).toBe(at);
+  expect(classify({...evidence,turns:[{role:"user",text:"I need to decide soon",at}]},row,judgment).decisionRequestedAt).toBe(later);
+});

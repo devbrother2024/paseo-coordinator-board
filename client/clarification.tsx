@@ -1,3 +1,4 @@
+import { useDecisionInteraction } from "./decision-editing";
 import { useRpc } from "@getpaseo/plugin/client";
 import { TextInput } from "@getpaseo/plugin/client/ui";
 import { useEffect, useRef, useState } from "react";
@@ -35,6 +36,7 @@ export function Clarification({card,title,theme,recipientId,recipientTitle,entri
   const hidden = Math.max(0,prior.length+history.length-visibleCount);
   const hasDraft = !!text.trim() || photos.photos.length > 0;
   const editing = hasDraft || photos.reading || busy;
+  useDecisionInteraction(expanded || editing);
   useEffect(() => { onDraftChange?.(editing); }, [editing,onDraftChange]);
   // The conversation stays on the ledger card, while each new question binds its current source revision.
   const target = JSON.stringify([card,recipientId]);

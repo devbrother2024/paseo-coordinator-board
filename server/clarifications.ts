@@ -89,6 +89,7 @@ export function restoreClarifiedDecision(
     // Digest judgments classify the explanation turn. Its original decision stays
     // open until an answer, a new input, or a note revision supersedes it.
     row.decision = record.savedDecision;
+    row.decisionRequestedAt = record.sourceRequestedAt;
     if (record.sourceEvidenceId) row.evidenceId = record.sourceEvidenceId;
     row.lane = "human";
     row.detail = record.savedDecision.question;
@@ -270,6 +271,7 @@ export class ClarificationSender {
         ...(preserve ? {
           savedDecision: source.decision,
           sourceEvidenceId: source.evidenceId,
+          sourceRequestedAt: source.decisionRequestedAt,
           noteRevision: view.notes[source.id]?.revision ?? 0,
         } : {}),
       };

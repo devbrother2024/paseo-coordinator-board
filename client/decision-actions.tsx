@@ -1,3 +1,4 @@
+import { useDecisionInteraction } from "./decision-editing";
 import { useRpc } from "@getpaseo/plugin/client";
 import { TextInput } from "@getpaseo/plugin/client/ui";
 import { useRef, useState, type ReactNode } from "react";
@@ -26,9 +27,9 @@ export function ReceiptText({ receipt, theme }: { receipt: DecisionReceipt; them
   </Text>;
 }
 
-export function DecisionActions({ card, theme, hostLabel, coordinator, coordinatorTitle, open, onSent, receipt, clarification }: {
+export function DecisionActions({ card, theme, hostLabel, coordinator, coordinatorTitle, open, onSent, receipt, clarification, priorityLabel }: {
   card: Card; theme: Theme; hostLabel?: string; coordinator: string | null; coordinatorTitle?: string; open?: (id: string) => void;
-  onSent: (result: DecisionReceipt) => void; receipt?: DecisionReceipt; clarification?: ReactNode;
+  onSent: (result: DecisionReceipt) => void; receipt?: DecisionReceipt; clarification?: ReactNode; priorityLabel?: string;
 }) {
   const { t, language } = useBoardLanguage();
   const { session } = card;
@@ -49,6 +50,8 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   const activeEditorPhotos = editor?.action === "reply" ? replyPhotos : editorPhotos;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<[string, string] | null>(null);
+  const inputFocus = useDecisionInteraction(!!editor || !!draft || selection !== null || !!reviewedReply || busy ||
+    replyPhotos.reading || !!replyPhotos.photos.length || editorPhotos.reading || !!editorPhotos.photos.length);
   const pending = useRef(false);
   const retry = useRef({ payload: "", key: "" });
   const delivered = useRef("");
@@ -120,7 +123,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   return <View style={{ gap: 7, paddingTop: 10, borderTopWidth: 1, borderColor: c.border }}>
     <Text accessibilityRole="header" selectable style={{ color: c.foreground, fontSize: 15, fontWeight: "600" }}>{headline}</Text>
     <View style={{ ...wrap, alignItems: "center" }}>
-      <Text selectable style={{ color: c.foregroundMuted, fontSize: 12, flexShrink: 1 }}>{marker}</Text>
+      <Text selectable style={{ color: c.foregroundMuted, fontSize: 12, flexShrink: 1 }}>{[marker, priorityLabel].filter(Boolean).join(" · ")}</Text>
       {open && <SessionChip theme={theme} label={t("담당 세션", "Assigned session")} accessibilityLabel={named(t("담당 세션 열기", "Open assigned session")).accessibilityLabel} onPress={() => open(session.id)} />}
     </View>
     {formal || !decision ? formal && <Text style={{ color: c.foregroundMuted }}>
@@ -145,7 +148,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
           </Text>
         </Pressable></PhotoComposer>}
         {!proposed && <View style={{ gap: 6 }}>
-          <PhotoComposer theme={theme} disabled={busy} draft={replyPhotos}><TextInput multiline accessibilityLabel={session.title + " · " + t("답장 내용", "reply text")} value={draft}
+          <PhotoComposer theme={theme} disabled={busy} draft={replyPhotos}><TextInput {...inputFocus} multiline accessibilityLabel={session.title + " · " + t("답장 내용", "reply text")} value={draft}
             maxLength={24000} editable={!busy} onChangeText={setDraft} placeholder={t("담당 세션에 보낼 답을 입력하세요", "Write a reply to the assigned session")}
             placeholderTextColor={c.foregroundMuted} style={{ minHeight: 48, padding: 8, color: c.foreground, borderColor: c.border, borderWidth: 1, borderRadius: 7, backgroundColor: c.surface0 }} /></PhotoComposer>
         </View>}
@@ -168,7 +171,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
       {editor && <View style={{ gap: 7 }}>
         <Text style={{ color: c.foregroundMuted }}>{t("받는 곳", "Recipient")} · {targetChanged ? editor.recipientId : editor.action === "coordinate" ? coordLabel : source}</Text>
         {targetChanged && <Text style={{ color: c.statusWarning }}>{t("코디네이터가 교체되었습니다. 취소하고 새 수신자를 확인해 주세요.", "The coordinator changed. Cancel and check the new recipient.")}</Text>}
-        <PhotoComposer theme={theme} disabled={busy || targetChanged} draft={activeEditorPhotos}><TextInput accessibilityLabel={`${session.title} · ${t(korean[editor.action] + " 내용", english[editor.action] + " text")}`}
+        <PhotoComposer theme={theme} disabled={busy || targetChanged} draft={activeEditorPhotos}><TextInput {...inputFocus} accessibilityLabel={`${session.title} · ${t(korean[editor.action] + " 내용", english[editor.action] + " text")}`}
           placeholderTextColor={c.foregroundMuted} placeholder={t(`${korean[editor.action]} 내용을 입력하세요`, `Write your ${english[editor.action]}`)} value={editor.text} editable={!busy} multiline maxLength={24000}
           onChangeText={text => setEditor({ ...editor, text })}
           style={{ minHeight: 64, textAlignVertical: "top", padding: 8, color: c.foreground, borderRadius: 7, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface0 }} /></PhotoComposer>

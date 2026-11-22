@@ -31,6 +31,7 @@ const session = z.object({
   boardFact: factSchema.extend({ current: z.boolean() }).optional(),
   nativePending: z.boolean().optional(),
   permissionVersion: z.string().optional(),
+  decisionRequestedAt: z.string().optional(),
   activityAt: z.string().optional(),
   lane: z.enum(["human", "running", "review", "idle", "unknown"]),
   detail: z.string(),
@@ -40,6 +41,7 @@ export const noteSchema = z.object({
   kind: noteKind,
   evidenceId: z.string().max(64).optional(),
   origin: z.enum(["person", "agent"]).optional(),
+  requestedAt: z.string().optional(),
   text: z.string().max(2000),
   revision,
 });

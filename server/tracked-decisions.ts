@@ -3,6 +3,7 @@ import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, renameS
 import { dirname, join, parse } from "node:path";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
+import { sortTrackedByPriority } from "../shared/decision-priority";
 import type { SessionRow } from "../shared/contract";
 import { readReplyPhoto, replyOrigin, type ReplyEntry } from "../shared/reply-history";
 import { MAX_WORK_IMAGES, WORK_IMAGE_MIME_TYPES, type WorkImage } from "../shared/work-images";
@@ -90,7 +91,9 @@ export class TrackedDecisionStore {
       const key=trackedKey(item);
       if(rows.has(key))return {status:"invalid",rows:new Map()};
       // An old feed without a host and a current feed explicitly marking this host are the same record.
-      const fingerprint=createHash("sha256").update(JSON.stringify({...item,sessionHost:item.sessionHost ?? undefined})).digest("hex");
+      // Display-only scheduling metadata must not reopen an answered version.
+      const {dueAt, blocksWork, ...content} = item;
+      const fingerprint=createHash("sha256").update(JSON.stringify({...content,sessionHost:item.sessionHost ?? undefined})).digest("hex");
       // Authority belongs to the operator-configured importer. Keep it out of
       // the content fingerprint so rotating owners cannot reopen old receipts.
       if (index >= raw.data.length) {
@@ -134,13 +137,10 @@ export class TrackedDecisionStore {
     const {rows} = this.load(selected);
     const resolved = this.recorded();
     if (!resolved) return [];
-    const titles: string[] = [];
-    for (const {key, fingerprint, item} of rows.values()) {
-      if (resolved.has(receiptKey(key, fingerprint))) continue;
-      titles.push(item.title);
-      if (titles.length === 3) break;
-    }
-    return titles;
+    const pending = [...rows.values()]
+      .filter(({key, fingerprint}) => !resolved.has(receiptKey(key, fingerprint)))
+      .map(row => row.item);
+    return sortTrackedByPriority(pending).slice(0, 3).map(item => item.title);
   }
 
   read(selected:Set<string>, sessions:SessionRow[], prs:PullRequestView, evidence: ReadonlyMap<string,Evidence> = new Map()):TrackedDecisionView & { history?:ReplyEntry[] } {

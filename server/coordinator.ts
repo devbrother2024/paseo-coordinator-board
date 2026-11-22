@@ -63,7 +63,10 @@ export function attachCoordinatorTools(server: PluginServerContext, prefs: Prefe
       if (!latest?.turns.length || latest.id !== input.evidenceId) throw new Error("대화가 바뀌었습니다. 최신 발췌를 다시 확인하세요.");
       prefs.change(scope => {
         if (scope.coordinator !== agent.id || !isCurrentMembership(row, scope)) throw new Error("관리 범위가 바뀌었습니다.");
-        scope.judgments[row.id] = { ...judgment.parse(input), projectId: row.projectId };
+        const previous = scope.judgments[row.id];
+        const previousQuestion = previous?.kind === "question" && previous.evidenceId === input.evidenceId && previous.projectId === row.projectId;
+        scope.judgments[row.id] = { ...judgment.parse(input), projectId: row.projectId,
+          ...(input.kind === "question" ? { requestedAt:previousQuestion ? previous.requestedAt : new Date().toISOString() } : {}) };
       });
       return { text: "판단을 해당 세션 카드에 기록했습니다." };
     },

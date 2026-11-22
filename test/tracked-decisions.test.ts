@@ -349,10 +349,32 @@ test("an image attached to a local decision is retrievable only inside the proje
 
 test("first-open titles show only unresolved decisions in the selected scope",()=>{
   const f=fixture();
-  f.write([row("done"), row("hidden",{projectId:"other"}), row("global",{projectId:null,title:"Shared"}), ...[1,2,3,4].map(i=>row(String(i),{title:"Visible "+i}))]);
+  f.write([row("done"), row("hidden",{projectId:"other"}), row("global",{projectId:null,title:"Shared",urgency:"now"}), ...[1,2,3,4].map(i=>row(String(i),{title:"Visible "+i}))]);
   expect(f.close(f.read().items[0]).status).toBe("closed");
   expect(f.service.previewTitles(f.selected)).toEqual(["Shared","Visible 1","Visible 2"]);
   expect(f.service.previewTitles(new Set())).toEqual([]);
   writeFileSync(join(f.dir,"tracked-decisions.resolved.json"),"{");
   expect(f.service.previewTitles(f.selected)).toEqual([]);
+});
+
+test("first-open titles rank all eligible decisions before limiting the preview to three", () => {
+  const f = fixture();
+  f.write([
+    row("later", { title: "Later" }),
+    row("week", { title: "This week", urgency: "week" }),
+    row("today", { title: "Today", urgency: "today" }),
+    row("now", { title: "Urgent", urgency: "now" }),
+    row("blocked", { title: "Release waiting", blocksWork: true }),
+  ]);
+  expect(f.service.previewTitles(f.selected)).toEqual(["Urgent", "Release waiting", "Today"]);
+});
+
+test("changing display-only priority metadata preserves the original answer receipt", () => {
+  const f=fixture();
+  const original=row("schedule");
+  f.write([original]);
+  const card=f.read().items[0];
+  expect(f.close(card,"Done").status).toBe("closed");
+  f.write([{...original,dueAt:"2026-11-23",blocksWork:true}]);
+  expect(f.read().items).toEqual([]);
 });

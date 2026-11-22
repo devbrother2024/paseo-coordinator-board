@@ -15,7 +15,7 @@ export type Evidence = {
   laterInput?: boolean;
   deliveries?: { id: string; sender: string; bodyHash: string }[];
 };
-type Candidate = Pick<SessionRow, "lane" | "detail">;
+type Candidate = Pick<SessionRow, "lane" | "detail" | "decisionRequestedAt">;
 const request = /확인해\s*주실\s*것|(?:확인|선택|승인|결정|답변|지정)\s*(?:부탁드|해\s*(?:주세|주실|주셔야|주시겠))|(?:알려|골라|정해|답해)\s*(?:주세|주실|주셔야)|(?:할까요|될까요|하시겠어요|고르시겠어요|원하시나요)[?？]|\b(?:please (?:choose|confirm|approve)|which .* (?:prefer|choose)|shall I|would you like me to|could you (?:confirm|choose))\b/i;
 const optionalOffer = /(?:궁금|필요|원하).{0,12}(?:시면|시다면|면).{0,25}(?:알려|말씀|도와)|\b(?:if you (?:like|want)|let me know if)\b/i;
 
@@ -82,14 +82,16 @@ function questionIn(text: string, coordinatorDigest = false) {
 
 export function classify(e: Evidence, row: SessionRow, decision?: Preferences["judgments"][string], isCoordinator = false): Candidate {
   if (row.lane === "human" || row.lane === "running" || row.lane === "unknown" || row.detail.includes("오류")) return row;
-  if (decision?.evidenceId === e.id) {
-    return { lane: decision.kind === "question" ? "human" : decision.kind, detail: "코디네이터 판단 · " + decision.text };
-  }
   const last = e.turns.at(-1);
+  if (decision?.evidenceId === e.id) {
+    const askedAt = decision.kind === "question" && (last?.role === "assistant" && questionIn(last.text, isCoordinator) ? last.at ?? decision.requestedAt : decision.requestedAt);
+    return { lane: decision.kind === "question" ? "human" : decision.kind, detail: "코디네이터 판단 · " + decision.text,
+      ...(askedAt ? {decisionRequestedAt:askedAt} : {}) };
+  }
   if (!last) return row;
   if (last.role === "assistant") {
     const question = questionIn(last.text, isCoordinator);
-    if (question) return { lane: "human", detail: "세션의 확인 요청 · " + question };
+    if (question) return { lane: "human", detail: "세션의 확인 요청 · " + question, ...(last.at ? {decisionRequestedAt:last.at} : {}) };
   } else {
     const previous = e.turns.slice(0, -1).findLast(t => t.role === "assistant");
     if (previous && questionIn(previous.text, isCoordinator)) {

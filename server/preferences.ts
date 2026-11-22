@@ -31,7 +31,7 @@ const schema = z.object({
     id: z.string(), coordinator: z.string(), expires: z.number(), messageId: z.string().optional(),
     candidates: z.record(z.string(), z.string()),
   }).optional(),
-  judgments: z.record(z.string(), judgment.extend({ projectId: z.string() })),
+  judgments: z.record(z.string(), judgment.extend({ projectId: z.string(), requestedAt:z.string().optional() })),
   sessionLinks: z.record(z.string(), sessionLinkSchema).default({}),
   routing: routePolicySchema.default({}),
   excludedProviders: z.array(z.string().min(1).max(256)).default([]),
@@ -40,7 +40,7 @@ const schema = z.object({
   answers: z.record(z.string(), z.object({ version: z.string(), noteRevision: z.number().optional() })).default({}),
   clarifications:z.record(z.string(),clarificationEntry.extend({
     card:clarificationCard,fingerprint:z.string(),bodyHash:z.string(),sourceSessionId:z.string().nullable(),
-    savedDecision:decisionSchema.optional(),noteRevision:z.number().optional(),sourceEvidenceId:z.string().optional(),
+    savedDecision:decisionSchema.optional(),noteRevision:z.number().optional(),sourceEvidenceId:z.string().optional(), sourceRequestedAt:z.string().optional(),
   })).default({}),
   decisionReceipts: z.record(z.string(), z.object({
     activity: replyDetails.optional(), response: z.string().optional(),

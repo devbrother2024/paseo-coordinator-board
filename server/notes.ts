@@ -35,6 +35,7 @@ export class NoteStore {
     const text = change.kind === "clear" ? "" : change.text;
     if (previous?.kind === change.kind && previous.text === text && previous.origin === origin && previous.evidenceId === change.evidenceId) return { ok: true, conflict: false };
     notes.set(change.sessionId, {
+      ...(change.kind === "question" ? {requestedAt: new Date().toISOString()} : {}),
       sessionId: change.sessionId, kind: change.kind, text, origin, ...(change.evidenceId ? { evidenceId: change.evidenceId } : {}), revision: change.expectedRevision + 1,
     });
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });

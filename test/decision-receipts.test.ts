@@ -39,3 +39,10 @@ describe("in-place decision results", () => {
     expect(withReceiptPositions(["compound", "other"], hidden)).toEqual(["compound", "other"]);
   });
 });
+
+test("retains a finished editor's slot when newly unpinned priorities reverse its neighbors", () => {
+  const duringEdit = ["before", "my-reply", "urgent", "other"];
+  const afterSubmit = ["urgent", "before", "other"];
+  expect(withReceiptPositions(afterSubmit, [receipt("my-reply", duringEdit)]))
+    .toEqual(["urgent", "my-reply", "before", "other"]);
+});

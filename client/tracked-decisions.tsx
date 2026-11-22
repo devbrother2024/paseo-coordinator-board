@@ -1,3 +1,4 @@
+import { useDecisionInteraction } from "./decision-editing";
 import { TextInput } from "@getpaseo/plugin/client/ui";
 import { useRpc } from "@getpaseo/plugin/client";
 import { useRef, useState, type ReactNode } from "react";
@@ -11,7 +12,7 @@ import { PhotoComposer, usePhotoDraft } from "./photo-composer";
 type Resolution = ReturnType<typeof resolveTrackedDecision.output.parse>["status"];
 type ResolutionMode = "send" | "save" | "review";
 type Props = {
-  item: TrackedDecision; theme: Theme; recipientId?:string|null; open?: () => void; children?: ReactNode; pull?: ReactNode;
+  item: TrackedDecision; theme: Theme; priorityLabel?: string; recipientId?:string|null; open?: () => void; children?: ReactNode; pull?: ReactNode;
   renderClarification?: (onDraftChange:(active:boolean) => void) => ReactNode;
   onResolved: (result: Resolution, mode?: ResolutionMode, answer?: string) => Promise<void> | void;
 };
@@ -43,7 +44,7 @@ export function TrackedDecisionCard(props: Props) {
   return <DecisionRecord key={JSON.stringify([props.item.key, props.item.fingerprint])} {...props} />;
 }
 
-function DecisionRecord({ item, theme, open, recipientId, onResolved, children, pull, renderClarification }: Props) {
+function DecisionRecord({ item, theme, open, recipientId, onResolved, children, pull, renderClarification, priorityLabel }: Props) {
   const { t } = useBoardLanguage();
   const resolve = useRpc(resolveTrackedDecision);
   const [expanded, setExpanded] = useState(false);
@@ -99,6 +100,8 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
   const tooLong = answer.length > 4000;
   const humanCheck = item.kind === "check" && item.where === "human" && !item.questions.length && !item.matchedSessionId;
   const hasDraft = hasQuestionDraft || hasAnswer || freeReply.length > 0 || Object.values(typed).some(value => value.length > 0);
+  const inputFocus = useDecisionInteraction(!isClosed && !needsRefresh &&
+    (hasDraft || attachments.reading || busy || confirming || Object.values(skipped).some(Boolean)));
   const checkLabel = t("확인했어요", "I checked this");
 
   function choose(index: number, choice: number, multi: boolean) {
@@ -146,7 +149,7 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
 
   return <View style={{ paddingVertical: 10, gap: 7, borderTopWidth: 1, borderTopColor: c.border }}>
     <View style={{ ...wrap, alignItems: "center" }}>
-      <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[source || t("보드 공통", "Board-wide"), t(words[0], words[1]), where, item.owner].filter(Boolean).join(" · ")}</Text>
+      <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[source || t("보드 공통", "Board-wide"), t(words[0], words[1]), where, item.owner, priorityLabel].filter(Boolean).join(" · ")}</Text>
       {open && <SessionChip theme={theme} label={t("연결 세션", "Linked session")} accessibilityLabel={named(t("연결된 세션 열기", "Open linked session")).accessibilityLabel} onPress={open} />}
     </View>
     <Text accessibilityRole="header" selectable style={{ color: c.foreground, fontSize: 16, fontWeight: "600" }}>{isMerge ? t("PR 병합", "PR merge") : item.title}</Text>
@@ -179,7 +182,7 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
           </Pressable>;
         })}
         {!skipped[index] && <PhotoComposer theme={theme} disabled={busy} draft={attachments} questionIndex={index}>
-          {!question.options.some(option=>option.recommended) && <TextInput value={typed[index] ?? ""} editable={!busy} multiline maxLength={4000}
+          {!question.options.some(option=>option.recommended) && <TextInput {...inputFocus} value={typed[index] ?? ""} editable={!busy} multiline maxLength={4000}
           accessibilityLabel={item.title + " · " + question.text + " · " + t("기록할 답", "Answer to record")}
           onChangeText={text => { setConfirming(false); setTyped(previous => ({ ...previous, [index]: text })); if (text.trim()) setSelected(previous=>({...previous,[index]:[]})); }}
           placeholder={question.options.length ? t("다른 답 직접 입력", "Write another answer") : t("내 답을 입력하세요", "Write your answer")} placeholderTextColor={c.foregroundMuted}
@@ -190,7 +193,7 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
           disabled={busy || attachments.reading || attachments.photos.some(photo => photo.questionIndex === index)} onPress={() => skip(index)} /></View>
       </View>)}
       {!item.questions.length && !item.matchedSessionId && <>
-        <PhotoComposer theme={theme} disabled={busy} draft={attachments}><TextInput accessibilityLabel={item.title + " · " + t("직접 답변", "Your reply")} value={freeReply} editable={!busy}
+        <PhotoComposer theme={theme} disabled={busy} draft={attachments}><TextInput {...inputFocus} accessibilityLabel={item.title + " · " + t("직접 답변", "Your reply")} value={freeReply} editable={!busy}
           multiline maxLength={4000} onChangeText={value => { setFreeReply(value); setConfirming(false); }}
           placeholder={t("내 답을 입력하세요", "Write your answer")} placeholderTextColor={c.foregroundMuted}
           style={{ minHeight: 46, padding: 8, color: c.foreground, borderColor: c.border, borderWidth: 1, borderRadius: 7, backgroundColor: c.surface0 }} /></PhotoComposer>

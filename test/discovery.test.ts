@@ -101,3 +101,13 @@ test("the observed session provider comes from its snapshot even when the model 
   ])));
   assert.deepEqual(rows.map(r => r.provider), ["my-acp", null]);
 });
+
+test("permission wait starts at the permission attention event, never a later session update", async () => {
+  const at = "2026-11-01T00:00:00Z";
+  const rows = await discoverSessions(directory(() => page([
+    entry({id:"permission",attentionReason:"permission",attentionTimestamp:at,updatedAt:"2026-11-22T05:00:00Z"}),
+    entry({id:"finished",attentionReason:"finished",attentionTimestamp:at}),
+  ])));
+  assert.equal(rows[0].decisionRequestedAt, at);
+  assert.equal(rows[1].decisionRequestedAt, undefined);
+});

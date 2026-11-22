@@ -27,9 +27,12 @@ export function withReceiptPositions(active: readonly string[], receipts: readon
     const index = order.indexOf(rowKey);
     const next = order.slice(index + 1).find(key => rows.includes(key));
     const previous = order.slice(0, Math.max(0, index)).reverse().find(key => rows.includes(key));
-    const position = next !== undefined ? rows.indexOf(next)
-      : previous !== undefined ? rows.indexOf(previous) + 1
-      : Math.min(Math.max(0, index), rows.length);
+    const nextIndex = next === undefined ? -1 : rows.indexOf(next);
+    const previousIndex = previous === undefined ? -1 : rows.indexOf(previous);
+    // Fresh priorities can reverse the neighbors when the finished editor releases its position.
+    let position = Math.min(Math.max(0, index), rows.length);
+    if (nextIndex > previousIndex) position = nextIndex;
+    else if (nextIndex < 0 && previousIndex >= 0) position = previousIndex + 1;
     rows.splice(position, 0, rowKey);
   }
   return rows;

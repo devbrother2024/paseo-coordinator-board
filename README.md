@@ -21,7 +21,9 @@ paseo plugin ls coordinator-board
 
 레지스트리로 설치한 보드의 새 버전을 확인하려면 `paseo plugin update coordinator-board --check`를 실행하세요. 업데이트하려면 `paseo plugin update coordinator-board`를 실행하고 제안된 변경을 확인합니다.
 
-**Git·ZIP 설치**도 가능합니다. Git이 있는 호스트에서는 `paseo plugin install git:devbrother2024/paseo-coordinator-board --ref main`으로 기본 브랜치를 설치합니다. 이 문서의 버전을 설치하려면 `main` 자리에 `v0.5.14`를 넣으세요. 전체 커밋 SHA도 사용할 수 있습니다. ZIP은 압축을 푼 뒤 `paseo-plugin.json`이 있는 폴더에서 `paseo plugin install .`을 실행하고 그 폴더를 보관하세요. [Paseo 플러그인 안내](https://paseo.sh/docs/plugins)
+**Git·ZIP 설치**도 가능합니다. Git이 있는 호스트에서는 `paseo plugin install git:devbrother2024/paseo-coordinator-board --ref main`으로 기본 브랜치를 설치합니다. 이 문서의 버전을 설치하려면 `main` 자리에 `v0.5.15`를 넣으세요. 전체 커밋 SHA도 사용할 수 있습니다. ZIP은 압축을 푼 뒤 `paseo-plugin.json`이 있는 폴더에서 `paseo plugin install .`을 실행하고 그 폴더를 보관하세요. [Paseo 플러그인 안내](https://paseo.sh/docs/plugins)
+
+**내 결정**에서는 기한이 지났거나 지금 처리해야 하는 카드가 맨 위에 옵니다. 그다음은 답변이나 권한 승인을 기다리는 작업이고, 나머지 카드는 오늘, 이번 주, 그 이후에 기한이 있는 작업, 기한 없는 작업 순으로 표시합니다. 같은 순위에서는 대기를 시작한 시각이 확인된 오래된 카드부터 표시합니다. 처음에는 다섯 장이 보입니다. 답변을 쓰거나 병합을 확인하는 동안에는 갱신이 와도 해당 카드의 자리를 유지합니다.
 
 **내 결정**에서 답장을 보내거나 PR을 병합하면 방금 누른 자리에 카드 제목과 처리 결과가 남습니다. 다음 결정으로 바로 넘어가거나 읽은 결과를 닫을 수 있습니다. 나중에 확인하려면 목록 아래의 **최근 결정 기록**을 여세요. 답장에는 보낸 문구, 시각, 받은 세션이 표시됩니다. 프로젝트 칸반의 **결정 후속**에도 같은 기록이 남습니다. 기기 로그인처럼 프로젝트에 속하지 않는 요청은 **공통**에 표시됩니다. 받은 세션의 후속 응답이 확인되면 카드에 표시되며 세션 칩에서 대화 전문을 열 수 있습니다.
 
@@ -144,5 +146,7 @@ ZIP에는 TypeScript 원본이 들어 있습니다. 기본 모델과 추론 강�
 ```json
 {"version":1,"items":[{"source":"studio","projectId":"YOUR_PROJECT_ID","id":"playback","kind":"check","title":"모바일 재생 확인","where":"human","steps":["휴대폰에서 영상을 재생하고 첫 자막을 확인하세요."]}]}
 ```
+
+결정에 마감이 있으면 `dueAt`에 날짜 또는 시간대가 포함된 시각을 적으세요. `since`는 결정을 기다리기 시작한 시각입니다. 배포처럼 다음 단계가 이 결정에서 실제로 멈췄다면 `blocksWork: true`를 지정하세요. 병합 준비가 끝난 PR에 후속 작업이 있다는 근거가 없으면 일반 검토 순서를 따릅니다.
 
 기존 프로젝트별 JSON 원장을 운영하는 호스트는 같은 폴더에 `tracked-sources.json`을 둘 수 있습니다. `version`은 1이고 `sources` 각 항목에 `source`, `projectId`, `projectTitle`, `directory`를 지정합니다. `directory`는 `decisions.json`이 있는 디렉터리의 절대 경로입니다. `repository`에 GitHub 저장소를 지정하면 병합 항목을 같은 PR과 연결합니다. `coordinatorFile`에는 원장을 맡은 현재 세션의 `agentId`를 담은 JSON 파일의 절대 경로를 지정합니다. 보드는 답장을 보낼 때도 소유자를 다시 확인합니다. 운영 세션을 확인할 수 없는 카드는 로컬에 답을 기록할 수 있습니다. **내 결정**에서 A/B 선택지와 추천 표시, 직접 답변란을 확인하세요. 선택한 답을 확인한 뒤 수신자가 표시된 전송 버튼을 누르세요. **보드에 답 기록하고 닫기**는 현재 판본의 답을 보드에 보관합니다. 근거와 이전 문답은 펼쳐서 볼 수 있습니다. PR 병합은 별도로 확정합니다.

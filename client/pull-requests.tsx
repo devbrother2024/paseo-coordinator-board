@@ -1,3 +1,4 @@
+import { useDecisionInteraction } from "./decision-editing";
 import { openExternalUrl, useRpc } from "@getpaseo/plugin/client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Platform, Text, TextInput, View } from "react-native";
@@ -105,8 +106,8 @@ export function TrackedPullStatus({repo, number, projectId, theme, securityGate}
   </View>;
 }
 
-export function PullRequestCard({ pr, projectId, theme, decision = false, securityGate = false, openCoordinator, workSessions, onResult, clarification }: {
-  pr: PullRequest; projectId: string; theme: Theme; workSessions: WorkSessionLink[]; decision?: boolean; securityGate?: boolean; openCoordinator?: () => void; onResult: (notice: MergeNotice) => void; clarification?: ReactNode;
+export function PullRequestCard({ pr, projectId, theme, decision = false, securityGate = false, openCoordinator, workSessions, onResult, clarification, priorityLabel }: {
+  pr: PullRequest; projectId: string; theme: Theme; workSessions: WorkSessionLink[]; decision?: boolean; securityGate?: boolean; openCoordinator?: () => void; onResult: (notice: MergeNotice) => void; clarification?: ReactNode; priorityLabel?: string;
 }) {
   const { t } = useBoardLanguage();
   const c = theme.colors;
@@ -121,6 +122,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, securi
   const target = pr.repo + " #" + pr.number;
   const named = (label: string) => ({label, accessibilityLabel: target + " · " + label});
   const ready = !securityGate && !!projectId && pr.lane === "review" && pr.reason === "ready" && notice?.status !== "merged" && notice?.status !== "already-merged";
+  useDecisionInteraction(!!busy || (ready && !!preview));
   const status = securityGate && pr.reason === "ready" ? t("열린 PR · 보안 게이트 통과 여부 확인 필요", "Open · Security gate unverified") : t(labels[pr.reason][0], labels[pr.reason][1]);
   const args = { projectId, repo: pr.repo, number: pr.number };
 
@@ -152,7 +154,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, securi
   return <View style={{gap: 6, borderTopColor: c.border, borderTopWidth: 1, paddingVertical: 8}}>
     <View style={{ ...wrap, alignItems: "baseline" }}>
       <GitHubPullLink repo={pr.repo} number={pr.number} theme={theme} />
-      <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>· {status}</Text>
+      <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>· {[status, priorityLabel].filter(Boolean).join(" · ")}</Text>
       {workSessions.map(link => <SessionChip key={link.key} label={link.label} theme={theme}
         accessibilityLabel={target + " · " + link.label} onPress={link.open} />)}
       {!workSessions.length && <Text style={{color:c.foregroundMuted,fontSize:12}}>{t("작업 세션 미확인", "No verified work session")}</Text>}
