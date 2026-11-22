@@ -5,6 +5,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
 import { resolveTrackedDecision, mentionsSecurityGate, suggestedTrackedReply, trackedAnswerText, trackedPullTarget, usesSourceCoordinator, type TrackedDecision } from "../shared/tracked-decisions";
 import { Button, SessionChip, type Theme } from "./controls";
+import { HistoryMarkdown } from "./history-markdown";
 import { TrackedPullStatus } from "./pull-requests";
 import { useBoardLanguage } from "./language";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
@@ -36,7 +37,7 @@ function Lines({ title, lines, theme }: { title: string; lines: readonly string[
   if (!lines.length) return null;
   return <View style={{ gap: 3 }}>
     <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, fontWeight: "600" }}>{title}</Text>
-    {lines.map((line, index) => <Text key={index} selectable style={{ color: theme.colors.foreground }}>{line}</Text>)}
+    {lines.map((line, index) => <HistoryMarkdown key={index} theme={theme} source={line} />)}
   </View>;
 }
 
@@ -152,8 +153,8 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
       <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[source || t("보드 공통", "Board-wide"), t(words[0], words[1]), where, item.owner, priorityLabel].filter(Boolean).join(" · ")}</Text>
       {open && <SessionChip theme={theme} label={t("연결 세션", "Linked session")} accessibilityLabel={named(t("연결된 세션 열기", "Open linked session")).accessibilityLabel} onPress={open} />}
     </View>
-    <Text accessibilityRole="header" selectable style={{ color: c.foreground, fontSize: 16, fontWeight: "600" }}>{isMerge ? t("PR 병합", "PR merge") : item.title}</Text>
-    {!!headline && headline !== item.title && <Text selectable style={{ color: c.foreground }}>{headline}</Text>}
+    <HistoryMarkdown theme={theme} source={isMerge ? t("PR 병합", "PR merge") : item.title} heading />
+    {!!headline && headline !== item.title && <HistoryMarkdown theme={theme} source={headline} />}
     {isMerge && (pull || (target
       ? <TrackedPullStatus repo={target.repo} number={target.number} projectId={item.projectId} theme={theme} securityGate={securityGate} />
       : <Text selectable style={{color:c.foregroundMuted}}>{t("PR 링크와 병합 상태 미확인", "Pull request link and merge status unavailable")}</Text>))}
@@ -162,7 +163,7 @@ function DecisionRecord({ item, theme, open, recipientId, onResolved, children, 
     {!isClosed && !needsRefresh && <View style={{ gap: 8 }}>
       {isMerge && !!item.questions.length && <Text accessibilityRole="header" style={{color:c.foreground, borderTopWidth:1, borderTopColor:c.border, paddingTop:10, fontSize:16, fontWeight:"600"}}>{followupTitle}</Text>}
       {item.questions.map((question, index) => <View key={index} style={{ gap: 6 }}>
-        <Text selectable style={{ color: c.foreground, fontWeight: "600" }}>{question.text}</Text>
+        <HistoryMarkdown theme={theme} source={question.text} heading />
         {!!question.options.length && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
           {question.multi ? t("여러 개 선택", "Choose any that apply") : t("하나 선택", "Choose one")}
         </Text>}

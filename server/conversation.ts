@@ -69,15 +69,28 @@ export function excerpt(page: Page): Evidence {
 const noQuestion = /(?:확인해\s*주실\s*것|결정해\s*주실\s*것|확인\s*요청)(?:은|이|이란)?\s*(?:없|없습니다|없음)/;
 
 function questionIn(text: string, coordinatorDigest = false) {
-  const lines = text.replace(/^```[\s\S]*?^```[^\n]*/gm, "").split("\n").map(line => line.trim());
+  const original = text.split("\n");
+  // Keep the source line indexes when ignoring code examples during question detection.
+  const lines = text.replace(/^`{3}[\s\S]*?^`{3}[^\n]*/gm, block => block.replace(/[^\n]/g, ""))
+    .split("\n").map(line => line.trim());
   // A coordinator's digest quotes questions belonging to other sessions in typed table rows.
   const quotedRow = (line: string) => coordinatorDigest && /^\|[^|]+\|\s*(?:question|질문)\s*(?:\+[^|]*)?\|/i.test(line);
   for (let i = lines.length - 1; i >= 0; i--) {
     if (quotedRow(lines[i]) || lines[i].startsWith(">") || noQuestion.test(lines[i]) || optionalOffer.test(lines[i]) || !request.test(lines[i])) continue;
     // Include the checklist or options after a request heading.
-    return lines.slice(i).filter(line => line && !line.startsWith(">") && !quotedRow(line)).join(" ").slice(0, 340);
+    const included = (line: string) => !line.startsWith(">") && !quotedRow(line);
+    return {
+      // Existing replies and ledger matches identify this question by its compact text.
+      question: lines.slice(i).filter(line => line && included(line)).join(" ").slice(0, 340),
+      markdown: original.slice(i).filter((_, index) => included(lines[i + index])).join("\n").trimEnd(),
+    };
   }
   return null;
+}
+
+export function lastConversationQuestion(evidence: Evidence, coordinatorDigest = false) {
+  const last = evidence.turns.at(-1);
+  return last?.role === "assistant" ? questionIn(last.text, coordinatorDigest) : null;
 }
 
 export function classify(e: Evidence, row: SessionRow, decision?: Preferences["judgments"][string], isCoordinator = false): Candidate {
@@ -91,7 +104,7 @@ export function classify(e: Evidence, row: SessionRow, decision?: Preferences["j
   if (!last) return row;
   if (last.role === "assistant") {
     const question = questionIn(last.text, isCoordinator);
-    if (question) return { lane: "human", detail: "세션의 확인 요청 · " + question, ...(last.at ? {decisionRequestedAt:last.at} : {}) };
+    if (question) return { lane: "human", detail: "세션의 확인 요청 · " + question.question, ...(last.at ? {decisionRequestedAt:last.at} : {}) };
   } else {
     const previous = e.turns.slice(0, -1).findLast(t => t.role === "assistant");
     if (previous && questionIn(previous.text, isCoordinator)) {

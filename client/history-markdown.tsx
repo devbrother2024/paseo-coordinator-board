@@ -29,18 +29,18 @@ function inline(tokens:Token[], theme:Theme):ReactNode[] {
   });
 }
 
-export function HistoryMarkdown({source,theme,preview=false,heading=false}:{
-  source:string;theme:Theme;preview?:boolean;heading?:boolean;
+export function HistoryMarkdown({source,theme,preview=false,heading=false,muted=false}:{
+  source:string;theme:Theme;preview?:boolean;heading?:boolean;muted?:boolean;
 }) {
-  const tokens=useMemo(()=>Lexer.lex(source,{gfm:true}),[source]);
+  const tokens=useMemo(()=>Lexer.lex(source,{gfm:true,breaks:true}),[source]);
   const colors=theme.colors;
-  const base:TextStyle={color:colors.foreground,fontSize:14,lineHeight:21,...(heading ? {fontWeight:"600"} : {})};
-  function paragraph(token:Token,i:number,style?:TextStyle) {
-    return <Text key={i} selectable numberOfLines={preview ? 2 : undefined} style={[base,style]}>
+  const base:TextStyle={color:muted ? colors.foregroundMuted : colors.foreground,fontSize:muted ? 13 : 14,lineHeight:21};
+  function paragraph(token:Token,i:number,style?:TextStyle,title=false) {
+    return <Text key={i} accessibilityRole={title || token.type === "heading" ? "header" : undefined} selectable numberOfLines={preview ? 2 : undefined} style={[base,title && {fontSize:15,fontWeight:"600"},style]}>
       {"tokens" in token && token.tokens ? inline(token.tokens,theme) : "text" in token ? token.text : token.raw}
     </Text>;
   }
-  function blocks(all:Token[]):ReactNode[] {
+  function blocks(all:Token[],topLevel=false):ReactNode[] {
     const visible=all.filter(token=>!["space","def"].includes(token.type));
     return (preview ? visible.slice(0,1) : visible).map((token,i)=>{
       switch (token.type) {
@@ -63,9 +63,9 @@ export function HistoryMarkdown({source,theme,preview=false,heading=false}:{
             {row.map((cell,c)=><Text key={c} selectable style={[base,{flex:1,minWidth:0,padding:4,textAlign:cell.align ?? "left",fontWeight:cell.header ? "700" : "400"}]}>{inline(cell.tokens,theme)}</Text>)}
           </View>)}</View>;
         }
-        default:return paragraph(token,i);
+        default:return paragraph(token,i,undefined,topLevel && heading && i === 0);
       }
     });
   }
-  return <View style={{gap:6}}>{blocks(tokens)}</View>;
+  return <View style={{gap:6}}>{blocks(tokens,true)}</View>;
 }

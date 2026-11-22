@@ -13,6 +13,7 @@ export const decisionFields = z.object({
 });
 export const decisionSchema = decisionFields.extend({
   question: z.string().min(1),
+  questionMarkdown: z.string().max(2000).optional(),
   version: z.string().min(1).max(64),
   source: z.enum(["permission", "conversation", "coordinator", "agent-note", "person-note"]),
 });

@@ -1,7 +1,7 @@
 import { useRpc } from "@getpaseo/plugin/client";
 import { TextInput } from "@getpaseo/plugin/client/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Text, View } from "react-native";
+import { Text, useWindowDimensions, View } from "react-native";
 import {
   askDigest,
   operationState,
@@ -50,6 +50,8 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   const [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [text, setText] = useState("");
+  const [editorExpanded, setEditorExpanded] = useState(false);
+  const { height: windowHeight } = useWindowDimensions();
   const photoDraft = usePhotoDraft();
   const hasRequest = Boolean(text.trim() || photoDraft.photos.length);
   const [inputFocused, setInputFocused] = useState(false);
@@ -151,6 +153,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
       delivery.current[kind] = { payload: "", key: "" };
       if (kind === "work") {
         setText("");
+        setEditorExpanded(false);
         photoDraft.clear();
       }
     }
@@ -249,11 +252,17 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
       {coordinator && openCoordinator && <SessionChip theme={theme} label={t("코디네이터 세션", "Coordinator session")} accessibilityLabel={t("코디네이터 세션 열기", "Open coordinator session")} onPress={() => openCoordinator(coordinator)} />}
     </View>
     {coordinator ? <>
-      <Text style={{ color, fontWeight: "600" }}>{t("코디네이터에게 맡길 일", "Request for the coordinator")}</Text>
+      <View style={{ ...wrap, alignItems: "center", justifyContent: "space-between" }}>
+        <Text style={{ color, fontWeight: "600" }}>{t("코디네이터에게 맡길 일", "Request for the coordinator")}</Text>
+        <Button theme={theme} expanded={editorExpanded}
+          label={editorExpanded ? t("입력창 접기", "Collapse editor") : t("입력창 펼치기", "Expand editor")}
+          onPress={() => setEditorExpanded(expanded => !expanded)} />
+      </View>
       <PhotoComposer theme={theme} disabled={busy} draft={photoDraft} text={text} showHint
         openSession={openCoordinator ? () => openCoordinator(coordinator) : undefined}>
         <TextInput accessibilityLabel={t("코디네이터에게 맡길 일", "Request for the coordinator")} placeholder={t("예: 초안 작성과 자료 검증을 나눠 맡겨 주세요", "Example: Assign the first draft and source checks separately.")} value={text}
-          placeholderTextColor={muted} style={{ minHeight: 64, padding: 10, textAlignVertical: "top", color,
+          placeholderTextColor={muted} style={{ minHeight: 64, height: editorExpanded ? Math.min(480, Math.max(160, Math.round(windowHeight * 0.48))) : undefined,
+            padding: 10, textAlignVertical: "top", color,
             backgroundColor: theme.colors.surface0, borderColor: inputFocused ? theme.colors.accent : muted, borderWidth: 2, borderRadius: 7 }}
           onFocus={() => setInputFocused(true)} onBlur={() => setInputFocused(false)}
           editable={!busy} multiline maxLength={24000} onChangeText={setText} />

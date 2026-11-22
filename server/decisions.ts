@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import type { Decision, DecisionInput } from "../shared/decision-actions";
 import type { Note, SessionRow } from "../shared/contract";
-import { classify, ConversationReader } from "./conversation";
+import { classify, ConversationReader, lastConversationQuestion, type Evidence } from "./conversation";
 import { isCurrentMembership, managedSessions } from "./session-links";
 import { discoverSessions } from "./discovery";
 import type { NoteStore } from "./notes";
@@ -18,7 +18,7 @@ const changed = "결정 카드 또는 수신자가 바뀌었습니다. 보드를
 const blocked = "이 세션의 현재 상태에서는 보낼 수 없습니다. 원래 세션에서 권한 요청과 작업 상태를 확인하세요.";
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
-export function decorateDecision(row: SessionRow, note: Note | undefined, prefs: Preferences) {
+export function decorateDecision(row: SessionRow, note: Note | undefined, prefs: Preferences, evidence?: Evidence) {
   const answer = prefs.answers[row.id];
   const noteQuestion = note?.kind === "question";
   const answeredNote = noteQuestion && answer?.noteRevision === note.revision;
@@ -43,7 +43,15 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
     row.decisionAnswered = true;
     row.lane = "review";
     row.detail = "답장을 보냈습니다. 담당 세션의 결과를 기다립니다.";
-  } else row.decision = { ...content, version };
+  } else {
+    row.decision = { ...content, version };
+    if (content.source === "conversation" && evidence) {
+      const excerpt = lastConversationQuestion(evidence, row.id === prefs.coordinator);
+      if (excerpt?.question === content.question && excerpt.markdown !== content.question) {
+        row.decision.questionMarkdown = excerpt.markdown;
+      }
+    }
+  }
 }
 
 function requireScope(scope: Preferences, input: DecisionInput) {
@@ -146,7 +154,7 @@ export class DecisionSender {
       const judgment = current.judgments[row.id];
       if (verifiedBoardFact(row, evidence, current, note)) throw Error(changed);
       Object.assign(row, classify(evidence, row, judgment?.projectId === row.projectId ? judgment : undefined, row.id === current.coordinator), { evidenceId: evidence.id });
-      decorateDecision(row, note, current);
+      decorateDecision(row, note, current, evidence);
       restoreClarifiedDecision(row, note, current, evidence);
       if (!row.decision || row.decision.source === "permission" || row.decision.version !== input.version) throw Error(changed);
       text = sessionReplyMessage(row,input);

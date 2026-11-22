@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { View, Pressable, Text, ScrollView } from "react-native";
 import { Button, SessionChip, type Theme } from "./controls";
 import { useBoardLanguage } from "./language";
@@ -7,6 +7,9 @@ import type { PullRequestItem } from "../shared/prs";
 import type { TrackedDecision } from "../shared/tracked-decisions";
 import { factStatus, laneLabel, noteLabel, sessionDetail, type Card, type Lane } from "./model";
 import type { ReplyEntry } from "../shared/reply-history";
+import type { HistoryLinks } from "./history-sessions";
+import { plainDecisionTitle } from "./decision-summary";
+import { HistoryMarkdown } from "./history-markdown";
 import { ReplyCard } from "./reply-history";
 type ColumnKind = Lane | "history";
 type Actions = { sessionHostLabel?: string; onOpen?: (id:string) => void; onEdit:(id:string) => void };
@@ -26,8 +29,11 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
   const c = theme.colors;
   const fact = session.boardFact;
   const question = session.decision?.question;
+  const displayedQuestion = session.decision?.source === "permission" && question ? sessionDetail(question, t)
+    : session.decision?.questionMarkdown ?? question;
+  const detailIsQuestion = !!question && (question === session.detail || session.detail.endsWith(" · " + question));
   const runtime = [session.provider, session.model === session.provider ? null : session.model].filter(Boolean).join(" / ");
-  const noteText = note && note.kind !== "clear" ? [note.origin === "agent" ? t("세션 보고", "Session report") : null, noteLabel(note.kind, t), note.text].filter(Boolean).join(" · ") : null;
+  const noteTitle = note && note.kind !== "clear" ? [note.origin === "agent" ? t("세션 보고", "Session report") : null, noteLabel(note.kind, t)].filter(Boolean).join(" · ") : null;
   return (
     <View style={{ padding: 10, borderRadius: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface0, gap: 6 }}>
       <Pressable accessibilityRole="button" accessibilityState={{ expanded }}
@@ -55,12 +61,14 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
           <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{t("확인 근거", "Source")} · {fact.source}</Text>
         </View>}
         <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[session.sourceProjectTitle && t(`원래 소속 ${session.sourceProjectTitle}`, `From ${session.sourceProjectTitle}`), session.workspaceTitle, runtime].filter(Boolean).join(" · ")}</Text>
-        {!!session.detail && <Text selectable style={{ color: c.foregroundMuted, fontSize: 13 }}>{sessionDetail(session.detail, t)}</Text>}
-        {!!question && question !== session.detail && !session.detail.endsWith(" · " + question) && note?.text !== question &&
-          <Text selectable style={{ color: c.foreground, fontSize: 13 }}>{question}</Text>}
-        {noteText && <Text selectable style={{ color: c.foreground, fontSize: 13 }}>{noteText}</Text>}
+        {!!session.detail && !detailIsQuestion && <HistoryMarkdown theme={theme} source={sessionDetail(session.detail, t)} muted />}
+        {!!displayedQuestion && note?.text !== question && <HistoryMarkdown theme={theme} source={displayedQuestion} />}
+        {noteTitle && note && <View style={{ gap: 3 }}>
+          <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{noteTitle}</Text>
+          <HistoryMarkdown theme={theme} source={note.text} />
+        </View>}
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 5 }}>
-          <Button theme={theme} label={noteText ? t("기록 편집", "Edit note") : t("기록 추가", "Add note")} accessibilityLabel={t(`기록 편집 · ${session.title}`, `Edit note · ${session.title}`)} onPress={() => onEdit(session.id)} />
+          <Button theme={theme} label={noteTitle ? t("기록 편집", "Edit note") : t("기록 추가", "Add note")} accessibilityLabel={t(`기록 편집 · ${session.title}`, `Edit note · ${session.title}`)} onPress={() => onEdit(session.id)} />
         </View>
       </>}
     </View>
@@ -72,10 +80,11 @@ type Entry = {key:string; content: ReactNode};
 function RecordPreview({item,theme,render,open}: {item:TrackedDecision;theme:Theme;render:(item:TrackedDecision)=>ReactNode;open?:()=>void}) {
   const [expanded,setExpanded] = useState(false);
   const {t} = useBoardLanguage();
+  const title = useMemo(() => plainDecisionTitle(item.title), [item.title]);
   return <View style={{gap:4}}>
-    <Button theme={theme} label={expanded ? t("결정 카드 접기","Hide decision card") : item.title}
-      accessibilityLabel={t(`결정 카드 · ${item.title}`,`Decision card · ${item.title}`)} onPress={()=>setExpanded(v=>!v)} />
-    {open && !expanded && <SessionChip theme={theme} label={t("연결 세션","Linked session")} accessibilityLabel={item.title+" · "+t("연결된 세션 열기","Open linked session")} onPress={open} />}
+    <Button theme={theme} label={expanded ? t("결정 카드 접기","Hide decision card") : title}
+      accessibilityLabel={t(`결정 카드 · ${title}`,`Decision card · ${title}`)} onPress={()=>setExpanded(v=>!v)} />
+    {open && !expanded && <SessionChip theme={theme} label={t("연결 세션","Linked session")} accessibilityLabel={title+" · "+t("연결된 세션 열기","Open linked session")} onPress={open} />}
     {expanded && render(item)}
   </View>;
 }
@@ -95,14 +104,14 @@ function Column({lane,entries,theme}: {lane:ColumnKind;entries:Entry[];theme:The
   </View>;
 }
 
-type Props = Actions & {projectId:string; title:string; history?:ReplyEntry[]; decisions:number; cards:Card[]; records:TrackedDecision[]; requests:PullRequestItem[];
+type Props = Actions & {projectId:string; title:string; history?:ReplyEntry[]; historyLinks:HistoryLinks; openRemote?:(host:string,id:string)=>void; decisions:number; cards:Card[]; records:TrackedDecision[]; requests:PullRequestItem[];
   renderRecord:(item:TrackedDecision)=>ReactNode; theme:Theme; compact:boolean; openRecord:(item:TrackedDecision)=>(()=>void)|undefined; renderPull:(pr:PullRequestItem,projectId:string)=>ReactNode};
 const order:ColumnKind[] = ["running","review","human","history","idle","done","unknown"];
 
-export function Project({projectId,title,decisions,cards,records,history=[],requests,renderRecord,theme,compact,openRecord,renderPull,...actions}:Props) {
+export function Project({projectId,title,decisions,cards,records,history=[],historyLinks,openRemote,requests,renderRecord,theme,compact,openRecord,renderPull,...actions}:Props) {
   const {t} = useBoardLanguage();
   const [width,setWidth] = useState(0);
-  const groups:Record<ColumnKind,Entry[]> = {history: history.map(entry=>({key:entry.key,content:<ReplyCard entry={entry} theme={theme} open={actions.onOpen} />})),running:[],review:[],human:[],idle:[],done:[],unknown:[]};
+  const groups:Record<ColumnKind,Entry[]> = {history: history.map(entry=>({key:entry.key,content:<ReplyCard links={historyLinks} openRemote={openRemote} entry={entry} theme={theme} open={actions.onOpen} />})),running:[],review:[],human:[],idle:[],done:[],unknown:[]};
   for(const item of records) {
     const since = Date.parse(item.since ?? "");
     const answered = item.replyHistory.some(reply => Date.parse(reply.at ?? "") >= since);

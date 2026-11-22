@@ -82,7 +82,7 @@ export default function contribute(server: PluginServerContext) {
     const visibleNotes = notes.visible(new Set(visible.map(s => s.id)));
     facts.decorate(visible, evidence, visibleNotes);
     for (const row of visible) {
-      decorateDecision(row, visibleNotes[row.id], latest);
+      decorateDecision(row, visibleNotes[row.id], latest, evidence.get(row.id));
       restoreClarifiedDecision(row, visibleNotes[row.id], latest, evidence.get(row.id));
     }
     const selected = new Set(latest.projects);
@@ -104,13 +104,14 @@ export default function contribute(server: PluginServerContext) {
       if (!detail?.projectId || !selected.has(detail.projectId) || (receipt.messageId && receipt.messageId !== id)) continue;
       const reply = detail.recipientId && receipt.status === "sent" ? evidence.get(detail.recipientId)?.replies?.get(id) : undefined;
       if (reply && reply !== receipt.response) updates.set(id, reply);
-      activity.push({...detail, key:id, status:receipt.status, messageId:id, response:reply ?? receipt.response});
+      activity.push({...detail, origin:detail.origin ?? {sessionId:receipt.sessionId, cardId:receipt.sessionId, revision:receipt.version, questions:[{id:receipt.version}]}, key:id, status:receipt.status, messageId:id, response:reply ?? receipt.response});
     }
     if (updates.size) prefs.change(current => {
       for (const [id,text] of updates) if (current.decisionReceipts[id]) current.decisionReceipts[id].response = text;
     });
     for (const entry of activity) {
-      const target = entry.recipientId && targets.get(entry.recipientId);
+      const id = entry.recipientId ?? entry.pullMerge?.notification?.recipientId;
+      const target = id && targets.get(id);
       if (!target) { delete entry.response; continue; }
       entry.canOpen = true;
       entry.recipientTitle = target.title;

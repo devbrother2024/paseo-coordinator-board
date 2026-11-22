@@ -1,4 +1,5 @@
 import type { BoardReadiness } from "../shared/readiness";
+import { historySessionLinks, type HistoryLinks } from "./history-sessions";
 import { ReplyHistory } from "./reply-history";
 import { TrackedDecisionCard } from "./tracked-decisions";
 import { mentionsSecurityGate, trackedCoverage, trackedRecipient, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
@@ -11,8 +12,9 @@ import { latestMergeNotification } from "./merge-notification";
 import { decisionSummary } from "./decision-summary";
 import { matchesWorkspace } from "../shared/workspace-pull";
 import type { PullRequestItem } from "../shared/prs";
-import type { PluginScreenProps } from "@getpaseo/plugin/client";
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { getPaseoClient, type PluginScreenProps } from "@getpaseo/plugin/client";
+import { remoteScope, readRemoteHistorySession } from "./remote-sessions";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { DecisionActions, type DecisionReceipt } from "./decision-actions";
 import { Clarification } from "./clarification";
@@ -111,6 +113,16 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const incomplete = snapshot?.trackedDecisions && ["partial","unavailable","invalid"].includes(snapshot.trackedDecisions.status);
   const [settings, setSettings] = useState(false);
   const peers = useRemoteRunning({id:hostId ?? "",label:hostLabel}, snapshot?.projects ?? [], pullRequests?.projects ?? [], !!hostId && !settings);
+  const historyRepos = useMemo(() => new Map(pullRequests?.projects.flatMap(p =>
+    p.repo && p.mode !== "off" ? [[p.projectId,p.repo] as const] : [])), [pullRequests?.projects]);
+  const historyScope = useMemo(() => remoteScope(snapshot?.projects ?? [],pullRequests?.projects ?? []), [snapshot?.projects,pullRequests?.projects]);
+  const scopeKey = JSON.stringify([hostId, historyScope, peers.map(p=>p.host.serverId).sort()]);
+  const currentHistoryScope = useRef(scopeKey);
+  currentHistoryScope.current = scopeKey;
+  const historyLinks:HistoryLinks = entry => historySessionLinks(entry, {
+    hostId, sessions:snapshot?.sessions ?? [], peers, repos:historyRepos,
+    verifyRemote:(host,id,project) => readRemoteHistorySession(getPaseoClient(host),id,project,historyScope,()=>currentHistoryScope.current===scopeKey),
+  });
   const [showError, setShowError] = useState(false);
   const [manage, setManage] = useState(false);
   const [pickSession, setPickSession] = useState(false);
@@ -306,14 +318,14 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         {remaining > 0 && <Button theme={theme} label={t(`결정 ${remaining}건 더 보기`, `Show ${remaining} more decisions`)} onPress={() => setDigestLimit(total)} />}
       </View>}
       {!settings && configured && filteredHistory.length>0 && <View>
-        <ReplyHistory entries={filteredHistory} theme={theme} open={actions.onOpen} expanded={showHistory} onToggle={()=>setHistoryOpen(!showHistory)} />
+        <ReplyHistory links={historyLinks} openRemote={onOpenHostSession} entries={filteredHistory} theme={theme} open={actions.onOpen} expanded={showHistory} onToggle={()=>setHistoryOpen(!showHistory)} />
       </View>}
       {!settings && snapshot && !visibleProjects.length && !showHostWide && (configured || !snapshot.projects.length) && <Text style={{ color: c.foregroundMuted }}>{t("표시할 세션이 없습니다. 워크스페이스에서 세션을 시작하면 여기에 나타납니다.", "Start a session in a workspace to see it here.")}</Text>}
       {!settings && (visibleProjects.length > 0 || showHostWide) && <Text accessibilityRole="header" style={{ color: c.foreground, fontSize: 19, fontWeight: "700" }}>{t("프로젝트별 진행", "Project progress")}</Text>}
-      {!settings && showHostWide && <Project projectId="" title={t("공통","Host-wide")} cards={[]} requests={[]} history={history.filter(entry=>entry.projectId === null)}
+      {!settings && showHostWide && <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId="" title={t("공통","Host-wide")} cards={[]} requests={[]} history={history.filter(entry=>entry.projectId === null)}
         records={records.filter(item=>item.projectId === null)} decisions={byProject.get(null) ?? 0} renderRecord={renderRecord} renderPull={renderPull}
         openRecord={linkedSession} compact={layout.compact} theme={theme} {...actions} />}
-      {!settings && visibleProjects.map((p) => <Project projectId={p.id} history={history.filter(entry=>entry.projectId===p.id)} records={records.filter(r => r.projectId === p.id)} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} openRecord={linkedSession} requests={pullRequests?.items.filter(pr => pr.projectIds.includes(p.id)) ?? []} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
+      {!settings && visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} history={history.filter(entry=>entry.projectId===p.id)} records={records.filter(r => r.projectId === p.id)} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} openRecord={linkedSession} requests={pullRequests?.items.filter(pr => pr.projectIds.includes(p.id)) ?? []} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
       {!settings && hostId && snapshot && configured && <RemoteRunning groups={peers.map(group => ({...group, rows:group.rows.filter(row => inFilter(row.projectId))}))}
         projects={snapshot.projects} open={onOpenHostSession} theme={theme} />}
     </ScrollView>

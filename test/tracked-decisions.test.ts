@@ -378,3 +378,21 @@ test("changing display-only priority metadata preserves the original answer rece
   f.write([{...original,dueAt:"2026-11-23",blocksWork:true}]);
   expect(f.read().items).toEqual([]);
 });
+
+test("legacy history recovers a source only from the originally answered revision and keeps it after the feed disappears",()=>{
+  const f=fixture();
+  const source = row("same",{sessionId:"original",sessionHost:"laptop",questions:[{id:"Q1",text:"Which one?"}]});
+  f.write([source,row("changed",{sessionId:"before"})]);
+  const original=f.read().items;
+  writeFileSync(join(f.dir,"tracked-decisions.resolved.json"),JSON.stringify({version:1,items:original.map(item=>({
+    key:item.key,fingerprint:item.fingerprint,at:"2026-11-20T10:00:00.000Z",answer:"Confirmed",
+  }))}));
+  f.write([source,row("changed",{sessionId:"after"})]);
+  const history=f.read().history!;
+  expect(history[0]).toMatchObject({status:"recorded",origin:{sessionId:"original",sessionHost:"laptop",questions:[]}});
+  expect(history[0].recipientId).toBeUndefined();
+  expect(history[1].origin).toBeUndefined();
+  expect(f.service.resolve({...original[0],answer:"Confirmed",questionIndexes:[0]},()=>f.selected)).toEqual({status:"already-closed"});
+  f.write([]);
+  expect(f.read().history?.[0].origin?.sessionId).toBe("original");
+});

@@ -5,10 +5,11 @@ import { pullUrl } from "../shared/prs";
 import { mergeNotificationLabel } from "./merge-notification";
 import { readReplyPhoto, type ReplyEntry } from "../shared/reply-history";
 import { Button, SessionChip, type Theme } from "./controls";
+import type { HistoryLinks, HistorySession } from "./history-sessions";
 import { HistoryMarkdown } from "./history-markdown";
 import { useBoardLanguage } from "./language";
 
-type Props = { entry: ReplyEntry; theme: Theme; open?: (id:string) => void };
+type Props = { entry: ReplyEntry; theme: Theme; links: HistoryLinks; open?: (id:string) => void; openRemote?: (host:string,id:string) => void };
 
 function LocalPhoto({ entryKey, index, theme }: { entryKey: string; index: number; theme: Theme }) {
   const {t} = useBoardLanguage();
@@ -38,7 +39,37 @@ function LocalPhoto({ entryKey, index, theme }: { entryKey: string; index: numbe
     style={{ height:200, width:"100%", borderRadius:5, backgroundColor:theme.colors.surface1 }} />;
 }
 
-export function ReplyCard({entry, theme, open}:Props) {
+function SessionReference({session,state,open,openRemote,theme}:Pick<Props,"open"|"openRemote"|"theme"> & {session:HistorySession;state?:string}) {
+  const {t} = useBoardLanguage();
+  const [checking,setChecking] = useState(false);
+  const [failed,setFailed] = useState(false);
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  const role = {source:t("원래 세션","Source session"), received:t("받은 세션","Recipient session"), target:t("전송 대상","Intended recipient")}[session.role];
+  const title = session.title || session.id;
+  const label = [role,session.hostLabel ?? session.host,title,state].filter(Boolean).join(" · ");
+  const host = session.host;
+  const navigate = host ? openRemote && (() => openRemote(host,session.id)) : open && (() => open(session.id));
+  if ((!session.available && !session.verify) || !navigate) return <Text selectable style={{color:theme.colors.foregroundMuted,fontSize:12}}>
+    {label}{!session.available && " · " + t("연결 미확인","Connection unverified")}</Text>;
+  async function visit() {
+    if (!navigate || checking) return;
+    if (session.available) { navigate(); return; }
+    setChecking(true); setFailed(false);
+    try {
+      const verified = await session.verify?.();
+      if (active.current) { if (verified) navigate(); else setFailed(true); }
+    } catch { if (active.current) setFailed(true); }
+    finally { if (active.current) setChecking(false); }
+  }
+  return <View style={{maxWidth:"100%",gap:2}}>
+    <SessionChip theme={theme} label={label} accessibilityLabel={t(role+" 열기 · "+title,"Open "+role+" · "+title)} onPress={() => void visit()} />
+    {(checking || failed) && <Text accessibilityLiveRegion="polite" style={{color:theme.colors.foregroundMuted,fontSize:12}}>{checking
+      ? t("세션 확인 중…","Checking session…") : t("이 호스트에서 세션 연결을 확인하지 못했습니다.","Could not verify this session on its host.")}</Text>}
+  </View>;
+}
+
+export function ReplyCard({entry, theme, links, open, openRemote}:Props) {
   const {t,language} = useBoardLanguage();
   const colors = theme.colors;
   const [full,setFull] = useState(false);
@@ -57,13 +88,16 @@ export function ReplyCard({entry, theme, open}:Props) {
     error:t("오류","Error"), unknown:t("미확인","Unknown")};
   const date = new Date(entry.at).toLocaleString(language === "ko" ? "ko-KR" : "en-US",
     {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"});
-  const recipient = entry.recipientTitle ?? (entry.coordinator ? t("코디네이터","Coordinator") : entry.recipientId);
+  const sessions = links(entry);
   return <View style={{gap:5,padding:9,borderRadius:7,backgroundColor:colors.surface0,borderWidth:1,borderColor:colors.border}}>
     {merge ? <>
       <Text selectable style={{color:colors.foreground,fontWeight:"600"}}>{entry.title}</Text>
       <HistoryMarkdown theme={theme} source={`[${merge.repo} #${merge.number}](${pullUrl(merge.repo,merge.number)})`} />
     </> : <HistoryMarkdown theme={theme} source={entry.title} heading />}
-    <Text selectable style={{color:colors.foregroundMuted,fontSize:12}}>{[status, mergeNotificationLabel(merge?.notification, t), date, recipient, merge?.mergeSha?.slice(0, 12)].filter(Boolean).join(" · ")}</Text>
+    <Text selectable style={{color:colors.foregroundMuted,fontSize:12}}>{[status, mergeNotificationLabel(merge?.notification, t), date, merge?.mergeSha?.slice(0, 12)].filter(Boolean).join(" · ")}</Text>
+    {!!sessions.length && <View style={{flexDirection:"row",flexWrap:"wrap",gap:5}}>{sessions.map(session =>
+      <SessionReference key={JSON.stringify([session.role,session.host,session.id])} session={session} state={session.state && states[session.state]}
+        open={open} openRemote={openRemote} theme={theme} />)}</View>}
     {!!entry.reviewReason && <HistoryMarkdown theme={theme} source={entry.reviewReason} />}
     {!!entry.answer && <HistoryMarkdown theme={theme} source={entry.answer} preview={long && !full} />}
     {!!entry.imageCount && <View style={{gap:4}}>
@@ -92,20 +126,17 @@ export function ReplyCard({entry, theme, open}:Props) {
         t("기록 버전", "Revision") + " · " + origin.revision,
       ].filter(Boolean).join("\n")}</Text>}
     </View>}
-    {entry.recipientId && entry.canOpen && open && <SessionChip theme={theme}
-      label={[t("받은 세션","Recipient session"),entry.recipientState && states[entry.recipientState]].filter(Boolean).join(" · ")}
-      accessibilityLabel={t(`받은 세션 열기 · ${entry.title}`,`Open recipient session · ${entry.title}`)} onPress={()=>open(entry.recipientId!)} />}
   </View>;
 }
 
-export function ReplyHistory({entries,theme,open,expanded,onToggle}:{entries:ReplyEntry[];theme:Theme;open?:Props["open"];expanded:boolean;onToggle:()=>void}) {
+export function ReplyHistory({entries,theme,links,open,openRemote,expanded,onToggle}:Omit<Props,"entry"> & {entries:ReplyEntry[];expanded:boolean;onToggle:()=>void}) {
   const {t} = useBoardLanguage();
   const [limit,setLimit] = useState(1);
   if (!entries.length) return null;
   return <View style={{gap:6}}>
     <Button theme={theme} expanded={expanded} onPress={onToggle} accessibilityLabel={t("최근 결정 기록","Recent decision activity")}
       label={t(`최근 결정 기록 · ${entries.length}건`,`Recent decision activity · ${entries.length}`) + (expanded ? " ▴" : " ▾")} />
-    {expanded && entries.slice(0, limit).map(entry=><ReplyCard key={entry.key} entry={entry} open={open} theme={theme} />)}
+    {expanded && entries.slice(0, limit).map(entry=><ReplyCard key={entry.key} entry={entry} links={links} open={open} openRemote={openRemote} theme={theme} />)}
     {expanded && entries.length > limit && <Button theme={theme} label={t("이전 기록 더 보기","Show earlier activity")} onPress={()=>setLimit(n=>n+10)} />}
   </View>;
 }

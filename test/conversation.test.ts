@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { classify, ConversationReader, excerpt } from "../server/conversation";
 import { attachCoordinatorTools } from "../server/coordinator";
 import { PreferenceStore } from "../server/preferences";
+import { Lexer } from "../client/vendor/marked/marked";
+import { decisionSummary } from "../client/decision-summary";
+import { decorateDecision } from "../server/decisions";
 import { projectCards } from "../client/model";
 
 const row = { id: "worker", status: "idle", projectId: "p", projectTitle: "프로젝트", workspaceTitle: "w", model: null, title: "자막", lane: "idle", detail: "다음 요청 대기", activityAt: "1" } as const;
@@ -89,4 +92,29 @@ test("uses the timestamp of this exact question across a coordinator rewording",
   const judgment={kind:"question" as const,projectId:"p",evidenceId:"seen",text:"Which version?",requestedAt:later};
   expect(classify(evidence,row,judgment).decisionRequestedAt).toBe(at);
   expect(classify({...evidence,turns:[{role:"user",text:"I need to decide soon",at}]},row,judgment).decisionRequestedAt).toBe(later);
+});
+
+test("the decision card preserves the original request Markdown and the existing answer identity", () => {
+  const lead = "실험용 파이썬 환경(`lab/.venv`, 1.1GB)은 지시 범위 밖이라 남겼습니다. 지울지 알려 주세요.";
+  const markdown = [lead, "", "- **사람 확인이 필요한 항목**", "  - 결과 카드를 다른 앱에 끌어 놓기", "- Windows판은 U7에서 이어집니다(#152)."].join("\n");
+  const seen = evidence(["assistant_message", "완료한 일입니다.\n" + markdown]);
+  const session = {...row, ...classify(seen,row), evidenceId:seen.id};
+  const scope = {judgments:{}, answers:{}};
+  const legacy = {...session};
+  decorateDecision(legacy, undefined, scope);
+  decorateDecision(session, undefined, scope, seen);
+  expect(session.decision.version).toBe(legacy.decision.version);
+  expect(session.decision.question).toBe(markdown.split("\n").map(line=>line.trim()).filter(Boolean).join(" "));
+  const display = decisionSummary({session,lane:"human"}, text=>text);
+  expect(display.headline).toBe(markdown);
+  expect(display.evidence).toEqual([markdown]);
+  const [paragraph, list] = Lexer.lex(display.headline, {gfm:true, breaks:true}).filter(token=>token.type !== "space");
+  expect(paragraph.tokens.map(token=>token.type)).toContain("codespan");
+  expect(list.items).toHaveLength(2);
+  expect(list.items[0].tokens.map(token=>token.type)).toContain("list");
+  scope.answers.worker = {version: legacy.decision.version};
+  const resolved = {...row,...classify(seen,row), evidenceId:seen.id};
+  decorateDecision(resolved, undefined, scope, seen);
+  expect(resolved.decisionAnswered).toBe(true);
+  expect(resolved.decision).toBeUndefined();
 });

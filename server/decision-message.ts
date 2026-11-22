@@ -34,6 +34,7 @@ function trackedQuestions(item:TrackedDecisionInput,input:TrackedResolution) {
 
 export function trackedReplyOrigin(item:TrackedDecisionInput, input:TrackedResolution) {
   return {sessionId:item.sessionId ?? item.sessionMatch?.sessionId ?? null, sessionHost:item.sessionHost ?? undefined,
+    ...(item.sessionMatch && (!item.sessionId || item.sessionMatch.sessionId === item.sessionId) ? {sessionProjectId:item.sessionMatch.projectId} : {}),
     cardId:item.id, revision:input.fingerprint,
     questions:trackedQuestions(item,input).map(({text,...ref})=>ref)};
 }

@@ -76,3 +76,21 @@ test("조회 중 호스트 제외 시 다음 페이지나 작업 공간 조회�
   await expect(readRemoteSessions(client, scope, () => active)).rejects.toThrow("scope changed");
   expect(readCount).toBe(1);
 });
+
+test("opening an idle remote history source checks its exact identity and project without listing every session",async()=>{
+ const {readRemoteHistorySession} = await import("../client/remote-sessions");
+ const sources=[ws("remote-w","x","Test/Beta")];
+ let current=ag("old","remote-w",{status:"closed"}); let agents=0, spaces=0;
+ const client={
+  agents:{ref:(id:string)=>({refresh:async()=>{agents++;expect(id).toBe("old");return current;}})},
+  workspaces:{list:async()=>{spaces++;return {entries:sources,pageInfo:{hasMore:false,nextCursor:null}};}},
+ } as unknown as Reader;
+ expect(await readRemoteHistorySession(client,"old","b",scope)).toBe(true);
+ expect(await readRemoteHistorySession(client,"old","a",scope)).toBe(false);
+ current=ag("other","remote-w",{status:"idle"});
+ expect(await readRemoteHistorySession(client,"old","b",scope)).toBe(false);
+ current=ag("old","remote-w",{status:"idle",archivedAt:"2026-01-01"});
+ expect(await readRemoteHistorySession(client,"old","b",scope)).toBe(false);
+ expect(await readRemoteHistorySession(client,"old","excluded",scope)).toBe(false);
+ expect(agents).toBe(4);expect(spaces).toBe(2);
+});

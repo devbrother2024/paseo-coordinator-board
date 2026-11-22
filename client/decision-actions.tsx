@@ -5,6 +5,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { sendDecision, type DecisionInput } from "../shared/decision-actions";
 import { requestRecommendation } from "../shared/recommendation";
+import { HistoryMarkdown } from "./history-markdown";
 import { decisionSummary } from "./decision-summary";
 import { Button, SessionChip, type Theme } from "./controls";
 import { useBoardLanguage } from "./language";
@@ -112,7 +113,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   }
 
   const targetChanged = editor?.action === "coordinate" && editor.recipientId !== coordinator;
-  const sourceExcerpts = evidence.filter(text => text !== headline || headline.length > 36);
+  const sourceExcerpts = evidence.filter(text => text !== headline);
   const hasEvidence = !!decision?.recommendationReason || sourceExcerpts.length > 0;
   const adviceSent = !!coordinator && requestedFrom === coordinator;
   const disclose = (label: string, expanded: boolean, onPress: () => void) =>
@@ -121,7 +122,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
       <Text style={{ color: c.foregroundMuted, fontSize: 13, textDecorationLine: "underline" }}>{label}</Text>
     </Pressable>;
   return <View style={{ gap: 7, paddingTop: 10, borderTopWidth: 1, borderColor: c.border }}>
-    <Text accessibilityRole="header" selectable style={{ color: c.foreground, fontSize: 15, fontWeight: "600" }}>{headline}</Text>
+    <HistoryMarkdown theme={theme} source={headline} heading />
     <View style={{ ...wrap, alignItems: "center" }}>
       <Text selectable style={{ color: c.foregroundMuted, fontSize: 12, flexShrink: 1 }}>{[marker, priorityLabel].filter(Boolean).join(" · ")}</Text>
       {open && <SessionChip theme={theme} label={t("담당 세션", "Assigned session")} accessibilityLabel={named(t("담당 세션 열기", "Open assigned session")).accessibilityLabel} onPress={() => open(session.id)} />}
@@ -130,7 +131,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
       {t("승인 요청은 담당 세션에서 확인해 주세요.", "Review the approval request in the assigned session.")}
     </Text> : <>
       {!editor && <>
-        {!proposed && !!decision.needsInput && decision.needsInput !== headline && <Text selectable style={{ color: c.foreground }}>{decision.needsInput}</Text>}
+        {!proposed && !!decision.needsInput && decision.needsInput !== headline && <HistoryMarkdown theme={theme} source={decision.needsInput} />}
           {!!decision.options?.length && <View style={wrap}>{decision.options.map((option, index) =>
             <Button key={index} theme={theme} label={option.label} selected={selection === index}
               accessibilityLabel={`${session.title} · ${t("선택", "Choose")} · ${option.label}`} disabled={busy}
@@ -191,8 +192,11 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
     </View>
     {hasEvidence && <View style={{ alignItems: "flex-start", gap: 4 }}>
       {disclose(showEvidence ? t("근거 접기", "Hide source") : t("근거 보기", "View source"), showEvidence, () => setShowEvidence(v => !v))}
-      {showEvidence && decision?.recommendationReason && <Text selectable style={{ color: c.foreground }}>{t("추천 이유", "Reason for recommendation")} · {decision.recommendationReason}</Text>}
-      {showEvidence && sourceExcerpts.map(text => <Text key={text} selectable style={{ color: c.foregroundMuted, fontSize: 13 }}>{text}</Text>)}
+      {showEvidence && decision?.recommendationReason && <View style={{ gap: 3 }}>
+        <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{t("추천 이유", "Reason for recommendation")}</Text>
+        <HistoryMarkdown theme={theme} source={decision.recommendationReason} />
+      </View>}
+      {showEvidence && sourceExcerpts.map(text => <HistoryMarkdown key={text} theme={theme} source={text} muted />)}
     </View>}
     {receipt && <ReceiptText receipt={receipt} theme={theme} />}
     {!!error && <Text accessibilityLiveRegion="polite" selectable style={{ color: c.statusDanger }}>{t(...error)}</Text>}

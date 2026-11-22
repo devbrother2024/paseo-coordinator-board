@@ -4,7 +4,7 @@ import { pullMergeEvidence } from "./prs";
 import { MAX_WORK_IMAGES, workImage } from "./work-images";
 
 export const replyOrigin = z.object({
-  sessionId: z.string().nullable(), sessionHost: z.string().optional(),
+  sessionId: z.string().nullable(), sessionHost: z.string().optional(), sessionProjectId: z.string().optional(),
   cardId: z.string(), revision: z.string(), questions: z.array(z.object({id:z.string(),index:z.number().int().nonnegative().optional()})).max(128),
 });
 

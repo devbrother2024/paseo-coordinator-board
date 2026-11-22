@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { decisionSummary } from "../client/decision-summary";
+import { decisionSummary, plainDecisionTitle } from "../client/decision-summary";
 import { factStatus, type Card } from "../client/model";
 
 const ko = (text: string) => text;
@@ -39,4 +39,20 @@ test("delivery labels distinguish a recorded fact and confirmed delivery in both
   expect(new Set(states.map(s => factStatus({ delivery: s, kind: "status" }, ko))).size).toBe(4);
   expect(factStatus({ delivery: "recorded", kind: "report" }, en)).toBe("Progress report recorded");
   expect(factStatus({ delivery: "recorded", kind: "report" }, ko)).toBe("진행 보고 기록됨");
+});
+
+test("structured questions keep choices, line breaks and code attached to a labelled question", () => {
+  const question = "**질문:** 경로를 골라 주세요.\n\n- `경로 A`\n  - 하위 경로\n- [경로 B](https://example.org/b)";
+  const row = card("");
+  row.session.decision = { source: "coordinator", question, version: "v-3" };
+  expect(decisionSummary(row, ko).headline).toBe(question);
+
+  const note = "첫 문장을 읽어 주세요.\n다음 문장도 확인해 주세요.\n\n1. **첫 항목**\n2. 둘째 항목";
+  row.session.decision = { source: "agent-note", question: note, version: "v-4" };
+  expect(decisionSummary(row, ko).headline).toBe(note);
+});
+
+test("kanban buttons use the readable link and code labels of decision titles", () => {
+  expect(plainDecisionTitle("## [**배포 설명**](https://example.org) · `v1`")).toBe("배포 설명 · v1");
+  expect(plainDecisionTitle("#170 **병합**")).toBe("#170 병합");
 });

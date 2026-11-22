@@ -22,6 +22,7 @@ const sourceAuthority = z.object({sourceCoordinatorId:z.string().min(1).max(256)
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const photoReference = z.object({mimeType:z.enum(WORK_IMAGE_MIME_TYPES), digest:sha256});
 const receipt = z.object({
+  legacySession:replyOrigin.pick({sessionId:true,sessionHost:true,sessionProjectId:true}).optional(),
   origin:replyOrigin.optional(), messageHash:sha256.optional(), photos:z.array(photoReference).max(MAX_WORK_IMAGES).optional(),
   reviewedBy:z.string().optional(), reviewReason:z.string().optional(), title:z.string().optional(), coordinator:z.boolean().optional(), response:z.string().optional(),key:z.string(),fingerprint:z.string().regex(/^[a-f0-9]{64}$/),at:z.string().datetime(),answer:z.string().max(4000).optional(), recipientId:z.string().optional(), messageId:z.string().uuid().optional(), pending:z.boolean().optional()});
 const receipts = z.object({version:z.literal(1),items:z.array(receipt)});
@@ -161,12 +162,20 @@ export class TrackedDecisionStore {
       const coordinator = receipt.coordinator ?? (original ? original.where === "manager" || original.where === "human" : undefined);
       const response = receipt.recipientId && receipt.messageId && !receipt.pending
         ? evidence.get(receipt.recipientId)?.replies?.get(receipt.messageId) : undefined;
+      // Older receipts can recover a source from the exact recorded version, even after a restart.
+      // Their selected question indexes were not stored.
+      if (!receipt.origin && !receipt.legacySession && original && (original.sessionId || original.sessionMatch)) {
+        const {sessionId,sessionHost,sessionProjectId} = trackedReplyOrigin(original,{...original,fingerprint:receipt.fingerprint});
+        receipt.legacySession = {sessionId,sessionHost,sessionProjectId};
+        updated = true;
+      }
       // Preserve the old format's title while the original card is still available.
       if ((!receipt.title && original && receipt.recipientId) || (response && response !== receipt.response)) {
         Object.assign(receipt, {title, coordinator, response:response ?? receipt.response});
         updated = true;
       }
-      history.push({key:version, ...(receipt.origin ? {origin:receipt.origin} : {}), title, projectId, coordinator, at:receipt.at, answer:receipt.answer,
+      const origin = receipt.origin ?? (receipt.legacySession && {...receipt.legacySession,cardId:id,revision:receipt.fingerprint,questions:[]});
+      history.push({key:version, ...(origin ? {origin} : {}), title, projectId, coordinator, at:receipt.at, answer:receipt.answer,
         recipientId:receipt.recipientId, messageId:receipt.messageId, response:receipt.response,
         ...(receipt.photos?.length ? {imageCount:receipt.photos.length, localPhotos:!receipt.recipientId} : {}),
         ...(receipt.reviewedBy ? {reviewedBy:receipt.reviewedBy, reviewReason:receipt.reviewReason} : {}),

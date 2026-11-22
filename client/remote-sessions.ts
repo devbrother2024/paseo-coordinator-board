@@ -46,14 +46,14 @@ function repositoriesByProject(workspaces: Workspace[]) {
   return { projectRepos, projectsByRepo };
 }
 
-export function matchRemoteSessions(entries: AgentEntry[], workspaces: Workspace[], scope: RemoteScope): RemoteSession[] {
+export function matchRemoteSessions(entries: AgentEntry[], workspaces: Workspace[], scope: RemoteScope, historyId?:string): RemoteSession[] {
   const byWorkspace = new Map(workspaces.map(ws => [ws.id, ws]));
   const {projectRepos, projectsByRepo} = repositoriesByProject(workspaces);
   const result = new Map<string, RemoteSession>();
   for (const {agent, project} of entries) {
     const ws = agent.workspaceId ? byWorkspace.get(agent.workspaceId) : undefined;
-    if ((agent.workspaceId && !ws) || agent.archivedAt || agent.internal || ws?.internal || ws?.archivingAt || agent.status !== "running" ||
-        agent.pendingPermissions.length || agent.attentionReason === "permission") continue;
+    if ((agent.workspaceId && !ws) || agent.archivedAt || agent.internal || ws?.internal || ws?.archivingAt) continue;
+    if (historyId ? agent.id !== historyId : (agent.status !== "running" || agent.pendingPermissions.length || agent.attentionReason === "permission")) continue;
     const id = ws?.projectId || project.projectKey;
     if (!id || id === "unassigned") continue;
     let matched = id;
@@ -97,4 +97,22 @@ export async function readRemoteSessions(
     });
   });
   return active() ? matchRemoteSessions(agents, spaces, scope) : [];
+}
+
+
+// A history click can reference an idle or closed agent omitted from the running-only directory.
+export async function readRemoteHistorySession(client:Pick<Client,"agents"|"workspaces">, id:string, expectedProject:string,
+  scope:RemoteScope, active = () => true) {
+  if (!active() || !scope.selected.includes(expectedProject)) return false;
+  const result = await client.agents.ref(id).refresh();
+  if (!active() || !result?.project || result.agent.id !== id || result.agent.archivedAt || result.agent.internal) return false;
+  const workspaces = result.agent.workspaceId ? await readPages<Workspace>(page => {
+    if (!active()) throw Error("Remote history scope changed");
+    return client.workspaces.list({filter:{includeBackground:true},sort:[{key:"project_id",direction:"asc"}],page});
+  }) : [];
+  if (!active()) return false;
+  const match = matchRemoteSessions([{agent:result.agent,project:result.project}],workspaces,scope,id)[0];
+  if (!match) return false;
+  const repo = scope.repos.find(([project])=>project === expectedProject)?.[1];
+  return match.projectId === expectedProject || (!!repo && scope.repos.some(([project,slug])=>project === match.projectId && slug === repo));
 }

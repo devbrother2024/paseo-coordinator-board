@@ -31,7 +31,7 @@ required = {
     "shared/tracked-decisions.ts", "server/tracked-decisions.ts", "server/project-decision-sources.ts", "server/pr-merge.ts", "server/merge-notifications.ts",
     "client/tracked-decisions.tsx", "client/project-kanban.tsx", "client/remote-running.tsx", "client/remote-sessions.ts",
     "shared/github-repository.ts", "shared/workspace-pull.ts", "shared/pages.ts", "server/snapshot-reads.ts", "shared/readiness.ts",
-    "client/history-markdown.tsx", "client/vendor/marked/marked.js", "third-party/marked/LICENSE", "client/reply-history.tsx", "shared/reply-history.ts",
+    "client/history-markdown.tsx", "client/vendor/marked/marked.js", "third-party/marked/LICENSE", "client/reply-history.tsx", "client/history-sessions.ts", "shared/reply-history.ts",
     "package.json", "LICENSE", "OVERVIEW.md", "README.md", "templates/coordinator-session.md",
     "third-party/better-paseo/LICENSE", "THIRD_PARTY_NOTICES.md", "assets/preview.png",
 }
