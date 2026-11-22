@@ -21,7 +21,7 @@ paseo plugin ls coordinator-board
 
 레지스트리로 설치한 보드의 새 버전을 확인하려면 `paseo plugin update coordinator-board --check`를 실행하세요. 업데이트하려면 `paseo plugin update coordinator-board`를 실행하고 제안된 변경을 확인합니다.
 
-**Git·ZIP 설치**도 가능합니다. Git이 있는 호스트에서는 `paseo plugin install git:devbrother2024/paseo-coordinator-board --ref main`으로 기본 브랜치를 설치합니다. 이 문서의 버전을 설치하려면 `main` 자리에 `v0.5.21`를 넣으세요. 전체 커밋 SHA도 사용할 수 있습니다. ZIP은 압축을 푼 뒤 `paseo-plugin.json`이 있는 폴더에서 `paseo plugin install .`을 실행하고 그 폴더를 보관하세요. [Paseo 플러그인 안내](https://paseo.sh/docs/plugins)
+**Git·ZIP 설치**도 가능합니다. Git이 있는 호스트에서는 `paseo plugin install git:devbrother2024/paseo-coordinator-board --ref main`으로 기본 브랜치를 설치합니다. 이 문서의 버전을 설치하려면 `main` 자리에 `v0.5.22`를 넣으세요. 전체 커밋 SHA도 사용할 수 있습니다. ZIP은 압축을 푼 뒤 `paseo-plugin.json`이 있는 폴더에서 `paseo plugin install .`을 실행하고 그 폴더를 보관하세요. [Paseo 플러그인 안내](https://paseo.sh/docs/plugins)
 
 **내 결정**에서는 기한이 지났거나 지금 처리해야 하는 카드가 맨 위에 옵니다. 그다음은 답변이나 권한 승인을 기다리는 작업이고, 나머지 카드는 오늘, 이번 주, 그 이후에 기한이 있는 작업, 기한 없는 작업 순으로 표시합니다. 같은 순위에서는 대기를 시작한 시각이 확인된 오래된 카드부터 표시합니다. 처음에는 다섯 장이 보입니다. 답변을 쓰거나 병합을 확인하는 동안에는 갱신이 와도 해당 카드의 자리를 유지합니다.
 
@@ -56,6 +56,16 @@ paseo plugin ls coordinator-board
 직접 확인한 항목은 **확인했어요**에 체크하면 기록으로 옮깁니다. 다이제스트를 요청하면 지정한 코디네이터는 단독 병합 안건의 GitHub 병합 상태와 담당 세션에서 확인한 완료 근거를 바탕으로 확인 기록을 정리할 수 있습니다. 후속 질문이나 사람의 선택이 남은 카드는 열려 있습니다.
 
 **계정별 남은 사용량** · 설정에서 현재 호스트가 알려 주는 기간별 잔여율과 초기화 시각을 확인합니다. **사용량 기반 자동 배정**을 켜면 같은 난이도와 실행 조건을 충족한 후보 중 최근에 측정한 같은 기간의 잔여율을 비교합니다. 직접 저장한 모델 순서가 우선이며, 보고되지 않은 계정의 잔여량은 미확인으로 표시합니다.
+
+계정 카드의 막대는 **남은 비율**입니다. 총한도가 없는 크레딧은 잔액만 표시합니다. 이전 측정에는 조회 시각을 붙이며, 초기화 시각을 지난 값은 다음 조회까지 숨깁니다.
+
+Paseo가 잔여 수치를 제공하지 않는 실행기는 호스트 관리자가 플러그인 데이터 폴더(`$PASEO_HOME/plugin-data/coordinator-board`, 기본 `~/.paseo/plugin-data/coordinator-board`)에 `account-usage.json`을 제공할 수 있습니다. 파일은 설정을 열거나 **실행기·모델 새로 고침**을 누를 때 읽습니다. `providerId`에는 실행기 ID, `fetchedAt`에는 원래 측정 시각을 씁니다. 다음은 형식 예시입니다.
+
+```json
+{"version":1,"reports":[{"providerId":"studio-runner","label":"Studio · 편집 계정","plan":null,"status":"available","fetchedAt":"2026-11-22T10:00:00Z","windows":[{"id":"weekly","label":"주간","remainingPct":72,"resetsAt":"2026-11-28T10:00:00Z","summary":true}],"balances":[]}]}
+```
+
+호스트 추가 보고는 설정에 표시하는 용도입니다. 자동 배정은 Paseo의 사용량 보고서를 사용합니다. 실행기가 같은 구독을 공유할 때도 계정별 비율을 합산하지 않습니다.
 
 처음 만든 운영 워크스페이스는 이 호스트의 Paseo 사이드바에 자동으로 고정됩니다. **설정 → 사이드바 고정**에서 자동 고정을 끌 수 있습니다. 같은 워크스페이스에서 세션을 교체하면 사용자가 정한 고정 상태가 유지됩니다. 이미 쓰던 코디네이터를 고정하려면 **현재 운영 워크스페이스 고정**을 누르세요.
 

@@ -10,6 +10,7 @@ const balance = z.object({
 });
 export const accountUsage = z.object({
   providerId:z.string(), label:z.string(), plan:z.string().nullable(), fetchedAt:stamp,
+  issue:z.enum(["login","rate-limit"]).optional(),
   status:z.enum(["available","unavailable","error"]), windows:z.array(quotaWindow), balances:z.array(balance),
 });
 export type AccountUsage = z.infer<typeof accountUsage>;
@@ -23,6 +24,12 @@ export const setUsageRouting = defineRpc({
 export function recentUsage(report:AccountUsage, now=Date.now()) {
   const fetched = report.fetchedAt ? Date.parse(report.fetchedAt) : NaN;
   return Number.isFinite(fetched) && fetched <= now + 60000 && now - fetched <= 15 * 60000;
+}
+
+export function hasUsageReading(report: AccountUsage) {
+  const live = (reset:string|null) => !reset || Date.parse(reset) > Date.now();
+  return report.status === "available" && (report.windows.some(w => w.remainingPct !== null && live(w.resetsAt))
+    || report.balances.some(b => b.remaining !== null && live(b.resetsAt)));
 }
 
 // The public SDK names a scoped duration "scope:weekly"; native reports also

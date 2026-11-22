@@ -210,7 +210,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
       }} />}
       {feedbackArea === "provider" && feedback}
     </View>
-    {data && <UsageRouting theme={theme} providers={data.providers} reports={data.usage ?? []} enabled={data.usageRouting ?? false} busy={busy || loading || !data.usage}
+    {data && <UsageRouting theme={theme} providers={data.providers} reports={data.usage ?? []} supplemental={data.displayUsage} enabled={data.usageRouting ?? false} busy={busy || loading || !data.usage}
       onToggle={() => void (async () => {
         const result = await act(() => changeUsageRouting({enabled:!data.usageRouting,expectedRevision:data.revision}), t("사용량 기반 배정 설정을 저장했습니다.","Saved the usage routing preference."), "routing");
         if (live.current) await refresh(!!result);

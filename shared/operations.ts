@@ -12,7 +12,7 @@ export const operationState = defineRpc({
     catalog: z.array(catalogModelSchema),
     providers: z.array(providerEntrySchema),
     workerModeOverrides: z.record(workerModeProvider, z.string()).optional(),
-    usage: z.array(accountUsage).optional(), usageRouting: z.boolean().optional(),
+    usage: z.array(accountUsage).optional(), displayUsage: z.array(accountUsage).optional(), usageRouting: z.boolean().optional(),
     coordinatorMode: z.object({ id: z.string(), label: z.string() }).nullable(),
     routing: routePolicySchema,
     revision: z.number().int().nonnegative(),

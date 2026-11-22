@@ -1,4 +1,5 @@
 import { defineAgentTool, type PluginServerContext } from "@getpaseo/plugin/server";
+import { readDisplayUsage } from "./display-usage";
 import { readAccountUsage } from "./usage-routing";
 import { setUsageRouting } from "../shared/usage-routing";
 import { z } from "zod";
@@ -59,7 +60,9 @@ export function createOperations(store: PreferenceStore, workspaceDir: string, f
       const coordinator = resolveRoute("M", scope.routing, catalog, false, scope.usageRouting ? usage : []);
       return {
         usage, usageRouting:scope.usageRouting,
-        ...(settings && { workerModeOverrides: scope.workerModeOverrides }),
+        ...(settings && { workerModeOverrides: scope.workerModeOverrides,
+          displayUsage: await readDisplayUsage(store.directory, directory.providers, usage ?? []),
+        }),
         providers: directory.providers.map(p => ({ ...p, included: !scope.excludedProviders.includes(p.id) })),
         catalog, coordinatorMode: catalog.find(m => m.provider === coordinator?.provider)?.coordinatorMode ?? null,
         routing: scope.routing, revision: scope.routingRevision,

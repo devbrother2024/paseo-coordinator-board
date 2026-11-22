@@ -1,3 +1,8 @@
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readDisplayUsage } from "../server/display-usage";
+
 import {expect,test} from "bun:test";
 import {readAccountUsage} from "../server/usage-routing";
 import {resolveRoute, type CatalogModel} from "../shared/dispatch";
@@ -70,4 +75,37 @@ test("a scoped Fable or feature window cannot exhaust Opus, but an exhausted Fab
   expect(preferCapacity([opus,codex],reports,now)).toBe(opus);
   expect(preferCapacity([fable,codex],reports,now)).toBe(codex);
   expect(preferCapacity([fable,opus,codex],reports,now)).toBe(opus);
+});
+
+test("host readings fill only configured provider gaps and preserve the original observation time",async()=>{
+  const folder=mkdtempSync(join(tmpdir(),"board-usage-"));
+  try {
+    const write=(rows:unknown[])=>writeFileSync(join(folder,"account-usage.json"),JSON.stringify({version:1,reports:rows}));
+    const host=report("custom",0), paid=report("native",70);
+    const installed=[{id:"custom"},{id:"native"}];
+    write([host,paid,report("absent",50),{...host,fetchedAt:"invalid"},{...host,windows:[{...host.windows[0],remainingPct:120}]}]);
+    const empty={...host,status:"unavailable" as const,windows:[]};
+    expect(await readDisplayUsage(folder,installed,[paid,empty])).toEqual([host]);
+    expect(await readDisplayUsage(folder,installed,[host,paid])).toEqual([]);
+    const expired={...host,windows:[{...host.windows[0],resetsAt:"2000-01-01T00:00:00Z"}]};
+    expect(await readDisplayUsage(folder,installed,[expired,paid])).toEqual([host]);
+    const credit={...host,windows:[],balances:[{id:"credits",label:"Credits",remaining:0,unit:"credits",limit:null,resetsAt:null}]};
+    expect(await readDisplayUsage(folder,installed,[credit,paid])).toEqual([]);
+    writeFileSync(join(folder,"account-usage.json"),"{");
+    expect(await readDisplayUsage(folder,installed,[])).toEqual([]);
+    writeFileSync(join(folder,"account-usage.json")," ".repeat(131073));
+    expect(await readDisplayUsage(folder,installed,[])).toEqual([]);
+    rmSync(join(folder,"account-usage.json"));writeFileSync(join(folder,"other"),JSON.stringify({version:1,reports:[host]}));
+    symlinkSync(join(folder,"other"),join(folder,"account-usage.json"));
+    expect(await readDisplayUsage(folder,installed,[])).toEqual([]);
+  } finally {rmSync(folder,{recursive:true,force:true});}
+});
+
+test("usage lookup failures expose only actionable categories",async()=>{
+  const providers=["HTTP 401","HTTP 429","private detail"].map((error,index)=>({
+    providerId:String(index),status:"error",error,windows:[],balances:[],
+  }));
+  const data=await readAccountUsage({providers:{listUsage:async()=>({providers})}} as never);
+  expect(data.map(r=>r.issue)).toEqual(["login","rate-limit",undefined]);
+  expect(JSON.stringify(data)).not.toContain("private detail");
 });

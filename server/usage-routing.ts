@@ -6,6 +6,13 @@ const amount = (n:unknown) => typeof n === "number" && Number.isFinite(n) ? n : 
 const percent = (n:unknown) => typeof n === "number" && Number.isFinite(n) && n>=0 && n<=100 ? n : null;
 const time = (s:unknown) => typeof s==="string" && Number.isFinite(Date.parse(s)) ? s : null;
 
+function usageIssue(error: string | null | undefined) {
+  if (!error) return undefined;
+  if (/\b429\b|rate.limit/i.test(error)) return "rate-limit" as const;
+  if (/\b401\b|sign in again|login expired/i.test(error)) return "login" as const;
+  return undefined;
+}
+
 export async function readAccountUsage(paseo:Sdk):Promise<AccountUsage[]> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -18,6 +25,7 @@ export async function readAccountUsage(paseo:Sdk):Promise<AccountUsage[]> {
     const snapshot = await Promise.race([paseo.providers.listUsage(), deadline]);
     return snapshot.providers.map(p=>({
       providerId:p.providerId,label:p.displayName || p.providerId,plan:p.planLabel ?? null,status:p.status,
+      issue:p.status === "available" ? undefined : usageIssue(p.error),
       fetchedAt:time(p.fetchedAt) ?? time(snapshot.fetchedAt),
       windows:p.windows.map(w=>({
         id:w.id,label:w.label,summary:w.summary ?? false,resetsAt:time(w.resetsAt),

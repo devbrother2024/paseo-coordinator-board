@@ -53,7 +53,7 @@ On ledger cards, **Operating coordinator** opens the session that will receive t
 
 Decision replies include the original project, session when known, card, question, and revision alongside the answer. A saved local reply can retain photos. Personal checks have a **I checked this** checkbox. During a digest, the coordinator can archive a verified merge-only record or a completed source-session check. After you send a reply, mark a decision as reviewed, or merge a PR, the result stays where you acted in **My decisions**. You can dismiss it when you are ready. Open **Recent decision activity** to look up the result later.
 
-Open Settings to see the remaining quota and reset times for accounts that report them to this host. Usage-aware routing compares fresh, matching quota windows for eligible providers at the requested grade. An explicitly saved model order takes precedence.
+Open Settings to compare remaining quota bars and reset times by account. Credits without a reported limit show a balance. A host can supply dated, display-only readings for providers missing usage through an optional account-usage.json file. Usage-aware routing compares fresh, matching quota windows for eligible providers at the requested grade. An explicitly saved model order takes precedence.
 
 ## GitHub pull requests
 
