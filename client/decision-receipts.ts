@@ -13,6 +13,7 @@ export type CompletedAction = {
   status: "merged" | "already-merged" | "sent" | "saved" | "reviewed" | "already-closed";
   title: string;
   detail?: string;
+  recipientId?: string;
   mergeProjectId?: string;
   notification?: MergeNotification;
 };

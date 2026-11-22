@@ -164,7 +164,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           open={actions.onOpen} receipt={receipts.find(r => matches(r, card))}
           onSent={result => {
             if (rowKey && result.action === "reply") remember({
-              rowKey, actionKey: sessionRowKey(card), projectIds: [result.projectId], status: "sent",
+              rowKey, actionKey: sessionRowKey(card), projectIds: [result.projectId], status: "sent", recipientId: result.recipientId,
               title: decisionSummary(card, t).headline, detail: result.answer || result.recipient || undefined,
             });
             setReceipts(prior => [result, ...prior.filter(r => !(r.projectId === result.projectId && r.sessionId === result.sessionId))].slice(0, 20));
@@ -210,6 +210,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             pr.repo === item.mergeTarget?.repo && pr.number === item.mergeTarget.number &&
             (!item.projectId || pr.projectIds.includes(item.projectId)) && (pr.reason !== "ready" || item.matchedPull));
           const recipient = trackedRecipient(item,snapshot!.coordinator,snapshot!.sessions);
+          const replyRecipient = native && !item.questions.length ? undefined : recipient;
           const owner = (item.where==="manager" || item.where==="human") && recipient;
           const sourceId = item.matchedSessionId || item.sessionId;
           const sameSession = owner===sourceId && (!item.sessionHost || item.sessionHost===hostId);
@@ -217,10 +218,11 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined)}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
               : pr && renderPull(pr, pr.projectIds.includes(item.projectId ?? "") ? item.projectId! : pr.projectIds[0], true, mentionsSecurityGate(item), true, rowKey, [item.projectId])}
-            recipientId={native && !item.questions.length ? undefined : recipient} open={!native && !sameSession ? linkedSession(item) : undefined} onResolved={(status,mode,answer)=>{
+            recipientId={replyRecipient} open={!native && !sameSession ? linkedSession(item) : undefined} onResolved={(status,mode,answer)=>{
               if (rowKey && mode && (status === "sent" || status === "closed" || status === "already-closed")) {
                 remember({ rowKey, actionKey: recordRowKey(item), projectIds: [item.projectId],
                   status: status === "closed" ? (mode === "save" ? "saved" : "reviewed") : status,
+                  recipientId: status === "sent" && mode === "send" ? replyRecipient ?? undefined : undefined,
                   title: item.title, detail: answer || item.projectTitle || projectName(item.projectId) });
               }
               onRefresh();
@@ -315,7 +317,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           !readyPrs.some(pr => pr.repo + " #" + pr.number === mergeNotice.target)) && <MergeFeedback notice={mergeNotice} theme={theme} />}
         {orderedKeys.map(key => <View key={key} role="article" style={{ gap: 8, padding: layout.compact ? 12 : 16, backgroundColor: c.surface1, borderWidth: 1, borderColor: c.border, borderRadius: 10 }}>
           {scopedReceipts.filter(receipt => receipt.rowKey === key && !receipt.hidden).map(receipt =>
-            <InlineDecisionReceipt key={receipt.actionKey} receipt={receipt} theme={theme} onDismiss={() =>
+            <InlineDecisionReceipt key={receipt.actionKey} receipt={receipt} theme={theme} onOpen={actions.onOpen} onDismiss={() =>
               setInlineReceipts(prior => prior.map(entry => entry === receipt ? { ...entry, hidden: true } : entry))} />)}
           {activeRows.get(key)}
         </View>)}

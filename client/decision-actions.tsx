@@ -15,7 +15,7 @@ import { PhotoComposer, usePhotoDraft } from "./photo-composer";
 
 type Action = DecisionInput["action"];
 type CoordinationDraft = { text: string; recipientId: string };
-export type DecisionReceipt = { projectId: string; sessionId: string; version: string; source: string; project: string; recipient: string | null; action: Action; answer?: string };
+export type DecisionReceipt = { projectId: string; sessionId: string; version: string; source: string; project: string; recipient: string | null; recipientId: string; action: Action; answer?: string };
 const wrap = { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 6 };
 const korean = { reply: "답장", question: "질문", coordinate: "조율 요청" };
 const english = { reply: "reply", question: "question", coordinate: "coordination request" };
@@ -86,7 +86,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
       }
       delivered.current = payload; attachments?.clear(); setCoordination(null);
       if (action === "reply") setDraft("");
-      onSent({ projectId: session.projectId, sessionId: session.id, version: decision.version,
+      onSent({ projectId: session.projectId, sessionId: session.id, version: decision.version, recipientId: result.recipientId,
         project: session.projectTitle, source: session.title, recipient: action === "coordinate" ? coordinatorTitle || recipientId : session.title, action, answer: text.trim() || undefined });
     } catch {
       setError(["전송을 확인하지 못했습니다. 최신 카드와 받는 세션을 확인한 뒤 다시 시도해 주세요.",
