@@ -45,13 +45,16 @@ const referencePatterns: { pattern: RegExp; form: ReferenceForm }[] = [
   { pattern: /\b(?:with|choose|pick|prefer|go for|take)\s+([A-H])(?=\s*(?:[?.!,)]|$|or\b|and\b|instead\b))/g, form: "bare" },
 ];
 
-/** Labels in the order the text mentions them, without duplicates. */
-export function referencedLabels(text: string): LabelReference[] {
+type Mention = LabelReference & { at: number };
+const hangulPlan = (item: Pick<LabelReference, "kind" | "form">) => item.kind === "hangul" && item.form === "plan";
+
+function mentions(text: string, withHangulPlans: boolean) {
   const plain = withoutCode(text);
-  const found: (LabelReference & { at: number })[] = [];
+  const found: Mention[] = [];
   for (const { pattern, form } of referencePatterns) {
     for (const match of plain.matchAll(pattern)) {
       const key = normalize(match[1]);
+      if (!withHangulPlans && hangulPlan({ kind: kindOf(key), form })) continue;
       const at = match.index ?? 0;
       const paren = form === "paren";
       const prior = found.find(item => item.key === key);
@@ -59,15 +62,31 @@ export function referencedLabels(text: string): LabelReference[] {
       else if (at < prior.at) Object.assign(prior, { at, paren, form });
     }
   }
-  return found.sort((a, b) => a.at - b.at).slice(0, MAX_LABELS).map(({ at: _at, ...item }) => item);
+  return found.sort((a, b) => a.at - b.at);
+}
+
+/**
+ * Labels in the order the text mentions them, without duplicates. Korean "가안" also means "a draft", so it counts
+ * only with `withHangulPlans`, for a caller that checks a "가안: …" line defines it.
+ */
+export function referencedLabels(text: string, withHangulPlans = false): LabelReference[] {
+  return mentions(text, withHangulPlans).slice(0, MAX_LABELS).map(({ at: _at, ...item }) => item);
+}
+
+/** True when a line opens by pointing at a label other than `key`, as in "(a)를 추천합니다". */
+function opensWithOtherLabel(line: string, key: string) {
+  const head = line.trim().replace(/^>\s*/, "").replace(/^[-*+]\s+/, "");
+  return mentions(head, false).some(item => item.at <= 2 && item.key !== key);
 }
 
 // Case-sensitive: "Plan a release" and "a. …" do not define a label. Korean labels only as "(가)", "가)", "가." or "가안".
 const markers: { pattern: RegExp; form: DefinitionForm }[] = [
   { pattern: /^\(([A-Ha-h가나다라마바사아1-9])\)/, form: "paren" },
   { pattern: /^([A-Ha-h가나다라마바사아1-9])\)/, form: "close" },
-  { pattern: /^([A-H1-9가나다라마바사아])[.:：](?=\s|\*\*|__)/, form: "dot" },
-  { pattern: /^([A-H1-9가나다라])\s?안(?:은|는)?/, form: "plan" },
+  { pattern: /^([A-Ha-h1-9가나다라마바사아])[.:：](?=\s|\*\*|__)/, form: "dot" },
+  { pattern: /^([A-H1-9])\s?안(?:은|는)?/, form: "plan" },
+  // "가안 검토를 마쳤습니다" talks about a draft. A Korean plan label needs a separator: "가안: …", "**나안** - …".
+  { pattern: /^([가나다라])안(?=(?:\*\*|__)?\s*[:：.)\-–—])/, form: "plan" },
   { pattern: /^(?:옵션|선택지|[Oo]ption|[Cc]hoice|[Pp]lan)\s*([A-H1-9])(?![A-Za-z0-9])/, form: "option" },
 ];
 
@@ -121,15 +140,16 @@ export function labelDefinitions(text: string): LabelDefinition[] {
     const { key, form } = found;
     const block = [lines[i].trim()];
     let j = i + 1;
-    // A definition stops at the next definition, a heading, a question, or a line about another label.
+    // A definition stops at the next definition, a heading or a question. "(a)보다 느리지만" inside it stays.
     const stop = (index: number) => index >= lines.length || (!fenced[index] && (definitionMarker(lines[index]) !== null ||
-      isHeading(lines[index]) || asks(lines[index]) || referencedLabels(lines[index]).some(item => item.key !== key)));
+      isHeading(lines[index]) || asks(lines[index])));
     while (!stop(j) && lines[j].trim()) block.push(lines[j++].trimEnd());
     // A short title line such as "**(b) Register the host once**" carries its explanation in the next paragraph.
     if (block.length === 1 && block[0].length <= 100 && !/[.。!?？]$/.test(block[0].replace(/\*+$/, ""))) {
       let k = j;
       while (k < lines.length && !lines[k].trim()) k++;
-      if (!stop(k) && !referencedLabels(lines[k]).length) { block.push(""); j = k; }
+      // A paragraph that opens with another label, such as "(a)를 추천합니다", is about that label.
+      if (!stop(k) && !opensWithOtherLabel(lines[k], key)) { block.push(""); j = k; }
       while (!stop(j) && lines[j].trim()) block.push(lines[j++].trimEnd());
     }
     definitions.push({ key, form, markdown: clip(block.join("\n").trim(), MAX_DEFINITION) });
@@ -203,10 +223,14 @@ function definitionIn(source: ChoiceSource, key: string, reference: ReferenceFor
   return (bestDefinition(source.definitions ?? [], key, reference) ?? bestDefinition(labelDefinitions(source.text), key, reference))?.markdown;
 }
 
-function labelsIn(source: ChoiceSource, kind: LabelKind) {
-  const keys = [...referencedLabels(source.text).map(item => item.key), ...labelDefinitions(source.text).map(item => item.key),
-    ...(source.definitions ?? []).map(item => item.key)];
-  return keys.filter(key => kindOf(key) === kind);
+function labelsIn(source: ChoiceSource, kind: LabelKind, reference: ReferenceForm) {
+  const defined = [...labelDefinitions(source.text), ...(source.definitions ?? [])]
+    .filter(item => rank(item.key, reference, item.form) >= 0).map(item => item.key);
+  return [...referencedLabels(source.text).map(item => item.key), ...defined].filter(key => kindOf(key) === kind);
+}
+
+function definedAsPlan(source: ChoiceSource, key: string) {
+  return [...(source.definitions ?? []), ...labelDefinitions(source.text)].some(item => item.key === key && item.form === "plan");
 }
 
 export function displayLabel(key: string, paren: boolean) {
@@ -220,7 +244,9 @@ export function displayLabel(key: string, paren: boolean) {
  * earlier assistant turns, newest first.
  */
 export function questionChoices(input: { question: string; context: string; message: ChoiceSource; earlier: readonly ChoiceSource[] }) {
-  const references = referencedLabels(input.question);
+  const sources = [input.message, ...input.earlier];
+  const references = referencedLabels(input.question, true)
+    .filter(item => !hangulPlan(item) || sources.some(source => definedAsPlan(source, item.key)));
   if (!references.length) return { choices: [] as Choice[], missingLabels: [] as string[] };
   const style = references[0].paren;
   const forms = new Map(references.map(item => [item.key, item.form]));
@@ -230,7 +256,7 @@ export function questionChoices(input: { question: string; context: string; mess
   if (pickOne) {
     const kind = references[0].kind;
     for (const source of [{ text: input.context }, input.message, ...input.earlier]) {
-      for (const key of labelsIn(source, kind)) if (!wanted.includes(key)) wanted.push(key);
+      for (const key of labelsIn(source, kind, references[0].form)) if (!wanted.includes(key)) wanted.push(key);
     }
   }
   const keys = wanted.slice(0, MAX_LABELS).sort((a, b) => order(a) - order(b));
@@ -257,7 +283,9 @@ const deferral = new RegExp([
   String.raw`(?:직전|이전|앞|위)\s*(?:의\s*)?(?:글|메시지|답변|대화)에\s*(?:있음|있습니다)(?=[.\s]|$)`,
   String.raw`자세한\s*(?:건|것은|내용은)\s*(?:담당\s*|작업\s*|원래\s*)?세션`,
   String.raw`자세한\s*(?:건|것은|내용은)[^.\n]{0,30}(?:에\s*(?:있음|있습니다)(?=[.\s]|$)|참고|참조|보세요)`,
+  String.raw`설명은\s*(?:담당\s*|작업\s*|원래\s*)?세션(?:\s*(?:화면|기록|대화))?에\s*(?:있음|있습니다)`,
   String.raw`\b(?:see|refer to)\s+(?:the\s+)?(?:session|previous message|earlier message|last message)\b`,
+  String.raw`\bcheck\s+(?:the\s+)?(?:session|previous message|earlier message|last message)\s+for\s+(?:details|more)\b`,
   String.raw`\bdetails? (?:are|is) in the (?:session|previous message)\b`,
 ].join("|"), "i");
 
