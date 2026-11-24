@@ -74,7 +74,7 @@ export class ProjectRootReader {
     });
   }
 
-  private lookup(request: PathRequest): PathDetails | Promise<PathDetails> {
+  private lookup(request: PathRequest): PathDetails | Promise<PathDetails> | undefined {
     const id = key(request);
     const cached = this.cached.get(id);
     if (cached) return cached.value;
@@ -82,14 +82,16 @@ export class ProjectRootReader {
     if (pending) return pending;
     // A timeout cannot cancel a filesystem syscall. A blocked mount keeps its slot
     // until that syscall settles, so repeated snapshots leave other I/O threads free.
-    if (this.running.size >= parallelReads) return {};
+    if (this.running.size >= parallelReads) return undefined;
     const disk = this.options.disk ?? { stat: path => stat(path, { bigint: true }), realpath };
     const now = this.options.now ?? Date.now;
     const read = (async () => {
       const { path, identity } = request;
       const entry = identity ? await disk.stat(path) : undefined;
-      const rootKey = entry?.isDirectory() && entry.ino !== 0n ? `${entry.dev}:${entry.ino}` : undefined;
       const canonical = await disk.realpath(path).catch(() => undefined);
+      // The file numbers keep apart two folders whose names differ only in letter case on a case-sensitive disk.
+      // The resolved path keeps folders apart on volumes whose file numbers are not unique, such as Windows ReFS.
+      const rootKey = entry?.isDirectory() && entry.ino !== 0n && canonical ? `${entry.dev}:${entry.ino}:${canonical.toLowerCase()}` : undefined;
       return { rootKey, canonical };
     })().catch((): PathDetails => ({})).then(value => {
       this.running.delete(id);
@@ -114,7 +116,7 @@ export class ProjectRootReader {
       while (!finished && cursor < pending.length) {
         const request = pending[cursor++];
         const details = await this.lookup(request);
-        if (!finished) results.set(key(request), details);
+        if (!finished && details) results.set(key(request), details);
       }
     };
     try {
@@ -133,7 +135,8 @@ export class ProjectRootReader {
     return new Map(requests.map(request => [request.path, results.get(key(request))?.rootKey]));
   }
 
-  async describe(projects: readonly { id: string; path: string }[], selected: ReadonlySet<string>): Promise<{ rootKey?: string; temporary: boolean }[]> {
+  // `unread` marks a selected folder that was not read in time or had to wait for blocked reads. A later call may give it a key.
+  async describe(projects: readonly { id: string; path: string }[], selected: ReadonlySet<string>): Promise<{ rootKey?: string; temporary: boolean; unread?: true }[]> {
     if (!projects.some(project => this.paths.isAbsolute(project.path))) return projects.map(() => ({ temporary: false }));
     const temp = { path: this.temp, identity: false };
     const managed = projects.filter(project => selected.has(project.id) && this.paths.isAbsolute(project.path));
@@ -155,8 +158,11 @@ export class ProjectRootReader {
     const canonicalTemp = results.get(key(temp))?.canonical;
     const roots = canonicalTemp ? [...this.roots, canonicalTemp] : this.roots;
     return projects.map(({ id, path }) => {
-      const details = results.get(key({ path, identity: selected.has(id) }));
-      return { ...(details?.rootKey ? { rootKey: details.rootKey } : {}), temporary: this.underRoot(details?.canonical ?? path, roots) };
+      const request = key({ path, identity: selected.has(id) });
+      const details = results.get(request);
+      const unread = selected.has(id) && reads.has(request) && !details;
+      return { ...(details?.rootKey ? { rootKey: details.rootKey } : {}), temporary: this.underRoot(details?.canonical ?? path, roots),
+        ...(unread ? { unread: true as const } : {}) };
     });
   }
 }

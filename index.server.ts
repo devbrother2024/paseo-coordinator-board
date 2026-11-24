@@ -1,5 +1,5 @@
 import type { ReplyEntry } from "./shared/reply-history";
-import { pullKey, trackedRecipient, usesSourceCoordinator } from "./shared/tracked-decisions";
+import { pullKey, trackedFallbackRecipient, trackedRecipient, trackedReplyRoute, usesSourceCoordinator, type TrackedReplyReason } from "./shared/tracked-decisions";
 import { boardReadiness } from "./shared/readiness";
 import { SnapshotReads } from "./server/snapshot-reads";
 import { readProjectDecisionSources } from "./server/project-decision-sources";
@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { boardDecisionCount, boardScope, boardSnapshot, reportingKey, saveNote, setReporting } from "./shared/contract";
 import { canReceiveBoardInput, discoverSessions } from "./server/discovery";
+import { projectFolderMap, type ProjectFolders } from "./shared/project-folders";
 import { attachReportTool } from "./server/reporting";
 import { ConversationReader, excerpt } from "./server/conversation";
 import { isManagedCoordinator, pruneDispatchReceipts, setCoordinator, PreferenceStore } from "./server/preferences";
@@ -250,35 +251,76 @@ export default function contribute(server: PluginServerContext) {
   const removeReplyClose = server.addHook("agent.close.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });
   const removeReplyArchive = server.addHook("agent.archive.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });
   const removeMergePermission = server.addHook("agent.permission.after",onRecipientAvailable);
-  const resumeReplies = tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, async (item,targetId,{paseo}) => {
+  // The board's own same-folder judgment, read again when a reply goes out. Only selected projects get a key.
+  // `unread` says a project's folder, or the project list itself, could not be read just now.
+  async function currentFolders(paseo: PluginHandlerContext["paseo"]): Promise<{ folders: ProjectFolders; unread: (id: string | null) => boolean }> {
+    try {
+      const projects = (await paseo.projects.list()).projects.map(p => ({ id: p.projectId, path: p.projectRootPath || "" }));
+      const roots = await projectRoots.describe(projects, new Set(prefs.read().projects));
+      const unread = new Set(projects.filter((_, i) => roots[i].unread).map(project => project.id));
+      return { folders: projectFolderMap(projects.map((project, i) => ({ ...project, ...roots[i] }))), unread: (id: string | null) => !!id && unread.has(id) };
+    } catch {
+      return { folders: {}, unread: () => true };
+    }
+  }
+  // Looks for a reply the board sent in the recent conversation of the session that took it.
+  async function arrived(handle: ReturnType<PluginHandlerContext["paseo"]["agents"]["ref"]>, messageId: string, matches: (text: string) => boolean) {
+    const page=await handle.timeline.refetch({direction:"tail",projection:"projected",limit:128});
+    return !page.error && !page.gap && !page.staleCursor && page.entries.some(({item:m})=>m.type==="user_message" &&
+      (m.messageId===messageId || m.clientMessageId===messageId) && matches(m.text));
+  }
+  const resumeReplies = tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, async (item,targetId,{paseo},route) => {
     let rows = await discoverSessions(paseo);
-    const owned = usesSourceCoordinator(item);
-    const current = () => {
+    // Only a card's own local session may sit in another project on the same folder.
+    const {folders, unread} = item.where === "session" && item.sessionId && !item.sessionHost ? await currentFolders(paseo) : {folders: {}, unread: () => false};
+    const fallback = route === "coordinator";
+    const owned = fallback ? item.sourceCoordinatorId !== undefined : usesSourceCoordinator(item);
+    const mismatch = (): TrackedReplyReason | null => {
       const scope = prefs.read();
       const managed = managedSessions(rows,scope);
-      if (!scope.projects.length || (item.projectId && !scope.projects.includes(item.projectId))) return false;
-      if (trackedRecipient(item,scope.coordinator,managed) !== targetId) return false;
+      if (!scope.projects.length || (item.projectId && !scope.projects.includes(item.projectId))) return "recipient-changed";
+      const expected = fallback ? trackedFallbackRecipient(item,scope.coordinator,managed) : trackedRecipient(item,scope.coordinator,managed,folders);
+      if (expected !== targetId) {
+        // An owner that is still the ledger's owner but no longer listed is missing, not replaced.
+        if (owned) return item.sourceCoordinatorId === targetId ? "recipient-missing" : "owner-changed";
+        if (expected) return "recipient-changed";
+        // The card's own session in another project is not ruled out while either folder could not be read.
+        const own = !fallback && targetId === item.sessionId ? managed.find(row => row.id === targetId) : undefined;
+        return own && own.projectId !== item.projectId && (unread(own.projectId) || unread(item.projectId)) ? "recipient-unchecked" : "recipient-missing";
+      }
       return !owned || managed.some(row => row.id === targetId) ||
-        (isManagedCoordinator(scope,targetId) && targetId === scope.coordinator && rows.some(row => row.id === targetId));
+        (isManagedCoordinator(scope,targetId) && targetId === scope.coordinator && rows.some(row => row.id === targetId)) ? null : "recipient-missing";
     };
-    if (!current()) return null;
+    const current = () => mismatch() === null;
+    const before = mismatch();
+    if (before) return {blocked:before};
     const handle=paseo.agents.ref(targetId);
     if (owned) rows = await discoverSessions(paseo);
     const agent=(await handle.refresh())?.agent;
-    if (!current() || !agent || agent.id!==targetId || agent.internal || agent.archivedAt || agent.status==="closed" || agent.status==="error") return null;
+    if (!agent || agent.id!==targetId || agent.internal || agent.archivedAt) return {blocked:"recipient-missing"};
+    if (agent.status==="closed" || agent.status==="error") return {blocked:agent.status==="closed" ? "recipient-closed" : "recipient-error"};
+    const after = mismatch();
+    if (after) return {blocked:after};
     return {
       stillCurrent:current,
+      // A new redirected reply goes out only while the card's own session still cannot take it.
+      redirectable:()=>{
+        const scope = prefs.read();
+        return !trackedReplyRoute(item,scope.coordinator,managedSessions(rows,scope),folders).recipientId;
+      },
       send:async (answer,messageId,images)=>{
         await handle.send(answer,{messageId,activeTurnBehavior:"steer",...(images?.length ? {images} : {})});
       },
-      accepted:async (answer,messageId)=>{
-        const page=await handle.timeline.refetch({direction:"tail",projection:"projected",limit:128});
-        return !page.error && !page.gap && !page.staleCursor && page.entries.some(({item:m})=>m.type==="user_message" &&
-          (m.messageId===messageId || m.clientMessageId===messageId) && m.text===answer);
-      },
-      ready:canReceiveBoardInput(agent,owned || targetId===prefs.read().coordinator),
+      accepted:(messageId,matches)=>arrived(handle,messageId,matches),
+      ready:canReceiveBoardInput(agent,owned || fallback || targetId===prefs.read().coordinator),
     };
-  });
+  }, ({paseo}) => ({
+    arrived:(recipientId,messageId,matches)=>arrived(paseo.agents.ref(recipientId),messageId,matches),
+    gone:async recipientId=>{
+      const agent=(await paseo.agents.ref(recipientId).refresh())?.agent;
+      return !agent || !!agent.archivedAt;
+    },
+  }));
   server.handle(boardSnapshot, (input, { paseo }) => reads.read(() => buildSnapshot(paseo), input.fresh));
   server.handle(boardDecisionCount, async (_input, { paseo }) => ({
     count: await reads.count(() => buildSnapshot(paseo)),

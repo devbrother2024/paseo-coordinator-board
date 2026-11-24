@@ -37,7 +37,7 @@ const east = { serverId: "peer-b", label: "Other desk", registeredLabel: "Other 
 const worker = { id: "worker", projectId: "studio" };
 const work = record({ where: "session", sessionId: worker.id, projectId: worker.projectId });
 const directory = (sessions: { id: string; projectId: string }[] = [], hosts = [west, east]) => ({
-  hostId: "local", hostLabel: "Current board", sessions, hosts, repos: new Map<string, string>(),
+  hostId: "local", hostLabel: "Current board", sessions, hosts, folders: {},
 });
 
 test("a work session without a host hint is found by ID on a visible peer when local lookup misses", async () => {

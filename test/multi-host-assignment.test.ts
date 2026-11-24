@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
 import { discoverBoardSessions } from "../server/board-sessions";
+import { ClarificationSender } from "../server/clarifications";
 import { ConversationReader } from "../server/conversation";
 import { DecisionSender, decorateDecision } from "../server/decisions";
 import { creationUuid } from "../server/dispatch";
@@ -14,6 +15,7 @@ import { isCurrentMembership } from "../server/session-links";
 import { dispatchHosts, saveDispatchHost } from "../shared/dispatch-hosts";
 import { requestWork } from "../shared/operations";
 import type { DispatchInput } from "../shared/dispatch";
+import { sessionClarificationCard } from "../shared/clarifications";
 
 const paths: string[] = [];
 afterEach(() => { for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true }); });
@@ -255,6 +257,26 @@ test("remote session questions join the managed project and the user's reply use
   expect(s.mac.sends).toHaveLength(0);
   s.win.agents.get(sessionId)!.metadata = {};
   expect((await discoverBoardSessions(s.sdk, s.store)).some(row => row.id === sessionId)).toBe(false);
+});
+
+test("a board clarification for a remote worker sends on that worker's host", async () => {
+  const s = scenario();
+  const { sessionId } = await s.assign(s.job);
+  s.win.timelines.set(sessionId, [{ type: "assistant_message", text: "Which option do you prefer?" }]);
+  const sessions = await discoverBoardSessions(s.sdk, s.store);
+  const row = sessions.find(row => row.id === sessionId)!;
+  const scope = s.store.read();
+  const evidence = await new ConversationReader().decorate(s.sdk, sessions, scope);
+  decorateDecision(row, undefined, scope, evidence.get(sessionId));
+  const sender = new ClarificationSender(s.store, async () => ({ sessions, notes: {}, coordinator }));
+  const card = sessionClarificationCard(row)!;
+  const input = { card, recipientId: sessionId, question: "What does the first option change?", requestKey: "example-clarification-key" };
+  const result = await sender.send(s.sdk, input);
+  expect(await sender.send(s.sdk, input)).toEqual(result);
+  expect(s.win.sends.filter(entry => entry.options.messageId === result.messageId)).toEqual([
+    expect.objectContaining({ id: sessionId, text: expect.stringContaining(input.question) }),
+  ]);
+  expect(s.mac.sends).toBeEmpty();
 });
 
 test("selected placement fields enter the same explicit work request and change its retry identity", async () => {

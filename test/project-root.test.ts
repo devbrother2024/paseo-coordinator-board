@@ -40,7 +40,7 @@ test("only selected roots are statted and successful reads are cached by path", 
   });
   const paths = [project("a", "/work/app"), project("alias", "/work/app"), project("other", "/mount/offline")];
   const selected = new Set(["a", "alias"]);
-  expect((await roots.describe(paths, selected)).map(item => item.rootKey)).toEqual(["1:5", "1:5", undefined]);
+  expect((await roots.describe(paths, selected)).map(item => item.rootKey)).toEqual(["1:5:/work/app", "1:5:/work/app", undefined]);
   await roots.describe(paths, selected);
   expect(reads).toEqual(["/work/app"]);
   now = 240_000;
@@ -63,10 +63,55 @@ test("a blocked filesystem does not block snapshots or start another probe for t
   const values = [project("slow", "/mount/offline"), project("fast", "/work/fast")];
   try {
     for (let i = 0; i < 2; i++) {
-      expect((await roots.describe(values, new Set(["slow", "fast"]))).map(item => item.rootKey)).toEqual([undefined, "1:5"]);
+      expect((await roots.describe(values, new Set(["slow", "fast"]))).map(item => item.rootKey)).toEqual([undefined, "1:5:/work/fast"]);
     }
     expect(calls).toEqual(["/mount/offline", "/work/fast"]);
   } finally {
     release();
   }
+});
+
+test("a selected folder is unread while its read is late or two blocked reads hold every slot", async () => {
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const roots = new ProjectRootReader({
+    host: { platform: "linux", temp: "/tmp" }, timeoutMs: 15,
+    disk: { stat: async path => {
+      if (path.startsWith("/mount/")) await blocked;
+      return directory;
+    }, realpath },
+  });
+  const three = [project("three", "/work/three")];
+  try {
+    const late = [project("one", "/mount/one"), project("two", "/mount/two"), project("other", "/mount/other")];
+    expect(await roots.describe(late, new Set(["one", "two"]))).toEqual([{ temporary: false, unread: true }, { temporary: false, unread: true }, { temporary: false }]);
+    // Both reads are still blocked, so a third folder is not read at all.
+    expect(await roots.describe(three, new Set(["three"]))).toEqual([{ temporary: false, unread: true }]);
+  } finally {
+    release();
+  }
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(await roots.describe(three, new Set(["three"]))).toEqual([{ rootKey: "1:5:/work/three", temporary: false }]);
+});
+
+test("one folder needs the same file numbers and the same resolved path", async () => {
+  const keys = async (platform: NodeJS.Platform, inodes: Record<string, bigint>, resolve: (path: string) => string) => {
+    const roots = new ProjectRootReader({
+      host: { platform, temp: platform === "win32" ? "C:\\Temp" : "/tmp" },
+      disk: { stat: async path => ({ ...directory, ino: inodes[path] }), realpath: async path => resolve(path) },
+    });
+    const paths = Object.keys(inodes);
+    return (await roots.describe(paths.map(path => project(path, path)), new Set(paths))).map(item => item.rootKey);
+  };
+  // A disk that ignores letter case resolves both spellings to one path.
+  const [upper, lower] = await keys("darwin", { "/Users/you/Projects/app": 7n, "/Users/you/projects/app": 7n }, () => "/Users/you/Projects/app");
+  expect(upper).toBe(lower);
+  // A case-sensitive disk can hold both spellings as two folders.
+  const [first, second] = await keys("linux", { "/home/you/App": 7n, "/home/you/app": 8n }, path => path);
+  expect(first).not.toBe(second);
+  // Windows ReFS can give two folders the same file number.
+  const [app, alias, api] = await keys("win32", { "C:\\work\\app": 9n, "c:\\WORK\\app": 9n, "C:\\work\\api": 9n },
+    path => path.toLowerCase().endsWith("api") ? "C:\\work\\api" : "C:\\work\\app");
+  expect(app).toBe(alias);
+  expect(api).not.toBe(app);
 });

@@ -5,9 +5,11 @@ import { followupKind, hostWideVisible } from "./reply-followup";
 import { createRemoteWorkSessionLookup, trackedSessionOwner, trackedWorkSession } from "./tracked-session-targets";
 import type { TrackedSessionLinks } from "./tracked-session-chips";
 import { TrackedDecisionCard } from "./tracked-decisions";
-import { mentionsSecurityGate, trackedCoverage, trackedRecipient, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
+import { closedRevision } from "./tracked-reply-draft";
+import { mentionsSecurityGate, trackedCoverage, trackedReplyRoute, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
+import { projectFolderMap } from "../shared/project-folders";
 import { MergeFeedback, PullRequestCard, PullRequestSettings, type MergeNotice, type WorkSessionLink } from "./pull-requests";
-import { pullRowKey, recordRowKey, sessionRowKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
+import { pullRowKey, recordActionKey, sessionRowKey, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
 import { rankDecisionRows, priorityLabel } from "./decision-priority";
 import { DecisionEditingRow, keepEditingPositions, useDecisionEditing } from "./decision-editing";
 import { InlineDecisionReceipt } from "./inline-receipt";
@@ -65,6 +67,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     return [...snapshot?.trackedDecisions?.items ?? []].sort((a,b) => priority(a.urgency) - priority(b.urgency) ||
       (a.where === "human" ? 0 : 1) - (b.where === "human" ? 0 : 1) || (a.since ?? "~").localeCompare(b.since ?? "~"));
   }, [snapshot?.trackedDecisions]);
+  const folders = useMemo(() => projectFolderMap(snapshot?.projects ?? []), [snapshot?.projects]);
   const [inlineReceipts, setInlineReceipts] = useState<InlineReceipt[]>([]);
   const completed = new Set(inlineReceipts.map(receipt => receipt.actionKey));
   const names = new Map(snapshot?.projects.map(project => [project.id, project.title]));
@@ -73,7 +76,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     if (!displayed.has(id)) displayed.set(id, {id,title:names.get(id) ?? id,cards:[]});
   }
   function decisionsFor(inScope:(id:string|null)=>boolean) {
-    const visibleRecords=records.filter(item=>inScope(item.projectId) && !completed.has(recordRowKey(item)));
+    const visibleRecords=records.filter(item=>inScope(item.projectId) && !completed.has(recordActionKey(item)));
     const covered=trackedCoverage(visibleRecords);
     return {
       records:visibleRecords,
@@ -244,7 +247,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         : !listed && hostId ? { check: () => readSessionReach(getPaseoClient(hostId), ownerId) } : undefined,
     } : undefined;
     const target = showSource ? trackedWorkSession(item, {
-      hostId, hostLabel, sessions: snapshot.sessions, hosts: peerHosts, repos: historyRepos,
+      hostId, hostLabel, sessions: snapshot.sessions, hosts: peerHosts, folders,
     }) : undefined;
     if (target?.kind === "local" && owner?.id === target.id) return { owner };
     if (target?.kind === "local" && open) return { owner, source: { kind: "local", open: () => open(target.id) } };
@@ -289,20 +292,26 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           const pr = item.kind === "merge" && item.mergeTarget && pullRequests?.items.find(pr =>
             pr.repo === item.mergeTarget?.repo && pr.number === item.mergeTarget.number &&
             (!item.projectId || pr.projectIds.includes(item.projectId)) && (pr.reason !== "ready" || item.matchedPull));
-          const recipient = trackedRecipient(item,snapshot!.coordinator,snapshot!.sessions);
-          const replyRecipient = native && !item.questions.length ? undefined : recipient;
+          const route = native && !item.questions.length ? undefined : trackedReplyRoute(item,snapshot!.coordinator,snapshot!.sessions,folders);
+          // A card offers its fallback only when it has no recipient.
+          const reaches = route?.recipientId ?? route?.fallbackId;
           return <TrackedDecisionCard links={recordLinks(item, !native)} key={item.key} item={item} theme={theme} priorityLabel={priority}
             renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined,
               item.kind === "merge" ? null : cardChoiceNotice(ledgerChoiceGaps(item)))}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
               : pr && renderPull(pr, pr.projectIds.includes(item.projectId ?? "") ? item.projectId! : pr.projectIds[0], true, mentionsSecurityGate(item), true, rowKey, [item.projectId])}
-            recipientId={replyRecipient} blockedNote={replyRecipient && replyRecipient === snapshot!.coordinator ? unreachableNote : undefined}
-            onResolved={(status,mode,answer)=>{
+            route={route} keepsUnsent={!!rowKey}
+            blockedNote={reaches && reaches === snapshot!.coordinator ? unreachableNote : undefined}
+            onResolved={outcome=>{
+              const {status,reason,mode,answer,recipientId}=outcome;
               if (rowKey && mode && (status === "sent" || status === "closed" || status === "already-closed")) {
-                remember({ rowKey, actionKey: recordRowKey(item), projectIds: [item.projectId],
+                remember({ rowKey, actionKey: recordActionKey({key: item.key, fingerprint: closedRevision(outcome) ?? item.fingerprint}), projectIds: [item.projectId],
                   status: status === "closed" ? (mode === "save" ? "saved" : "reviewed") : status,
-                  recipientId: status === "sent" && mode === "send" ? replyRecipient ?? undefined : undefined,
+                  recipientId: status === "sent" ? recipientId : undefined,
                   title: item.title, detail: answer || item.projectTitle || projectName(item.projectId) });
+              }
+              if (rowKey && mode && answer && (reason === "removed" || reason === "conflict")) {
+                remember({ rowKey, actionKey: unsentActionKey(item), projectIds: [item.projectId], status: "unsent", title: item.title, detail: answer });
               }
               onRefresh();
             }}>
