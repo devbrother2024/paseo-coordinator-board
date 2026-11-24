@@ -5,8 +5,8 @@ import { join } from "node:path";
 import contribute from "../index.server";
 import { recordActionKey, recordRowKey } from "../client/decision-receipts";
 import {
-  closedRevision, nextFailureStreak, recommendedChoices, recommendedTrackedReply, trackedBasisRecipient, trackedDraftLayout, trackedRecovery,
-  trackedReplyBasis, trackedRetryFingerprint,
+  closedRevision, nextFailureStreak, recommendedChoices, recommendedTrackedReply, redirectAwaitsCheck, trackedBasisRecipient, trackedDraftLayout,
+  trackedRecovery, trackedReplyBasis, trackedRetryFingerprint,
 } from "../client/tracked-reply-draft";
 import { boardSnapshot, boardScope } from "../shared/contract";
 import { projectFolderMap } from "../shared/project-folders";
@@ -260,6 +260,35 @@ test("a busy coordinator does not queue a redirected reply", async () => {
   const after = await f.find("cleanup");
   expect(after.item?.queuedReply).toBeUndefined();
   expect(f.sent).toBeEmpty();
+});
+
+test("a redirected reply left unconfirmed is still checked after the work session is back, and nothing new is redirected", async () => {
+  const f = await fixture([card("cleanup", {where: "session", agentId: "worker"}), card("archive", {where: "session", agentId: "worker"})]);
+  const {item} = await f.find("cleanup");
+  f.lost.add("operator");
+  const redirected = await f.reply(item, {recipientId: "operator", route: "coordinator"});
+  expect(redirected).toEqual({status: "unconfirmed"});
+  f.agents.set("worker", {project: "studio", status: "idle"});
+  const back = await f.find("cleanup");
+  expect(back.route).toEqual({targetId: "worker", recipientId: "worker", fallbackId: "operator"});
+  // The card keeps offering the check, and the reply is never sent to the work session as well.
+  const outcome = {...redirected, mode: "fallback", recipientId: "operator"};
+  expect(redirectAwaitsCheck(outcome, back.route!.fallbackId)).toBe(true);
+  expect(redirectAwaitsCheck({...outcome, mode: "send"}, "operator")).toBe(false);
+  expect(redirectAwaitsCheck({...outcome, status: "changed"}, "operator")).toBe(false);
+  expect(redirectAwaitsCheck(outcome, "general")).toBe(false);
+  expect(trackedBasisRecipient({sourceCoordinatorId: undefined}, back.route, true)).toBe("operator");
+  expect(trackedBasisRecipient({sourceCoordinatorId: undefined}, back.route)).toBe("worker");
+  expect(trackedBasisRecipient(back.item!, back.route, true)).toBeNull();
+  expect(await f.reply(back.item, {recipientId: "worker"})).toEqual({status: "changed", reason: "conflict"});
+  expect(await f.reply(back.item, {recipientId: "operator", route: "coordinator"})).toEqual({status: "unconfirmed"});
+  f.history.visible = true;
+  expect(await f.reply(back.item, {recipientId: "operator", route: "coordinator"})).toEqual({status: "sent"});
+  expect(f.sent.map(m => m.id)).toEqual(["operator"]);
+  // A card with nothing sent yet goes to its own session again.
+  const other = await f.find("archive");
+  expect(await f.reply(other.item, {recipientId: "operator", route: "coordinator"})).toEqual({status: "changed", reason: "recipient-changed"});
+  expect(f.sent).toHaveLength(1);
 });
 
 test("a display-only edit keeps the draft's basis; anything the reply answers needs a new look", async () => {

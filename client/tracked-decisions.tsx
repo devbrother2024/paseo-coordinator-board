@@ -14,8 +14,8 @@ import { TrackedPullStatus } from "./pull-requests";
 import { useBoardLanguage } from "./language";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
 import {
-  closedRevision, nextFailureStreak, optionId, recommendedChoices, recommendedTrackedReply, trackedBasisRecipient, trackedDraftLayout, trackedRecovery,
-  trackedReplyBasis, trackedRetryFingerprint, type FailureStreak,
+  closedRevision, nextFailureStreak, optionId, recommendedChoices, recommendedTrackedReply, redirectAwaitsCheck, trackedBasisRecipient, trackedDraftLayout,
+  trackedRecovery, trackedReplyBasis, trackedRetryFingerprint, type FailureStreak,
 } from "./tracked-reply-draft";
 
 import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session-chips";
@@ -146,6 +146,8 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const coordinatorCard = item.where === "manager" || item.where === "human";
   const recipientId = route?.recipientId ?? null;
   const fallbackId = route?.fallbackId ?? null;
+  const redirected = redirectAwaitsCheck(outcome, fallbackId);
+  const offersFallback = !!fallbackId && (!recipientId || redirected);
   const blocked = route?.blocked;
   const ownerChanged = item.sourceCoordinatorId !== confirmedOwner;
   const changedOwner = owned && ownerChanged;
@@ -163,12 +165,12 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   // A suggestion is visible before the person edits. Checking a record sends no reply.
   const hasDraft = hasQuestionDraft || hasPhotos || !!editedReply?.trim() || questionText.some(value => !!value.trim());
   const hasAnswerDraft = hasPhotos || !!editedReply?.trim() || questionText.some(value => !!value.trim()) || Object.values(skipped).some(Boolean);
-  const basis = trackedReplyBasis(item, trackedBasisRecipient(item, route));
+  const basis = trackedReplyBasis(item, trackedBasisRecipient(item, route, redirected));
   const [confirmedBasis, setConfirmedBasis] = useState(basis);
   useEffect(() => { if (!hasAnswerDraft) setConfirmedBasis(basis); }, [hasAnswerDraft, basis]);
   const basisChanged = hasAnswerDraft && basis !== confirmedBasis;
   const answerDisabled = busy || attachments.blocked || !hasAnswer || outstanding || tooLong || basisChanged || awaitingRevision || orphaned.length > 0;
-  const sendReply = { disabled: !recipientId || !recordActions || answerDisabled || changedOwner || !!blockedNote, onPress: () => void acknowledge("send") };
+  const sendReply = { disabled: !recipientId || redirected || !recordActions || answerDisabled || changedOwner || !!blockedNote, onPress: () => void acknowledge("send") };
   const inputFocus = useDecisionInteraction(!queue && !isClosed && !needsRefresh &&
     (hasDraft || editedReply !== null || Object.values(typed).some(value => value !== undefined) ||
       attachments.blocked || busy || confirming || Object.values(skipped).some(Boolean)));
@@ -379,13 +381,13 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
           {t("원장 소유 세션", "Ledger owner session")} · {item.sourceCoordinatorId}
         </Text>}
         {!recipientId && !item.matchedSessionId && <Text style={{color:c.foregroundMuted,fontSize:12}}>{routeText()}</Text>}
-        {((changedOwner && recipientId) || (fallbackOwnerChanged && !recipientId && fallbackId)) &&
+        {((changedOwner && recipientId) || (fallbackOwnerChanged && offersFallback)) &&
           <Button theme={theme} label={t("변경된 운영 코디네이터 확인", "Confirm new ledger owner")} onPress={() => setConfirmedOwner(item.sourceCoordinatorId)} />}
         {outstanding && <Text style={{ color: c.foregroundMuted }}>{t("각 질문에 답하거나 건너뛰기를 선택하세요.", "Answer or explicitly skip each question.")}</Text>}
         {blockedNote && (recipientId || fallbackId) && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning, fontSize: 12 }}>{blockedNote}</Text>}
         <View style={wrap}>
-          {recipientId && recordActions && <SendButton theme={theme} {...named(sendLabel)} send={sendReply} selected={!sendReply.disabled} />}
-          {!recipientId && fallbackId && recordActions && <Button theme={theme} {...named(t(fallbackName + "에게 대신 보내기", "Send to " + fallbackName + " instead"))}
+          {recipientId && !redirected && recordActions && <SendButton theme={theme} {...named(sendLabel)} send={sendReply} selected={!sendReply.disabled} />}
+          {offersFallback && recordActions && <Button theme={theme} {...named(t(fallbackName + "에게 대신 보내기", "Send to " + fallbackName + " instead"))}
             selected={!answerDisabled && !fallbackOwnerChanged && !blockedNote} disabled={answerDisabled || fallbackOwnerChanged || !!blockedNote}
             onPress={() => void acknowledge("fallback")} />}
           {recordActions && (!recipientId || hasAnswer) && <Button theme={theme} {...named(t("보드에만 저장", "Save on board only"))}

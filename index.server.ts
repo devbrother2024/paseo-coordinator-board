@@ -232,8 +232,6 @@ export default function contribute(server: PluginServerContext) {
       const scope = prefs.read();
       const managed = managedSessions(rows,scope);
       if (!scope.projects.length || (item.projectId && !scope.projects.includes(item.projectId))) return "recipient-changed";
-      // A redirected reply goes out only while the card's own session still cannot take it.
-      if (fallback && trackedReplyRoute(item,scope.coordinator,managed,folders).recipientId) return "recipient-changed";
       const expected = fallback ? trackedFallbackRecipient(item,scope.coordinator,managed) : trackedRecipient(item,scope.coordinator,managed,folders);
       if (expected !== targetId) return owned ? "owner-changed" : expected ? "recipient-changed" : "recipient-missing";
       return !owned || managed.some(row => row.id === targetId) ||
@@ -251,6 +249,11 @@ export default function contribute(server: PluginServerContext) {
     if (after) return {blocked:after};
     return {
       stillCurrent:current,
+      // A new redirected reply goes out only while the card's own session still cannot take it.
+      redirectable:()=>{
+        const scope = prefs.read();
+        return !trackedReplyRoute(item,scope.coordinator,managedSessions(rows,scope),folders).recipientId;
+      },
       send:async (answer,messageId,images)=>{
         await handle.send(answer,{messageId,activeTurnBehavior:"steer",...(images?.length ? {images} : {})});
       },

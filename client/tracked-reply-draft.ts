@@ -14,8 +14,15 @@ export function trackedReplyBasis(item: TrackedDecision, recipientId: string | n
 }
 
 // The session or coordinator that would take the reply now. A ledger owner is confirmed on its own.
-export function trackedBasisRecipient(item: Pick<TrackedDecision, "sourceCoordinatorId">, route: TrackedReplyRoute | undefined) {
-  return item.sourceCoordinatorId !== undefined ? null : route?.recipientId ?? route?.fallbackId ?? null;
+// While a redirected reply waits for its check, the retry goes to the fallback.
+export function trackedBasisRecipient(item: Pick<TrackedDecision, "sourceCoordinatorId">, route: TrackedReplyRoute | undefined, redirected = false) {
+  return item.sourceCoordinatorId !== undefined ? null : (redirected ? null : route?.recipientId) ?? route?.fallbackId ?? null;
+}
+
+// A redirected reply that went out unconfirmed can only be checked again with the fallback, never sent to the card's
+// own session. Its retry stays on offer after that session can take replies again.
+export function redirectAwaitsCheck(outcome: { status: string; mode?: string; recipientId?: string } | null, fallbackId: string | null) {
+  return outcome?.status === "unconfirmed" && outcome.mode === "fallback" && !!fallbackId && outcome.recipientId === fallbackId;
 }
 
 // Retrying an unconfirmed reply checks that reply under the revision it was sent for, so it is never sent twice.

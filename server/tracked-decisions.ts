@@ -33,7 +33,8 @@ const receipts = z.object({version:z.literal(1),items:z.array(receipt)});
 type SourceStatus = TrackedDecisionView["status"];
 type InputRow = {key:string;fingerprint:string;item:RoutedTrackedDecision};
 type Receipt = z.output<typeof receipt>;
-type PendingDelivery = { ready:boolean; send:(answer:string,messageId:string,images?:WorkImage[])=>Promise<void>; accepted:(messageId:string,matches:(text:string)=>boolean)=>Promise<boolean>; stillCurrent:()=>boolean };
+// `redirectable` says whether a new reply may still go to the fallback. A redirected delivery without it sends nothing new.
+type PendingDelivery = { ready:boolean; send:(answer:string,messageId:string,images?:WorkImage[])=>Promise<void>; accepted:(messageId:string,matches:(text:string)=>boolean)=>Promise<boolean>; stillCurrent:()=>boolean; redirectable?:()=>boolean };
 export type BlockedDelivery = { blocked:TrackedReplyReason };
 type Prepared = PendingDelivery | BlockedDelivery | null;
 type Attempt = z.output<typeof resolveTrackedDecision.output> & {queueId?:string};
@@ -326,6 +327,8 @@ export class TrackedDecisionStore {
       if (previous && !previous.queue) {
         if (!(await target.accepted(messageId,sentAs(previous)))) return {status:"unconfirmed"};
       } else {
+        // The fallback takes a new reply only while the card's own session cannot. A reply it already took is still confirmed.
+        if (fallback && !target.redirectable?.()) return changed("recipient-changed");
         if (!target.ready) {
           if (previous?.queue) return {status:"queued"};
           // A redirected reply is sent only while the person is watching it go.
