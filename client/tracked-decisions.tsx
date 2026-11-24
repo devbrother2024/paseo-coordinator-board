@@ -228,7 +228,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
     pending.current = true; setBusy(true);
     const fingerprint = item.fingerprint;
     const requested = send ? trackedRetryFingerprint(outcome, fingerprint, text, to) : fingerprint;
-    let response: { status: Resolution; reason?: TrackedReplyReason; revision?: string };
+    let response: { status: Resolution; reason?: TrackedReplyReason; revision?: string; recipientId?: string };
     try {
       const images = attachments.latest.current.map(photo => photo.image);
       response = await resolve({ source: item.source, projectId: item.projectId, id: item.id, fingerprint: requested,
@@ -237,7 +237,8 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
         ...(send && to ? { recipientId: to } : {}), ...(mode === "fallback" ? { route: "coordinator" as const } : {}) });
       if (response.status === "sent" || response.status === "closed" || response.status === "already-closed") clearDraft();
     } catch { response = { status: send ? "unconfirmed" : "unavailable" }; }
-    const attempt: TrackedOutcome = { ...response, requested, mode, ...(text.trim() ? { answer: text.trim() } : {}), ...(to ? { recipientId: to } : {}) };
+    const took = response.recipientId ?? to;
+    const attempt: TrackedOutcome = { ...response, requested, mode, ...(text.trim() ? { answer: text.trim() } : {}), ...(took ? { recipientId: took } : {}) };
     setOutcome({ ...attempt, fingerprint }); setConfirming(false);
     setStreak(previous => nextFailureStreak(previous, response, to));
     try { await onResolved(attempt); } catch { setRefreshFailed(true); }

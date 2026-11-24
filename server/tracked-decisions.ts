@@ -317,7 +317,8 @@ export class TrackedDecisionStore {
     // route are checked. Looking only reads that conversation, so a rotated owner cannot strand the reply.
     const sentBefore=this.recorded()?.get(version);
     if (sentBefore?.pending && !sentBefore.queue && sameContent(sentBefore,input,describePhotos(input.images),row.item)) {
-      if ((await this.confirm(version,sentBefore,check)).status==="sent") return {status:"sent"};
+      const {status,recipientId}=await this.confirm(version,sentBefore,check,input.recipientId);
+      if (status==="sent") return {status,...(recipientId ? {recipientId} : {})};
     }
     const fallback=input.route==="coordinator";
     if (fallback && row.item.where!=="session") return changed("recipient-changed");
@@ -344,7 +345,7 @@ export class TrackedDecisionStore {
     const waiting=previous ? undefined : [...records].find(([,record])=>record.key===key && record.fingerprint!==input.fingerprint && record.pending && !record.queue);
     if (waiting) {
       const [earlierVersion,earlier]=waiting;
-      const checked=await this.confirm(earlierVersion,earlier,check);
+      const checked=await this.confirm(earlierVersion,earlier,check,input.recipientId);
       if (checked.status!=="sent") return sameReply(earlier,input,photos,row.item) ? checked : changed("conflict");
       // Once it arrived, the same reply closes only its own revision. A different reply answers the card as it is now.
       return sameContent(earlier,input,photos,row.item) ? checked : this.deliver(input,getScope,prepare,queuedId,check);
@@ -397,12 +398,12 @@ export class TrackedDecisionStore {
   private async confirmEarlier(input:TrackedResolution, version:string, item:RoutedTrackedDecision, check:SentCheck):Promise<Attempt> {
     const earlier=this.recorded()?.get(version);
     if (!input.recipientId || !earlier || earlier.queue || !sameReply(earlier,input,describePhotos(input.images),item)) return changed("revised");
-    return earlier.pending ? this.confirm(version,earlier,check) : {status:"sent",revision:earlier.fingerprint};
+    return earlier.pending ? this.confirm(version,earlier,check,input.recipientId) : {status:"sent",revision:earlier.fingerprint};
   }
 
-  // Confirms a reply sent for an earlier revision of the card with the session that took it, wherever the card goes now.
-  // Only that revision closes.
-  private async confirm(version:string, receipt:Receipt, check:SentCheck):Promise<Attempt> {
+  // Confirms a recorded reply with the session that took it, wherever the card goes now. Only its revision closes, and
+  // the result names that session when the board asked another.
+  private async confirm(version:string, receipt:Receipt, check:SentCheck, asked:string|undefined):Promise<Attempt> {
     const {messageId,recipientId}=receipt;
     if (!messageId || !recipientId) return {status:"unconfirmed"};
     try { if (!(await check(recipientId,messageId,sentAs(receipt)))) return {status:"unconfirmed"}; }
@@ -410,7 +411,7 @@ export class TrackedDecisionStore {
     const latest=this.recorded(), recorded=latest?.get(version);
     if (!latest || !recorded || recorded.messageId!==messageId) return {status:"unconfirmed"};
     latest.set(version,{...recorded,pending:false});
-    return this.save(latest) ? {status:"sent",revision:recorded.fingerprint} : {status:"unconfirmed"};
+    return this.save(latest) ? {status:"sent",revision:recorded.fingerprint,...(recipientId!==asked ? {recipientId} : {})} : {status:"unconfirmed"};
   }
 
   cancelQueued(input:z.output<typeof cancelQueuedReply.input>, scope:Set<string>) {
@@ -520,7 +521,9 @@ export class TrackedDecisionStore {
         else if (!receipt.queue) result.status=receipt.pending ? "unconfirmed" : "sent";
       }
       if(result.status==="closed" || result.status==="sent" || result.status==="queued")onChange?.();
-      return {status:result.status, ...(result.reason ? {reason:result.reason} : {}), ...(result.status==="sent" && result.revision ? {revision:result.revision} : {})};
+      const sent=result.status==="sent";
+      return {status:result.status, ...(result.reason ? {reason:result.reason} : {}), ...(sent && result.revision ? {revision:result.revision} : {}),
+        ...(sent && result.recipientId ? {recipientId:result.recipientId} : {})};
     });
     return async (ctx:import("@getpaseo/plugin/server").PluginHandlerContext,id?:string)=>{
       if (prepare && await this.resumeQueued(getScope,(row,target)=>prepare(row,target,ctx),id)) onChange?.();

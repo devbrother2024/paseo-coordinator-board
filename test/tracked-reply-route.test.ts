@@ -176,7 +176,7 @@ test("a reply left unconfirmed is checked with the session that took it after th
   expect(f.sent).toHaveLength(3);
   f.history.visible = true;
   // The same reply closes only the revision it answered, and the card stays open for the new session.
-  expect(await f.reply(after["same"].item, {recipientId: "worker-b"})).toEqual({status: "sent", revision: before["same"].fingerprint});
+  expect(await f.reply(after["same"].item, {recipientId: "worker-b"})).toEqual({status: "sent", revision: before["same"].fingerprint, recipientId: "worker-a"});
   expect((await f.find("same")).item?.fingerprint).toBe(after["same"].item.fingerprint);
   // A screen that still shows the first session confirms it the same way.
   expect(await f.reply(before["stale"], {recipientId: "worker-a"})).toEqual({status: "sent", revision: before["stale"].fingerprint});
@@ -385,7 +385,8 @@ test("a redirected reply left unconfirmed is checked with the owner that took it
   expect(await f.reply(cleanup, {recipientId: "operator", route: "coordinator"})).toEqual({status: "changed", reason: "owner-changed"});
   expect(await f.reply(cleanup, {recipientId: "general", route: "coordinator"})).toEqual({status: "changed", reason: "conflict"});
   f.history.visible = true;
-  expect(await f.reply(cleanup, {recipientId: "general", route: "coordinator"})).toEqual({status: "sent"});
+  // The answer names the owner that took the reply, so the board's receipt does not point at the one the retry went to.
+  expect(await f.reply(cleanup, {recipientId: "general", route: "coordinator"})).toEqual({status: "sent", recipientId: "operator"});
   expect(await f.reply(archive, {recipientId: "operator", route: "coordinator"})).toEqual({status: "sent"});
   expect(f.sent.map(m => m.id)).toEqual(["operator", "operator"]);
   expect((await f.board()).trackedDecisions.items).toBeEmpty();
