@@ -1,7 +1,7 @@
 import type { BoardReadiness } from "../shared/readiness";
-import { matchesProject, historySessionLinks, type HistoryLinks } from "./history-sessions";
+import { historySessionLinks, type HistoryLinks } from "./history-sessions";
 import { ReplyHistory } from "./reply-history";
-import { trackedSessionTargets } from "./tracked-session-targets";
+import { createRemoteWorkSessionLookup, trackedSessionOwner, trackedWorkSession } from "./tracked-session-targets";
 import type { TrackedSessionLinks } from "./tracked-session-chips";
 import { TrackedDecisionCard } from "./tracked-decisions";
 import { mentionsSecurityGate, trackedCoverage, trackedRecipient, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
@@ -125,7 +125,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const projectName=(id:string|null)=>filterNames.get(id) ?? displayed.get(id ?? "")?.title ?? id ?? t("공통","Host-wide");
   const incomplete = snapshot?.trackedDecisions && ["partial","unavailable","invalid"].includes(snapshot.trackedDecisions.status);
   const [settings, setSettings] = useState(false);
-  const {groups: peers, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
+  const {groups: peers, hosts: peerHosts, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
+  const peerKey = JSON.stringify(peerHosts.map(host => host.serverId));
+  const lookupWorkSession = useMemo(() => createRemoteWorkSessionLookup(getPaseoClient), [hostId, updatedAt, peerKey]);
   const visiblePeers = peers.map(group => ({...group, rows: group.rows.filter(row => inFilter(row.projectId))}));
   const historyRepos = useMemo(() => new Map(pullRequests?.projects.flatMap(p =>
     p.repo && p.mode !== "off" ? [[p.projectId,p.repo] as const] : [])), [pullRequests?.projects]);
@@ -205,19 +207,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             setReceipts(prior => [result, ...prior.filter(r => !(r.projectId === result.projectId && r.sessionId === result.sessionId))].slice(0, 20));
             onRefresh();
           }} />;
-  function linkedSession(item: TrackedDecision) {
-    const id = item.matchedSessionId || item.sessionId;
-    if (!id) return;
-    if (item.sessionHost && item.sessionHost !== hostId) {
-      const peer = peers.find(g => g.host.serverId === item.sessionHost && g.rows.some(s => s.sessionId === id && s.projectId === item.projectId));
-      return peer && onOpenHostSession ? () => onOpenHostSession(peer.host.serverId,id) : undefined;
-    }
-    const local = snapshot?.sessions.find(s => s.id === id && (matchesProject(s.projectId,item.projectId,historyRepos) || s.id === item.matchedSessionId));
-    return local && actions.onOpen ? () => actions.onOpen!(local.id) : undefined;
-  }
   function recordLinks(item: TrackedDecision, showSource = true): TrackedSessionLinks {
     if (!snapshot) return {};
-    const { ownerId, sameSession } = trackedSessionTargets(item, snapshot.coordinator, hostId);
+    const ownerId = trackedSessionOwner(item, snapshot.coordinator);
     const open = actions.onOpen;
     const listed = snapshot.sessions.some(session => session.id === ownerId);
     const owner = ownerId && open && (ownerId === snapshot.coordinator || listed || hostId) ? {
@@ -228,7 +220,15 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       gate: ownerId === snapshot.coordinator ? { known: snapshot.coordinatorReach, onBlocked: showBanner }
         : !listed && hostId ? { check: () => readSessionReach(getPaseoClient(hostId), ownerId) } : undefined,
     } : undefined;
-    return { owner, source: showSource && !(owner && sameSession) ? linkedSession(item) : undefined };
+    const target = showSource ? trackedWorkSession(item, {
+      hostId, hostLabel, sessions: snapshot.sessions, hosts: peerHosts, repos: historyRepos,
+    }) : undefined;
+    if (target?.kind === "local" && owner?.id === target.id) return { owner };
+    if (target?.kind === "local" && open) return { owner, source: { kind: "local", open: () => open(target.id) } };
+    if (target?.kind === "remote" && onOpenHostSession) {
+      return { owner, source: { ...target, lookup: lookupWorkSession, open: onOpenHostSession } };
+    }
+    return { owner, source: target && { kind: "unavailable" } };
   }
   function renderPull(pr:PullRequestItem, projectId:string, decision=false, securityGate=false, embedded=false, rowKey?: string, scope: (string | null)[] = pr.projectIds, priority?: string) {
     const workSessions:WorkSessionLink[] = [];

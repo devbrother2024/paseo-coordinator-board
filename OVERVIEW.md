@@ -82,6 +82,8 @@ Project progress shows occupied lanes side by side on desktop and stacked on a p
 
 Project owners can supply independent records in `tracked-decisions.json` in the plugin data directory, or link existing project ledgers through `tracked-sources.json`. This retains manual checks, multiple questions tied to one session, and release decisions that include a second question. Recording a choice closes that version of the record. Sending a message and confirming a GitHub merge are separate actions. [Configuration example](README.md#프로젝트별-칸반과-결정-원장)
 
+In a linked ledger card, `agentId` identifies the work session. The optional `sessionHost` accepts a host `serverId` or the name registered in the app. Names are case-insensitive. When the host is omitted, the board checks the current host first, then looks for the same session ID on visible online hosts. The work session chip opens the conversation on its host.
+
 In a linked project ledger, each `questions[].options[]` entry needs a choice identifier `key` and readable `text`. Optional `does`, `pros`, and `cons` take a string or array of strings. Use `note` for a short explanation and `recommended` for a boolean recommendation flag. The board ignores extra fields such as `label` and `detail`. When `label` is present and the required `text` is missing, the warning explains which field to use.
 
 Valid cards from readable ledgers stay on the board. In **My decisions → Details**, expand a warning to see the source and field paths for a rejected card. If the file cannot be opened or does not contain a readable JSON `items` array, the warning identifies the ledger source.
