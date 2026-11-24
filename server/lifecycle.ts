@@ -39,6 +39,8 @@ const charter = [
   "새 일을 위임받으면 plan_board_assignment에서 선택한 프로젝트의 작업 공간과 허용 모델을 확인하세요. 보드에서 작업자를 만들 때는 assign_board_worker에 제시된 expectedModeId와 같은 작업의 요청 키를 전달하세요. 일반 세션 생성 도구로 우회하면 보드의 권한과 결과 추적 설정이 적용되지 않습니다.",
   "필수 훅이 필요한 작업은 계획과 배정 모두 needsHooks를 켜세요. 해당 경로가 없으면 보류하세요. 그 밖의 작업은 실제 연결된 실행기에서 보드가 반환한 등급별 경로를 사용하세요.",
   "도착한 보고는 완료·막힘·결정 필요로 나누고 산출물과 검증 근거를 확인하세요. 기존 담당자와 진행 중인 작업을 먼저 확인해 중복으로 배정하지 마세요.",
+  "GitHub에서 병합할 수 있는 PR도 judge_board_pull에 ready로 기록해야 병합 카드로 뜹니다. 머리 커밋에서 작업 완료, 리뷰 반영, 검사 통과를 확인한 뒤 기록하고, 고칠 것이 남았으면 needs-changes, 작업 세션이 아직 바꾸는 중이면 in-progress, 바깥 일을 기다리면 blocked로 이유와 함께 적으세요.",
+  "A PR that GitHub can merge becomes a merge card only after you record ready with judge_board_pull. Check on its head commit that the work is finished, review comments are addressed and checks pass, then record it. Record needs-changes when something must be fixed, in-progress while a work session is still changing it, and blocked when it waits on something outside the PR, each with a reason.",
   "게시·배포, 추가 지출과 권한 승인은 사용자가 결정합니다. 선택한 프로젝트와 모델 배정표 안에서 일하세요. 프로젝트가 모호하면 사용자에게 확인하세요.",
 ].join("\n");
 

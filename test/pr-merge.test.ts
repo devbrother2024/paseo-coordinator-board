@@ -410,3 +410,13 @@ test("only the confirmed mutation, never polling, stale confirmations or an exte
   expect(delivered[0].entry.pullMerge).toEqual({status:"merged",repo:target.repo,number:7,mergeSha:merged});
   expect(f.mutations()).toBe(1);
 });
+
+test("preview stops when the PR head moved past the commit the board showed", async () => {
+  const f = fixture();
+  expect(await f.preview({ ...target, expectedHeadSha: head } as never)).toMatchObject({ status: "ready", headSha: head });
+  const before = f.behavior.invalidations;
+  const moved = await f.preview({ ...target, expectedHeadSha: "d".repeat(40) } as never);
+  expect(moved).toMatchObject({ status: "blocked", reason: "changed", token: null });
+  expect(f.behavior.invalidations).toBe(before + 1);
+  expect(f.mutations()).toBe(0);
+});

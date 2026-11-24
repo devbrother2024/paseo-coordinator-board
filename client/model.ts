@@ -37,8 +37,9 @@ const statusPhrases: Record<string, string> = {
 
 export function sessionDetail(detail: string, t: Translate) {
   if (Object.hasOwn(statusPhrases, detail)) return t(detail, statusPhrases[detail]);
-  const pending = /^응답을 기다리는 요청 (\d+)건$/.exec(detail);
-  if (pending) return t(detail, `Requests awaiting a response: ${pending[1]}`);
+  // The count may be followed by the titles of the waiting requests.
+  const pending = /^응답을 기다리는 요청 (\d+)건((?: · [\s\S]*)?)$/.exec(detail);
+  if (pending) return t(detail, `Requests awaiting a response: ${pending[1]}${pending[2]}`);
   const tasks = /^대화 대기 · 백그라운드 작업 (\d+)개$/.exec(detail);
   if (tasks) return t(detail, `Conversation idle · Background tasks: ${tasks[1]}`);
   for (const [ko, en] of [["코디네이터 판단 · ", "Coordinator assessment · "], ["세션의 확인 요청 · ", "Session question · "]]) {
