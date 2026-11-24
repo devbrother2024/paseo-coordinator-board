@@ -3,6 +3,7 @@ import { z } from "zod";
 import { workImages } from "./work-images";
 import { repositorySlug, type PullRequestView } from "./prs";
 import type { SessionRow } from "./contract";
+import { ledgerDiagnosticsSchema } from "./ledger-diagnostics";
 
 const id = z.string().min(1).max(256);
 const projectId = z.string().min(1).max(4096);
@@ -32,6 +33,7 @@ export const trackedDecisionInputSchema = reference.extend({
 export type TrackedDecisionInput = z.output<typeof trackedDecisionInputSchema>;
 export type RoutedTrackedDecision = TrackedDecisionInput & { sourceCoordinatorId?: string | null };
 export const trackedDecisionSchema = trackedDecisionInputSchema.extend({
+  historyUnavailable: z.literal(true).optional(),
   queuedReply:z.object({messageId:z.string().uuid(),recipientId:id,answer:z.string().optional(),
     imageCount:z.number().int().nonnegative(), stopped:z.boolean()}).optional(),
   sourceCoordinatorId:id.nullable().optional(), key:z.string(), fingerprint, matchedSessionId:id.nullable(), matchedPull:target.nullable(),
@@ -39,6 +41,7 @@ export const trackedDecisionSchema = trackedDecisionInputSchema.extend({
 export type TrackedDecision = z.output<typeof trackedDecisionSchema>;
 export const trackedDecisionViewSchema = z.object({
   items:z.array(trackedDecisionSchema),status:z.enum(["ok","partial","absent","invalid","unavailable"]),
+  diagnostics: ledgerDiagnosticsSchema.optional(),
 });
 export type TrackedDecisionView = z.output<typeof trackedDecisionViewSchema>;
 // Older ledgers may contain only the GitHub link in the request. An unambiguous

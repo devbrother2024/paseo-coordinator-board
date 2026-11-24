@@ -1,7 +1,9 @@
-import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { repositorySlug } from "../shared/prs";
+import { trackedDecisionInputSchema } from "../shared/tracked-decisions";
+import { ledgerFieldLimit, ledgerIssueLimit, type LedgerField, type LedgerIssue } from "../shared/ledger-diagnostics";
 import { openNoFollowSync } from "./safe-open";
 
 // Only an operator-provided local manifest can name a ledger directory.
@@ -23,14 +25,37 @@ const entry = z.object({
   pr: z.number().int().positive().nullish(), since:z.string().nullish(), howToAnswer:z.string().nullish(), answerLead:z.string().nullish(), urgency:z.string().nullish(),
   dueAt:z.string().max(64).nullish(), blocksWork:z.boolean().nullish(),
 });
-const ledger = z.object({ items: z.array(entry) });
-function localFile(path: string, optional = false, ownerFile = false) {
-  let fd: number;
-  try { fd = ownerFile ? openNoFollowSync(path) : openSync(path, constants.O_RDONLY | constants.O_NONBLOCK); }
+const ledger = z.object({ items: z.array(z.unknown()) });
+type LedgerSource = z.infer<typeof manifest>["sources"][number];
+
+function diagnosticText(value: unknown) {
+  if (typeof value !== "string") return;
+  const cleaned = value.replace(/[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\u2029]/gu, "").trim();
+  return cleaned.slice(0, 256).replace(/[\uD800-\uDBFF]$/, "").trimEnd() || undefined;
+}
+
+function diagnosticFields(error: z.ZodError, raw?: unknown, imported = false): LedgerField[] {
+  const card = raw as { questions?: { options?: { label?: unknown }[] }[] } | null | undefined;
+  return error.issues.slice(0, ledgerFieldLimit).map(issue => {
+    const path = imported && issue.path[0] === "sessionId" ? ["agentId", ...issue.path.slice(1)] : issue.path;
+    const reason = issue.code === "invalid_type" && issue.input === undefined ? "missing" : "invalid";
+    const [questions, question, options, option, text] = path;
+    const labelOnly = reason === "missing" && path.length === 5 && questions === "questions" &&
+      options === "options" && text === "text" && typeof question === "number" && typeof option === "number" &&
+      card?.questions?.[question]?.options?.[option]?.label !== undefined;
+    return { path: path.join(".").slice(0, 256), reason, ...(labelOnly ? { hint: "option-text" } : {}) };
+  });
+}
+function openSourceFile(path: string, optional: boolean, ownerFile = false) {
+  try { return ownerFile ? openNoFollowSync(path) : openSync(path, constants.O_RDONLY | constants.O_NONBLOCK); }
   catch (error) {
     if (optional && (error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw new Error("Could not open decision source");
   }
+}
+function localFile(path: string, optional = false, ownerFile = false) {
+  const fd = openSourceFile(path, optional, ownerFile);
+  if (fd === null) return null;
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > 4 * 1024 * 1024) throw new Error("Invalid decision source");
@@ -38,11 +63,39 @@ function localFile(path: string, optional = false, ownerFile = false) {
   } finally { closeSync(fd); }
 }
 
+const historyRowLimit = 200;
+const historyByteLimit = 256 * 1024;
+
+function historyRows(path: string) {
+  const fd = openSourceFile(path, true);
+  if (fd === null) return [];
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new Error("Invalid decision history");
+    const buffer = Buffer.alloc(Math.min(stat.size, historyByteLimit));
+    const start = stat.size - buffer.length;
+    let length = 0;
+    while (length < buffer.length) {
+      const count = readSync(fd, buffer, length, buffer.length - length, start + length);
+      if (!count) throw new Error("Incomplete decision history");
+      length += count;
+    }
+    // Skip the header on a complete read, or the possibly partial first line of a tail.
+    // If the tail begins just after a newline, its first row is already complete.
+    const preceding = Buffer.alloc(1);
+    if (start > 0 && readSync(fd, preceding, 0, 1, start - 1) !== 1) throw new Error("Incomplete decision history");
+    const after = fstatSync(fd);
+    if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error("Decision history changed during read");
+    const rows = buffer.toString("utf8").split(/\r?\n/).slice(preceding[0] === 10 ? 0 : 1).filter(Boolean);
+    if (start > 0 && rows.length < historyRowLimit) throw new Error("Incomplete decision history");
+    return rows.slice(-historyRowLimit);
+  } finally { closeSync(fd); }
+}
+
 type History = {at:string; text:string};
 function history(path: string) {
   const byId = new Map<string, History[]>();
-  const rows = (localFile(path, true) ?? "").split(/\r?\n/).slice(1).filter(Boolean).slice(-200);
-  for (const row of rows) {
+  for (const row of historyRows(path)) {
     const [at,id,...parts] = row.split("\t");
     if (!id || !at || !parts.length) continue;
     // New rows store the original message, attachment count and (optionally) a shorter copy.
@@ -67,31 +120,60 @@ function sourceCoordinator(path: unknown, cache: Map<string, string | null>) {
   return id;
 }
 
-export function readProjectDecisionSources(manifestPath: string, selected: Set<string>, onFailure?: () => void) {
-  if (!selected.size) return [];
+export function readProjectDecisionSources(manifestPath: string, selected: Set<string>) {
+  if (!selected.size) return { items: [] };
   const raw = localFile(manifestPath, true);
-  if (raw === null) return [];
+  if (raw === null) return { items: [] };
   const { sources } = manifest.parse(JSON.parse(raw));
   const visible = sources.filter(s => !s.projectId || selected.has(s.projectId));
   const keys = visible.map(s => JSON.stringify([s.source,s.projectId]));
   if (new Set(keys).size !== keys.length) throw new Error("Ambiguous decision source");
   const owners = new Map<string,string | null>();
-  return visible.flatMap(source => {
-    try { return readLedger(source,selected,sourceCoordinator(source.coordinatorFile,owners)); }
-    catch (error) {
-      if (!onFailure) throw error;
-      onFailure();
-      return [];
-    }
-  });
+  const sourceIssues: LedgerIssue[] = [];
+  const otherIssues: LedgerIssue[] = [];
+  let count = 0;
+  const report = (issue: LedgerIssue) => {
+    count++;
+    const bucket = issue.kind === "source" ? sourceIssues : otherIssues;
+    if (bucket.length < ledgerIssueLimit) bucket.push(issue);
+  };
+  const items = visible.flatMap(source => readLedger(source, selected, sourceCoordinator(source.coordinatorFile, owners), report));
+  const issues = [...sourceIssues, ...otherIssues].slice(0, ledgerIssueLimit);
+  return { items, ...(count ? { diagnostics: { count, issues } } : {}) };
 }
 
-function readLedger(source: z.infer<typeof manifest>["sources"][number], selected: Set<string>, sourceCoordinatorId: string | null) {
-  const document = localFile(join(source.directory, "decisions.json"));
-  const { items } = ledger.parse(JSON.parse(document!));
-  const answers = history(join(source.directory,"live","board-answers.tsv"));
-  const asked = history(join(source.directory,"live","board-questions.tsv"));
-  return items.map(row => {
+function readLedger(source: LedgerSource, selected: Set<string>, sourceCoordinatorId: string | null, report: (issue: LedgerIssue) => void) {
+  const name = diagnosticText(source.source) ?? "?";
+  const location = { source: name, projectTitle: diagnosticText(source.projectTitle) ?? name };
+  let items: unknown[];
+  try {
+    const document = localFile(join(source.directory, "decisions.json"));
+    items = ledger.parse(JSON.parse(document!)).items;
+  } catch {
+    report({ ...location, kind: "source" });
+    return [];
+  }
+  const readHistory = (part: "answers" | "questions") => {
+    try { return history(join(source.directory, "live", `board-${part}.tsv`)); }
+    catch {
+      report({ ...location, kind: "history", part });
+      return null;
+    }
+  };
+  const answers = readHistory("answers");
+  const asked = readHistory("questions");
+  const historyUnavailable = !answers || !asked;
+  const invalid = (raw: unknown, row: number, fields: LedgerField[]) => {
+    const metadata = raw && typeof raw === "object" ? raw as { id?: unknown; title?: unknown } : undefined;
+    report({ ...location, kind: "entry", row, id: diagnosticText(metadata?.id), title: diagnosticText(metadata?.title), fields });
+  };
+  const valid = items.flatMap((raw, index) => {
+    const parsed = entry.safeParse(raw, { reportInput: true });
+    if (!parsed.success) {
+      invalid(raw, index + 1, diagnosticFields(parsed.error, raw));
+      return [];
+    }
+    const row = parsed.data;
     const binding = source.matches.find(m => m.id === row.id && m.sessionId === row.agentId && m.title === row.title &&
       JSON.stringify(m.ask) === JSON.stringify(row.ask) && selected.has(m.projectId));
     const kind = row.kind === "approval" ? "approve" : row.kind === "human" ? "check"
@@ -99,17 +181,32 @@ function readLedger(source: z.infer<typeof manifest>["sources"][number], selecte
     const since = Date.parse(row.since ?? "");
     const current = (event: History) => Number.isFinite(since) && Date.parse(event.at) >= since;
     const qa = [...row.qa];
-    for (const prior of (asked.get(row.id) ?? []).filter(current)) {
+    for (const prior of (asked?.get(row.id) ?? []).filter(current)) {
       if (!row.qa.some(q => q && typeof q === "object" && "q" in q && q.q === prior.text)) qa.push({q:prior.text,a:null,askedAt:prior.at});
     }
-    return {
+    const item = {
       sourceCoordinatorId, source: source.source, projectId: source.projectId, projectTitle: source.projectTitle,
+      ...(historyUnavailable ? { historyUnavailable: true } : {}),
       id:row.id,title:row.title,kind,where:row.where,ask:row.ask,recommend:row.recommend,why:row.why,risk:row.risk,steps:row.steps,
       dueAt:row.dueAt, blocksWork:row.blocksWork, since:row.since, urgency:row.urgency, howToAnswer:row.howToAnswer, answerLead:row.answerLead, sessionId:row.agentId ?? null, sessionHost:row.sessionHost ?? null,
       questions:row.questions.map(q => ({...q, multi:q.multi ?? /복수|여러\s*개|여럿|select (?:all|multiple)/i.test(q.text)})),
-      qa, replyHistory:(answers.get(row.id) ?? []).filter(current),
+      qa, replyHistory:(answers?.get(row.id) ?? []).filter(current),
       mergeTarget:kind === "merge" && source.repository && row.pr ? {repo:source.repository,number:row.pr} : undefined,
       sessionMatch:binding ? {projectId:binding.projectId, sessionId:binding.sessionId, question:binding.question} : undefined,
     };
+    // Validate the imported card against the same limits as the decision store.
+    const checked = trackedDecisionInputSchema.safeParse(item, { reportInput: true });
+    if (!checked.success) {
+      invalid(raw, index + 1, diagnosticFields(checked.error, raw, true));
+      return [];
+    }
+    return [{ item, raw, row: index + 1 }];
+  });
+  const counts = new Map<string, number>();
+  for (const { item } of valid) counts.set(item.id, (counts.get(item.id) ?? 0) + 1);
+  return valid.flatMap(({ item, raw, row }) => {
+    if (counts.get(item.id) === 1) return [item];
+    invalid(raw, row, [{ path: "id", reason: "duplicate" }]);
+    return [];
   });
 }

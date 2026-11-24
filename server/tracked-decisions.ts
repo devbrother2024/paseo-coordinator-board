@@ -13,6 +13,7 @@ import { SessionPhotoStore } from "./session-photos";
 import { openNoFollowSync } from "./safe-open";
 import { trackedReplyMessage, trackedReplyOrigin } from "./decision-message";
 import type { Evidence } from "./conversation";
+import type { LedgerDiagnostics } from "../shared/ledger-diagnostics";
 import type { MergeTarget, PullRequestView } from "../shared/prs";
 import {
   cancelQueuedReply, resolveTrackedDecision, trackedDecisionInputSchema, trackedPullTarget, trackedKey, trackedMatches, usesSourceCoordinator,
@@ -32,11 +33,11 @@ const receipt = z.object({
   reviewedBy:z.string().optional(), reviewReason:z.string().optional(), title:z.string().optional(), coordinator:z.boolean().optional(), response:z.string().optional(),key:z.string(),fingerprint:z.string().regex(/^[a-f0-9]{64}$/),at:z.string().datetime(),answer:z.string().max(4000).optional(), recipientId:z.string().optional(), messageId:z.string().uuid().optional(), pending:z.boolean().optional()});
 const receipts = z.object({version:z.literal(1),items:z.array(receipt)});
 type SourceStatus = TrackedDecisionView["status"];
-type InputRow = {key:string;fingerprint:string;item:RoutedTrackedDecision};
+type InputRow = {key:string;fingerprint:string;item:RoutedTrackedDecision;historyUnavailable:boolean};
 type Receipt = z.output<typeof receipt>;
 type PendingDelivery = { ready:boolean; send:(answer:string,messageId:string,images?:WorkImage[])=>Promise<void>; accepted:(answer:string,messageId:string)=>Promise<boolean>; stillCurrent:()=>boolean };
 type Attempt = z.output<typeof resolveTrackedDecision.output> & {queueId?:string};
-type AdditionalSources = unknown[] | {items:unknown[];partial:boolean};
+type AdditionalSources = unknown[] | {items:unknown[];partial?:boolean;diagnostics?:LedgerDiagnostics};
 type ReadSources = (selected:Set<string>)=>AdditionalSources;
 
 function validQuestions(row:TrackedDecisionInput,input:TrackedResolution) {
@@ -82,13 +83,14 @@ export class TrackedDecisionStore {
     this.resolutionPath=join(file.dir,file.name+".resolved.json");
   }
 
-  private load(selected:Set<string>):{status:SourceStatus;rows:Map<string,InputRow>} {
+  private load(selected:Set<string>):{status:SourceStatus;rows:Map<string,InputRow>;diagnostics?:LedgerDiagnostics} {
     const rows=new Map<string,InputRow>();
     const input=readJson(this.path);
     if(input.status==="invalid" || input.status==="unavailable")return {status:input.status,rows};
     let sources:AdditionalSources;
     try{sources=this.readSources?.(new Set(selected)) ?? [];}catch{return {status:"unavailable",rows};}
-    const partial=!Array.isArray(sources) && sources.partial;
+    const diagnostics = Array.isArray(sources) ? undefined : sources.diagnostics;
+    const partial = !Array.isArray(sources) && (sources.partial || !!diagnostics);
     const extra=Array.isArray(sources) ? sources : sources.items;
     const raw=feed.safeParse(input.status==="ok"?input.data:[]);
     if(!raw.success || !Array.isArray(extra) || raw.data.length+extra.length>5000)return {status:"invalid",rows};
@@ -105,13 +107,16 @@ export class TrackedDecisionStore {
       const fingerprint=createHash("sha256").update(JSON.stringify({...content,sessionHost:item.sessionHost ?? undefined})).digest("hex");
       // Authority belongs to the operator-configured importer. Keep it out of
       // the content fingerprint so rotating owners cannot reopen old receipts.
-      if (index >= raw.data.length) {
+      const imported = index >= raw.data.length;
+      if (imported) {
         const owner = sourceAuthority.safeParse(entry);
         item.sourceCoordinatorId = owner.success ? owner.data.sourceCoordinatorId : null;
       }
-      rows.set(key,{key,fingerprint,item});
+      const historyUnavailable = imported && typeof entry === "object" && entry !== null &&
+        "historyUnavailable" in entry && entry.historyUnavailable === true;
+      rows.set(key,{key,fingerprint,item,historyUnavailable});
     }
-    if(partial)return {status:"partial",rows};
+    if(partial)return {status:"partial",rows,diagnostics};
     return {status:input.status==="absent" && !extra.length?"absent":"ok",rows};
   }
 
@@ -153,7 +158,7 @@ export class TrackedDecisionStore {
   }
 
   read(selected:Set<string>, sessions:SessionRow[], prs:PullRequestView, evidence: ReadonlyMap<string,Evidence> = new Map()):TrackedDecisionView & { history?:ReplyEntry[] } {
-    const {status,rows}=this.load(selected);
+    const {status,rows,diagnostics}=this.load(selected);
     const resolved=this.recorded();
     if(!resolved)return {items:[],status:"unavailable"};
     const history: ReplyEntry[] = [];
@@ -199,15 +204,16 @@ export class TrackedDecisionStore {
     const scopedSessions=sessions.filter(s=>selected.has(s.projectId));
     const scopedPrs={...prs,items:prs.items.filter(p=>p.projectIds.some(id=>selected.has(id)))};
     const items=[];
-    for(const {key,fingerprint,item} of rows.values()){
+    for(const {key,fingerprint,item,historyUnavailable} of rows.values()){
       const previous=resolved.get(receiptKey(key,fingerprint));
       if(previous && !previous.pending && !previous.queue)continue;
       const queuedReply=previous?.queue && previous.messageId && previous.recipientId
         ? {messageId:previous.messageId,recipientId:previous.recipientId,answer:previous.answer,
           imageCount:previous.photos?.length ?? 0,stopped:previous.queue.stopped} : undefined;
-      items.push({...item,key,fingerprint,...(queuedReply ? {queuedReply} : {}),...trackedMatches(item,scopedSessions,scopedPrs)});
+      items.push({...item,key,fingerprint,...(historyUnavailable ? {historyUnavailable: true as const} : {}),
+        ...(queuedReply ? {queuedReply} : {}),...trackedMatches(item,scopedSessions,scopedPrs)});
     }
-    return {items,status,...(history.length ? {history} : {})};
+    return {items,status,...(diagnostics ? {diagnostics} : {}),...(history.length ? {history} : {})};
   }
 
   readPhoto(key:string,index:number,selected:Set<string>):WorkImage|null {
@@ -228,6 +234,7 @@ export class TrackedDecisionStore {
     if(data.status==="invalid" || data.status==="unavailable")return {status:"unavailable"};
     const row=data.rows.get(trackedKey(input));
     if(!row)return {status:data.status==="partial"?"unavailable":"changed"};
+    if(row.historyUnavailable)return {status:"unavailable"};
     if(row.fingerprint!==input.fingerprint || !validQuestions(row.item,input))return {status:"changed"};
     if(proof && usesSourceCoordinator(row.item) && row.item.sourceCoordinatorId !== proof.coordinatorId) return {status:"out-of-scope"};
     const records=this.recorded();
@@ -272,7 +279,7 @@ export class TrackedDecisionStore {
       const scope=getScope();
       if (!scope.size || (input.projectId && !scope.has(input.projectId))) return {};
       const source=this.load(scope), row=source.rows.get(key);
-      return {row,unavailable:source.status==="invalid" || source.status==="unavailable" || (source.status==="partial" && !row)};
+      return {row,unavailable:source.status==="invalid" || source.status==="unavailable" || row?.historyUnavailable || (source.status==="partial" && !row)};
     };
     const {row,unavailable}=current();
     if (unavailable) return {status:"unavailable"};
@@ -383,8 +390,8 @@ export class TrackedDecisionStore {
     const scope=getScope();
     const visible=scope.size>0 && (!queue.projectId || scope.has(queue.projectId));
     const source=visible ? this.load(scope) : undefined;
-    if (source?.status==="unavailable" || source?.status==="invalid" || (source?.status==="partial" && !source.rows.has(record.key))) return "unavailable";
     const row=source?.rows.get(record.key);
+    if (source?.status==="unavailable" || source?.status==="invalid" || row?.historyUnavailable || (source?.status==="partial" && !row)) return "unavailable";
     if (row && row.fingerprint===record.fingerprint && row.item.sourceCoordinatorId===queue.owner) {
       const target=await prepare(row.item,id);
       if (target && target.stillCurrent()) {

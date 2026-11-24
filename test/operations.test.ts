@@ -706,3 +706,79 @@ test("the fallback kept behind a remembered pick is the model the board recommen
   await plain.call(setupCoordinator, {...plain.replace, expectedRoute:s.picked, expectedModeId:"auto", selection:"default"});
   expect(plain.store.read().routing.M).toEqual([s.picked, route]);
 });
+
+// The routing editor saves every change at once and undoes by saving the earlier list.
+test("each routing change is saved on its own, and undoing a first change returns the grade to the recommendation", async () => {
+  const s = scenario();
+  const before = await s.call(operationState, {});
+  expect(before.routing.C).toBeUndefined();
+  await s.call(updateRouting, {grade:"C", candidates:[alternate, route], expectedRevision:before.revision});
+  await s.call(updateRouting, {grade:"C", candidates:[route, alternate], expectedRevision:before.revision + 1});
+  expect((await s.call(operationState, {})).routing.C).toEqual([route, alternate]);
+  // Undo of the reorder, then of the first change.
+  await s.call(updateRouting, {grade:"C", candidates:[alternate, route], expectedRevision:before.revision + 2});
+  await s.call(updateRouting, {grade:"C", candidates:[], expectedRevision:before.revision + 3});
+  const after = await s.call(operationState, {});
+  expect(after.routing.C).toBeUndefined();
+  expect(after.revision).toBe(before.revision + 4);
+  expect((await s.tool("plan_board_assignment", {})).routes.find(r => r.grade === "C").route).toEqual(route);
+});
+
+test("a change made from a stale screen is refused and reports nothing as saved", async () => {
+  const s = scenario();
+  await s.call(updateRouting, {grade:"C", candidates:[alternate], expectedRevision:0});
+  await expect(s.call(updateRouting, {grade:"D", candidates:[route], expectedRevision:0})).rejects.toThrow(/배정표가 바뀌었습니다/);
+  const state = await s.call(operationState, {});
+  expect(state.routing).toEqual({C:[alternate]});
+  expect(state.revision).toBe(1);
+});
+
+test("the server checks every saved candidate again: effort, catalog, grade and excluded providers", async () => {
+  const s = scenario();
+  const refuse = async (grade: string, candidate: unknown) => {
+    const {revision} = await s.call(operationState, {});
+    await expect(s.call(updateRouting, {grade, candidates:[candidate], expectedRevision:revision})).rejects.toThrow(/사용할 수 있는|등급/);
+  };
+  await refuse("C", {...route, effort:"imaginary"});
+  await refuse("C", {...route, model:"not-in-catalog"});
+  await refuse("A", alternate);
+  await s.call(setProviderInclusion, {provider:"cursor", included:false, expectedRevision:0});
+  await refuse("C", alternate);
+  const state = await s.call(operationState, {});
+  expect(state.routing).toEqual({});
+  expect(state.revision).toBe(1);
+});
+
+// Turning an account off for automatic assignment is stored as leaving its provider out.
+test("an account turned off is left out of the recommendation and of usage-based selection, and comes back when turned on", async () => {
+  const s = scenario();
+  // Usage favours cursor for C, so the board would pick it.
+  s.activity.quotas = {codex:10, cursor:90};
+  const routeFor = async (grade: string) => (await s.tool("plan_board_assignment", {})).routes.find(r => r.grade === grade).route;
+  expect(await routeFor("C")).toEqual(alternate);
+  const first = await s.call(operationState, {});
+  await s.call(setProviderInclusion, {provider:"cursor", included:false, expectedRevision:first.revision});
+  expect(await routeFor("C")).toEqual(route);
+  expect(await routeFor("D")).toEqual(route);
+  const off = await s.call(operationState, {});
+  expect(off.providers.find(p => p.id === "cursor").included).toBe(false);
+  expect(off.catalog.some(m => m.provider === "cursor")).toBe(false);
+  // A stale screen cannot flip it back.
+  await expect(s.call(setProviderInclusion, {provider:"cursor", included:true, expectedRevision:first.revision})).rejects.toThrow(/바뀌었습니다/);
+  await s.call(setProviderInclusion, {provider:"cursor", included:true, expectedRevision:off.revision});
+  expect(await routeFor("C")).toEqual(alternate);
+});
+
+test("with every account turned off nothing is assigned, and an unknown account cannot be switched", async () => {
+  const s = scenario();
+  await s.call(setProviderInclusion, {provider:"codex", included:false, expectedRevision:0});
+  await s.call(setProviderInclusion, {provider:"cursor", included:false, expectedRevision:1});
+  const state = await s.call(operationState, {});
+  expect(state.catalog).toEqual([]);
+  expect(state.providers.every(p => !p.included)).toBe(true);
+  for (const entry of (await s.tool("plan_board_assignment", {})).routes) expect(entry.route).toBeNull();
+  await expect(s.tool("assign_board_worker", {job})).rejects.toThrow(/미리보기/);
+  await expect(s.call(setupCoordinator, {replace:true, expectedCoordinator:coordinator, expectedRoute:route, selection:"once"})).rejects.toThrow(/사용할 수 있는/);
+  await expect(s.call(setProviderInclusion, {provider:"not-on-this-host", included:false, expectedRevision:state.revision})).rejects.toThrow(/실행기/);
+  expect(s.sessions.size).toBe(0);
+});

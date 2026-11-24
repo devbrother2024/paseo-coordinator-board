@@ -37,6 +37,7 @@ import { groupProjects, selectedProjectIds, toggleProjectFilter, type ProjectFil
 import { ProjectFilterBar } from "./project-filter-bar";
 import { shouldRefreshDigest } from "./digest-freshness";
 import { DigestFeedback, useDigestRequest } from "./digest-request";
+import { LedgerWarnings } from "./ledger-warnings";
 
 type Actions = { sessionHostLabel?: string; coordinator?: string | null; onCoordinator?: (id: string | null) => void; changing?: boolean; onOpen?: (id: string) => void; onEdit: (id: string) => void };
 
@@ -379,8 +380,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             disabled={busy || digest.waiting} onPress={() => void digest.request(true)} />}
         </View>
         {showDigestRefresh && <DigestFeedback theme={theme} feedback={digest.feedback} />}
-        {incomplete &&
-          <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{t("일부 결정 기록을 읽지 못했습니다. 현재 건수에는 확인한 항목만 포함됩니다.", "Some decision records could not be loaded. The count includes the available items.")}</Text>}
+        {incomplete && <LedgerWarnings diagnostics={snapshot.trackedDecisions?.diagnostics} theme={theme} />}
         {filters.size > 0 && !filteredTotal && total > 0 && !incomplete && <Text style={{color:c.foregroundMuted}}>{t("선택한 프로젝트에 결정할 일이 없습니다.","No decisions in the selected projects.")}</Text>}
         {total === 0 && !incomplete && <Text style={{ color: c.foregroundMuted }}>{t("지금 결정할 일이 없습니다.", "No decisions are waiting for you.")}</Text>}
         {mergeNotice && inFilter(mergeNotice.projectId) && snapshot.projects.some(p => p.selected && p.id === mergeNotice.projectId) && (mergeNotice.status === "merged" || mergeNotice.status === "already-merged" ||

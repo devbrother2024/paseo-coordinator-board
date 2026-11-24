@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Text, View } from "react-native";
+import { Switch, Text, View } from "react-native";
 import type { ProviderEntry } from "../shared/dispatch";
-import { hasUsageReading, recentUsage, type AccountUsage } from "../shared/usage-routing";
-import { Button, type Theme } from "./controls";
+import { recentUsage, type AccountUsage } from "../shared/usage-routing";
+import { accountCards, type AccountCard as AccountCardData } from "./account-cards";
+import type { Theme } from "./controls";
 import { useBoardLanguage } from "./language";
 
-function AccountCard({label,report,supplemental,issue,theme}: {label:string;report?:AccountUsage;supplemental?:boolean;issue?:AccountUsage["issue"];theme:Theme}) {
+function AccountCard({label,report,supplemental,issue,provider,busy,onInclude,theme}: AccountCardData & {busy:boolean;onInclude:(provider:string,included:boolean)=>void;theme:Theme}) {
   const {t,language} = useBoardLanguage();
   const c = theme.colors;
   const locale = language === "ko" ? "ko-KR" : "en-US";
@@ -21,6 +22,18 @@ function AccountCard({label,report,supplemental,issue,theme}: {label:string;repo
   const stale = report && !recentUsage(report);
   return <View style={{gap:7,padding:10,borderWidth:1,borderColor:c.border,borderRadius:8,backgroundColor:c.surface0}}>
     <Text selectable style={{color:c.foreground,fontWeight:"600"}}>{[label,report?.plan].filter(Boolean).join(" · ")}</Text>
+    {provider && <View style={{gap:3}}>
+      <View style={{flexDirection:"row",alignItems:"center",gap:8}}>
+        <Switch accessibilityRole="switch" value={provider.included} disabled={busy} onValueChange={value => onInclude(provider.id,value)}
+          accessibilityLabel={t(`${label} · 자동 배정에 사용`,`Use ${label} for automatic assignment`)}
+          trackColor={{false:c.border,true:c.accent}} thumbColor={provider.included ? c.accentForeground : c.foregroundMuted} />
+        <Text style={{flexShrink:1,fontSize:13,color:provider.included ? c.foreground : c.foregroundMuted}}>
+          {provider.included ? t("자동 배정에 사용","Used for automatic assignment") : t("자동 배정에서 꺼짐","Off for automatic assignment")}
+        </Text>
+      </View>
+      {provider.shared && <Text style={{fontSize:12,color:c.foregroundMuted}}>{t(`${provider.label}의 계정은 함께 켜지고 꺼집니다. 보드는 실행기에 배정하고, 어느 계정을 쓸지는 실행기가 정합니다.`,
+        `Accounts under ${provider.label} turn on and off together. The board assigns to the provider, and the provider decides which account runs.`)}</Text>}
+    </View>}
     {rows.map((row,i) => {
       const expired = !!row.reset && Date.parse(row.reset) <= Date.now();
       const pct = expired ? null : row.pct;
@@ -49,35 +62,37 @@ function AccountCard({label,report,supplemental,issue,theme}: {label:string;repo
   </View>;
 }
 
-export function UsageRouting({providers,reports,supplemental=[],enabled,busy,onToggle,theme}:{
-  providers:ProviderEntry[]; reports:AccountUsage[]; supplemental?:AccountUsage[]; enabled:boolean; busy:boolean; onToggle:()=>void; theme:Theme;
+// Accounts with their remaining usage. Each account's switch decides whether the board assigns work to it,
+// and the switch above them decides whether remaining usage orders the accounts that are on.
+export function UsageRouting({providers,reports,supplemental=[],busy,usage,onInclude,theme}:{
+  providers:ProviderEntry[]; reports:AccountUsage[]; supplemental?:AccountUsage[]; busy:boolean;
+  usage:{enabled:boolean;ready:boolean;onToggle:()=>void}; onInclude:(provider:string,included:boolean)=>void; theme:Theme;
 }) {
   const {t} = useBoardLanguage();
   const c = theme.colors;
   const [width,setWidth] = useState(0);
-  const seen = new Set([...reports,...supplemental].map(r=>r.providerId));
-  const added = new Set(supplemental.filter(hasUsageReading).map(r=>r.providerId));
-  const counts = new Map<string,number>();
-  for (const r of reports) counts.set(r.providerId,(counts.get(r.providerId) ?? 0)+1);
-  const cards = [
-    ...reports.filter(r=>!added.has(r.providerId) || hasUsageReading(r) || (counts.get(r.providerId) ?? 0) > 1)
-      .map(r=>({id:r.providerId,label:r.label,report:r,issue:r.issue,supplemental:false})),
-    ...supplemental.map(r=>({id:r.providerId,label:r.label,report:r,issue:counts.get(r.providerId) === 1 ? reports.find(p=>p.providerId===r.providerId)?.issue : undefined,supplemental:true})),
-    ...providers.filter(p=>!seen.has(p.id)).map(p=>({id:p.id,label:p.label,report:undefined,supplemental:false})),
-  ];
+  const {cards,allOff} = accountCards(providers,reports,supplemental);
+  const ordering = t("사용량으로 순서 정하기","Order by remaining usage");
   return <View style={{gap:9,padding:12,borderRadius:8,backgroundColor:c.surface1}}>
-    <Text accessibilityRole="header" style={{color:c.foreground,fontWeight:"600"}}>{t("계정별 남은 사용량","Remaining account usage")}</Text>
+    <Text accessibilityRole="header" style={{color:c.foreground,fontWeight:"600"}}>{t("계정과 사용량","Accounts and usage")}</Text>
+    <View style={{gap:4}}>
+      <View style={{flexDirection:"row",alignItems:"center",gap:8}}>
+        <Switch accessibilityRole="switch" accessibilityLabel={ordering} value={usage.enabled} disabled={busy || !usage.ready} onValueChange={usage.onToggle}
+          trackColor={{false:c.border,true:c.accent}} thumbColor={usage.enabled ? c.accentForeground : c.foregroundMuted} />
+        <Text style={{flexShrink:1,color:c.foreground,fontWeight:"600",fontSize:13}}>{ordering}</Text>
+      </View>
+      <Text style={{fontSize:12,color:c.foregroundMuted}}>{t("켜면 추천을 쓰는 등급에서, 켜 둔 계정 가운데 공통 한도의 남은 사용량이 가장 많은 쪽을 먼저 고릅니다. 직접 지정한 등급은 저장한 순서를 따릅니다.",
+        "When on, grades on the recommendation pick the account with the most remaining usage among those turned on that share a limit. Custom grades follow their saved order.")}</Text>
+    </View>
+    {allOff && <Text accessibilityLiveRegion="polite" style={{color:c.statusWarning}}>{t("모든 계정이 자동 배정에서 꺼져 있어 보드가 작업을 배정할 수 없습니다. 쓸 계정을 하나 이상 켜 주세요.",
+      "Every account is turned off for automatic assignment, so the board cannot assign work. Turn on at least one account.")}</Text>}
     <View onLayout={e=>setWidth(e.nativeEvent.layout.width)} style={{flexDirection:"row",flexWrap:"wrap",gap:8,alignItems:"flex-start"}}>
       {cards.map((card,i)=><View key={card.id+":"+i} style={{width:width>=580 ? Math.floor((width-8)/2) : "100%"}}>
-        <AccountCard {...card} theme={theme} />
+        <AccountCard {...card} theme={theme} busy={busy} onInclude={onInclude} />
       </View>)}
     </View>
     {!cards.length && <Text style={{color:c.foregroundMuted}}>{t("호스트에 사용량 보고서가 없습니다.","This host has no usage reports.")}</Text>}
-    <View style={{alignItems:"flex-start"}}>
-      <Button theme={theme} selected={enabled} disabled={busy}
-        label={enabled ? t("사용량 기반 자동 배정 켜짐","Usage-aware routing on") : t("사용량 기반 자동 배정 꺼짐","Usage-aware routing off")}
-        onPress={onToggle}/>
-    </View>
-    <Text style={{fontSize:12,color:c.foregroundMuted}}>{t("자동 배정은 같은 등급에서 공통 한도가 있는 계정의 가장 낮은 잔여율을 비교합니다. 직접 저장한 배정 순서가 우선입니다.","Automatic routing compares the lowest fresh headroom for candidates with a shared quota window. Saved route priorities take precedence.")}</Text>
+    {!!cards.length && <Text style={{fontSize:12,color:c.foregroundMuted}}>{t("끈 계정에는 보드가 작업을 배정하지 않습니다. 추천과 사용량 기준 선택에서 빠지고, 직접 지정한 목록에 남아 있으면 건너뜁니다. 새로 발견한 실행기는 켜진 채로 들어옵니다.",
+      "The board assigns no work to an account that is turned off. It is left out of the recommendation and of usage-based selection, and skipped where a custom list still holds it. Newly discovered providers start turned on.")}</Text>}
   </View>;
 }

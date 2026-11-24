@@ -9,6 +9,7 @@ import { Button, type Theme } from "./controls";
 import { HistoryMarkdown } from "./history-markdown";
 import { TrackedPullStatus } from "./pull-requests";
 import { useBoardLanguage } from "./language";
+import { ledgerHistoryUnavailableText } from "./ledger-diagnostics";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
 
 import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session-chips";
@@ -54,6 +55,7 @@ function DecisionRecord({ item, theme, links, recipientId, blockedNote, onResolv
   const resolve = useRpc(resolveTrackedDecision);
   const cancel = useRpc(cancelQueuedReply);
   const queue = item.queuedReply;
+  const canReply = !item.historyUnavailable;
   const [expanded, setExpanded] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [confirmedOwner, setConfirmedOwner] = useState(item.sourceCoordinatorId);
@@ -115,8 +117,8 @@ function DecisionRecord({ item, theme, links, recipientId, blockedNote, onResolv
   // A suggestion is visible before the person edits. Checking a record sends no reply.
   const hasDraft = hasQuestionDraft || hasPhotos || !!editedReply?.trim() || questionText.some(value => !!value.trim());
   const answerDisabled = busy || attachments.blocked || !hasAnswer || outstanding || tooLong;
-  const sendReply = { disabled: !recipientId || !recordActions || answerDisabled || changedOwner || !!blockedNote, onPress: () => void acknowledge("send") };
-  const inputFocus = useDecisionInteraction(!queue && !isClosed && !needsRefresh &&
+  const sendReply = { disabled: !canReply || !recipientId || !recordActions || answerDisabled || changedOwner || !!blockedNote, onPress: () => void acknowledge("send") };
+  const inputFocus = useDecisionInteraction(canReply && !queue && !isClosed && !needsRefresh &&
     (hasDraft || editedReply !== null || Object.values(typed).some(value => value !== undefined) ||
       attachments.blocked || busy || confirming || Object.values(skipped).some(Boolean)));
   const checkLabel = t("확인했어요", "I checked this");
@@ -156,7 +158,7 @@ function DecisionRecord({ item, theme, links, recipientId, blockedNote, onResolv
     const send = mode === "send";
     if (send && (!recipientId || changedOwner)) return;
     const text = mode === "review" ? "" : answer;
-    if (queue || pending.current || attachments.blocksSubmit() || isClosed || needsRefresh || outstanding || (mode !== "review" && tooLong)) return;
+    if (!canReply || queue || pending.current || attachments.blocksSubmit() || isClosed || needsRefresh || outstanding || (mode !== "review" && tooLong)) return;
     if (mode === "review" ? hasDraft || attachments.latest.current.length > 0 || item.matchedSessionId : !text && !hasPhotos) return;
     pending.current = true; setBusy(true);
     let status: Resolution;
@@ -184,13 +186,14 @@ function DecisionRecord({ item, theme, links, recipientId, blockedNote, onResolv
     {isMerge && (pull || (target
       ? <TrackedPullStatus repo={target.repo} number={target.number} projectId={item.projectId} theme={theme} securityGate={securityGate} />
       : <Text selectable style={{color:c.foregroundMuted}}>{t("PR 링크와 병합 상태 미확인", "Pull request link and merge status unavailable")}</Text>))}
-    {children}
+    {canReply && children}
     {!isMerge && <Lines theme={theme} title={t("추천", "Recommendation")} lines={item.recommend.filter(line => line !== headline && line !== item.howToAnswer)} />}
+    {!canReply && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{ledgerHistoryUnavailableText(t)}</Text>}
     {queue && <View style={{gap:5, padding:10, borderRadius:7, backgroundColor:c.surface0}}>
-      <Text accessibilityLiveRegion="polite" style={{color:queue.stopped ? c.statusWarning : c.foreground,fontWeight:"600"}}>
+      {canReply && <Text accessibilityLiveRegion="polite" style={{color:queue.stopped ? c.statusWarning : c.foreground,fontWeight:"600"}}>
         {queue.stopped ? t("자동 전송 중단 · 카드와 수신 세션을 확인해 주세요.", "Delivery paused. Check the card and its recipient.")
           : t("전송 대기 · 세션이 준비되면 자동으로 보냅니다.", "Queued · sends automatically when the session is ready.")}
-      </Text>
+      </Text>}
       {!!queue.answer && <Text selectable style={{color:c.foreground}}>{queue.answer}</Text>}
       {!!queue.imageCount && <Text style={{color:c.foregroundMuted}}>{t("첨부 사진 "+queue.imageCount+"장","Attached photos · "+queue.imageCount)}</Text>}
       <View style={wrap}><Button theme={theme} {...named(t("전송 대기 취소","Cancel queued reply"))} disabled={busy} onPress={()=>void cancelWaiting()} /></View>
@@ -199,14 +202,15 @@ function DecisionRecord({ item, theme, links, recipientId, blockedNote, onResolv
       {isMerge && !!item.questions.length && <Text accessibilityRole="header" style={{color:c.foreground, borderTopWidth:1, borderTopColor:c.border, paddingTop:10, fontSize:16, fontWeight:"600"}}>{followupTitle}</Text>}
       {item.questions.map((question, index) => <View key={index} style={{ gap: 6 }}>
         <HistoryMarkdown theme={theme} source={question.text} heading />
-        {!!question.options.length && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
+        {canReply && !!question.options.length && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
           {question.multi ? t("여러 개 선택", "Choose any that apply") : t("하나 선택", "Choose one")}
         </Text>}
         {question.options.map((option, choice) => {
           const checked = selected[index]?.includes(choice) ?? false;
           const title = option.key + " · " + option.text;
           return <Pressable key={choice} accessibilityRole={question.multi ? "checkbox" : "radio"}
-            accessibilityLabel={item.title + " · " + question.text + " · " + title} accessibilityState={{ checked, disabled: busy }} aria-checked={checked} disabled={busy}
+            accessibilityLabel={item.title + " · " + question.text + " · " + title}
+            accessibilityState={{ checked, disabled: busy || !canReply }} aria-checked={checked} disabled={busy || !canReply}
             onPress={() => choose(index, choice, question.multi)}
             style={{ gap: 4, padding: 8, borderWidth: 1, borderRadius: 7, borderColor: checked ? c.accent : c.border, backgroundColor: checked ? c.surface2 : c.surface0 }}>
             <Text style={{ color: c.foreground, fontWeight: checked ? "700" : "500" }}>
@@ -217,17 +221,17 @@ function DecisionRecord({ item, theme, links, recipientId, blockedNote, onResolv
               .map(([label, text]) => text ? <Text key={label} style={{ color: c.foregroundMuted, fontSize: 12 }}>{label} · {text}</Text> : null)}
           </Pressable>;
         })}
-        {!skipped[index] && <PhotoComposer theme={theme} disabled={busy} draft={attachments} questionIndex={index}>
+        {canReply && !skipped[index] && <PhotoComposer theme={theme} disabled={busy} draft={attachments} questionIndex={index}>
           <DecisionReplyInput {...inputFocus} send={sendReply} theme={theme} value={questionText[index]} disabled={busy} maxLength={4000}
             accessibilityLabel={item.title + " · " + question.text + " · " + t("답장 내용", "Reply text")}
             onChangeText={text => { setConfirming(false); setTyped(previous => ({...previous,[index]:text})); setSelected(previous => ({...previous,[index]:[]})); }}
             placeholder={question.options.length ? t("선택하거나 직접 답을 입력하세요", "Choose an option or write your reply") : t("내 답을 입력하세요", "Write your reply")} />
         </PhotoComposer>}
-        <View style={wrap}><Button theme={theme} label={skipped[index] ? t("건너뛰기 취소", "Undo skip") : t("이 질문 건너뛰기", "Skip this question")}
+        {canReply && <View style={wrap}><Button theme={theme} label={skipped[index] ? t("건너뛰기 취소", "Undo skip") : t("이 질문 건너뛰기", "Skip this question")}
           accessibilityLabel={item.title + " · " + question.text + " · " + t("건너뛰기", "Skip")} selected={!!skipped[index]}
-          disabled={busy || attachments.reading || attachments.errors.has(index) || attachments.photos.some(photo => photo.questionIndex === index)} onPress={() => skip(index)} /></View>
+          disabled={busy || attachments.reading || attachments.errors.has(index) || attachments.photos.some(photo => photo.questionIndex === index)} onPress={() => skip(index)} /></View>}
       </View>)}
-      {!item.questions.length && !item.matchedSessionId && <>
+      {canReply && !item.questions.length && !item.matchedSessionId && <>
         <PhotoComposer theme={theme} disabled={busy} draft={attachments}>
           <DecisionReplyInput {...inputFocus} send={sendReply} theme={theme} accessibilityLabel={item.title + " · " + t("답장 내용", "Reply text")}
             value={freeReply} disabled={busy} maxLength={4000} onChangeText={value => { setEditedReply(value); setConfirming(false); }}
@@ -236,8 +240,8 @@ function DecisionRecord({ item, theme, links, recipientId, blockedNote, onResolv
         {template && editedReply === null && <View style={wrap}><Button theme={theme} disabled={busy} label={t("답장 양식 불러오기", "Load reply template")}
           onPress={() => { setEditedReply(suggested); setConfirming(false); }} /></View>}
       </>}
-      {tooLong && <Text style={{ color: c.statusWarning }}>{t("답을 4,000자 이내로 줄여 주세요.", "Shorten the answer to 4,000 characters.")}</Text>}
-      <View style={{ gap: 6 }}>
+      {canReply && tooLong && <Text style={{ color: c.statusWarning }}>{t("답을 4,000자 이내로 줄여 주세요.", "Shorten the answer to 4,000 characters.")}</Text>}
+      {canReply && <View style={{ gap: 6 }}>
         {owned && !links.owner && item.sourceCoordinatorId && <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>
           {t("원장 소유 세션", "Ledger owner session")} · {item.sourceCoordinatorId}
         </Text>}
@@ -266,7 +270,7 @@ function DecisionRecord({ item, theme, links, recipientId, blockedNote, onResolv
           </Pressable>)}
           {renderClarification?.(setHasQuestionDraft)}
         </View>
-      </View>
+      </View>}
     </View>}
     <Pressable accessibilityRole="button" accessibilityState={{ expanded }} accessibilityLabel={named(expanded ? t("결정 상세 접기", "Hide decision details") : t("결정 상세 보기", "View decision details")).accessibilityLabel}
       style={{ alignSelf: "flex-start", paddingVertical: 4 }} onPress={() => setExpanded(value => !value)}>
@@ -288,7 +292,7 @@ function DecisionRecord({ item, theme, links, recipientId, blockedNote, onResolv
       <Lines theme={theme} title={t("진행 단계", "Steps")} lines={item.steps} />
       <Lines theme={theme} title={t("근거", "Evidence")} lines={item.why} />
       <Lines theme={theme} title={t("위험", "Risks")} lines={item.risk} />
-      {!renderClarification && !!item.qa.length && <View style={{ gap: 5 }}>
+      {(!renderClarification || !canReply) && !!item.qa.length && <View style={{ gap: 5 }}>
         <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{t("이전 문답", "Question history")}</Text>
         {item.qa.map((entry, i) => <View key={i} style={{ gap: 3 }}>
           <Text selectable style={{ color: c.foreground }}>{[t("질문", "Question"), entry.askedAt, entry.q].filter(Boolean).join(" · ")}</Text>
@@ -296,7 +300,7 @@ function DecisionRecord({ item, theme, links, recipientId, blockedNote, onResolv
         </View>)}
       </View>}
       <Lines theme={theme} title={t("이전 답변", "Previous replies")} lines={item.replyHistory.map(entry => [entry.at, entry.text].filter(Boolean).join(" · "))} />
-      {!queue && !isClosed && !needsRefresh && !humanCheck && !item.matchedSessionId && !hasDraft && !outstanding && <View style={wrap}>
+      {canReply && !queue && !isClosed && !needsRefresh && !humanCheck && !item.matchedSessionId && !hasDraft && !outstanding && <View style={wrap}>
         {confirming && <Text style={{ color: c.foregroundMuted }}>{t("답변 전송 없이 이 보드 기록을 닫습니다.", "Close this board record without sending a reply.")}</Text>}
         <Button theme={theme} {...named(confirming ? t("기록 닫기 확정", "Confirm closing record") : t("기록 닫기", "Close record"))}
           disabled={busy || attachments.blocked} onPress={() => confirming ? void acknowledge("review") : setConfirming(true)} />
