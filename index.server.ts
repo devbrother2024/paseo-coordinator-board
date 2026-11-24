@@ -56,11 +56,7 @@ export default function contribute(server: PluginServerContext) {
   });
   const prs = new ProjectPullRequests(prefs);
   const tracked = new TrackedDecisionStore(join(dataDir, "tracked-decisions.json"),
-    selected => {
-      let partial = false;
-      const items = readProjectDecisionSources(join(dataDir, "tracked-sources.json"), selected, () => { partial = true; });
-      return {items,partial};
-    });
+    selected => readProjectDecisionSources(join(dataDir, "tracked-sources.json"), selected));
   const mergeNotifications = new MergeNotifications(prefs,(target,coordinator)=>tracked.mergeRecipient(target,coordinator),
     (sdk,target)=>prs.mergeScope(sdk,target));
   server.handle(boardReadiness, async () => {
@@ -205,7 +201,7 @@ export default function contribute(server: PluginServerContext) {
       item.source === card.source && item.projectId === card.projectId && item.id === card.id && item.fingerprint === card.fingerprint;
     const before = view.trackedDecisions?.items.find(sameCard);
     const now = records.items.find(sameCard);
-    return !!before && !!now && now.sourceCoordinatorId === before.sourceCoordinatorId;
+    return !!before && !!now && !now.historyUnavailable && now.sourceCoordinatorId === before.sourceCoordinatorId;
   });
   server.handle(askClarification, async (input, { paseo }) => {
     try {

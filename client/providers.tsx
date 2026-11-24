@@ -23,11 +23,10 @@ function roles(id: string, catalog: CatalogModel[], t: Translate) {
   return scope.join(" / ");
 }
 
-export function ProviderSettings({ providers, catalog, theme, busy, change, overrides, setMode }: {
+export function ProviderSettings({ providers, catalog, theme, busy, overrides, setMode }: {
   providers: Provider[]; catalog: CatalogModel[];
   theme: Theme;
   busy: boolean;
-  change: (provider: string, included: boolean) => void;
   overrides?: Record<string,string>;
   setMode: (provider: string, mode: string | null) => void;
 }) {
@@ -56,12 +55,9 @@ export function ProviderSettings({ providers, catalog, theme, busy, change, over
         {overrides && (provider.workerModes?.length || Object.hasOwn(overrides, provider.id) || recommendedWorkerMode(provider.id)) ? <WorkerPermissions
           provider={provider.id} modes={provider.workerModes} selected={Object.hasOwn(overrides, provider.id) ? overrides[provider.id] : undefined}
           theme={theme} busy={busy} save={setMode} /> : null}
-        <View style={{ flexDirection: "row" }}>
-          <Button theme={theme} selected={provider.included} disabled={busy}
-            label={provider.included ? t("배정에 포함됨", "Included in routing") : t("배정에서 제외됨", "Excluded from routing")}
-            accessibilityLabel={t(`${provider.id} · 배정${provider.included ? "에서 제외" : "에 포함"}`, `${provider.included ? "Exclude" : "Include"} ${provider.id} ${provider.included ? "from" : "in"} routing`)}
-            onPress={() => change(provider.id, !provider.included)} />
-        </View>
+        {!provider.included && <Text style={{ fontSize: 12, color: c.statusWarning }}>
+          {t("자동 배정에서 꺼짐 · ‘계정과 사용량’에서 다시 켤 수 있습니다.", "Turned off for automatic assignment · Turn it back on under Accounts and usage.")}
+        </Text>}
       </View>)}
     </View>}
   </View>;

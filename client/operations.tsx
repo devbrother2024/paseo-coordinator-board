@@ -20,7 +20,7 @@ import { ProviderSettings } from "./providers";
 import { FactReplyControls } from "./fact-reply-controls";
 import { CoordinatorPinControls } from "./coordinator-pin";
 import { CoordinatorReplace } from "./coordinator-replace";
-import { RouteEditor, routeName, wrap } from "./route-editor";
+import { RouteEditor, routeName, wrap, type RoutingSave } from "./route-editor";
 import { useBoardLanguage } from "./language";
 import { explainEmptyRoute } from "./route-options";
 import { DigestFeedback, type CoordinatorAction, type DigestRequest } from "./digest-request";
@@ -56,7 +56,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   const hasRequest = Boolean(text.trim() || photoDraft.photos.length);
   const sendRequest = { disabled: busy || !configured || !hasRequest || photoDraft.blocked, onPress: () => void postWork() };
   const [inputFocused, setInputFocused] = useState(false);
-  const [feedbackArea, setFeedbackArea] = useState<"provider" | "routing" | "coordinator">("provider");
+  const [feedbackArea, setFeedbackArea] = useState<"provider" | "accounts" | "routing" | "coordinator">("provider");
   const live = useRef(false),
     generation = useRef(0);
   const delivery = useRef({ payload: "", key: "" });
@@ -75,6 +75,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
         setData(result);
         if (clearError) setError("");
       }
+      return result;
     } catch (e) {
       if (live.current && token === generation.current) {
         setFeedbackArea("provider");
@@ -119,6 +120,23 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
     } catch (e) {
       if (live.current) setError(e instanceof Error ? e.message : String(e));
       return null;
+    } finally {
+      pending.current = false;
+      setBusy(false);
+    }
+  }
+  // A routing change reports back to its own row. A refusal carries the latest stored revision so
+  // the row can tell a lost race from a rejected candidate.
+  async function saveRouting(input: Parameters<typeof savePolicy>[0]): Promise<RoutingSave> {
+    if (pending.current) return { ok: false, message: t("다른 설정을 저장하는 중입니다. 잠시 뒤 다시 시도해 주세요.", "Another setting is being saved. Try again in a moment."), revision: input.expectedRevision };
+    pending.current = true;
+    setBusy(true);
+    try {
+      let failure: string | null = null;
+      try { await savePolicy(input); } catch (e) { failure = e instanceof Error ? e.message : String(e); }
+      const latest = live.current ? await refresh(false) : undefined;
+      if (failure === null && live.current) refreshBoard();
+      return failure === null ? { ok: true } : { ok: false, message: failure, revision: latest?.revision ?? null };
     } finally {
       pending.current = false;
       setBusy(false);
@@ -193,35 +211,25 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
             t("다음 작업 세션의 권한을 저장했습니다.", "Saved permissions for new worker sessions."), "provider");
           if (live.current) await refresh(!!result);
         }}
-        change={async (provider, included) => {
-        const result = await act(() => includeProvider({ provider, included, expectedRevision: data.revision }),
-          included ? t("이 실행기를 새 작업 배정에 포함했습니다.", "Provider included in new assignments.") : t("이 실행기를 새 작업 배정에서 제외했습니다.", "Provider excluded from new assignments."), "provider");
-        if (live.current) await refresh(!!result);
-      }} />}
+        />}
       {feedbackArea === "provider" && feedback}
     </View>
-    {data && <UsageRouting theme={theme} providers={data.providers} reports={data.usage ?? []} supplemental={data.displayUsage} enabled={data.usageRouting ?? false} busy={busy || loading || !data.usage}
-      onToggle={() => void (async () => {
-        const result = await act(() => changeUsageRouting({enabled:!data.usageRouting,expectedRevision:data.revision}), t("사용량 기반 배정 설정을 저장했습니다.","Saved the usage routing preference."), "routing");
+    {data && <UsageRouting theme={theme} providers={data.providers} reports={data.usage ?? []} supplemental={data.displayUsage} busy={busy || loading}
+      usage={{ enabled: data.usageRouting ?? false, ready: !!data.usage, onToggle: () => void (async () => {
+        const result = await act(() => changeUsageRouting({enabled:!data.usageRouting,expectedRevision:data.revision}), t("사용량으로 순서를 정하는 설정을 저장했습니다.","Saved the usage ordering preference."), "accounts");
         if (live.current) await refresh(!!result);
-      })()} />}
+      })() }}
+      onInclude={async (provider, included) => {
+        const result = await act(() => includeProvider({ provider, included, expectedRevision: data.revision }),
+          included ? t("이 계정을 자동 배정에 사용합니다.", "This account is used for automatic assignment.") : t("이 계정을 자동 배정에서 껐습니다.", "This account is off for automatic assignment."), "accounts");
+        if (live.current) await refresh(!!result);
+      }} />}
+    {feedbackArea === "accounts" && feedback}
     <View style={section}>
       <Text accessibilityRole="header" style={heading}>{t("모델 배정", "Model routing")}</Text>
-      <Text style={{ color: muted }}>{t("추천 설정은 연결된 실행기에서 사용할 수 있는 모델을 고릅니다. 직접 정하려면 후보를 원하는 순서대로 저장하세요.", "Recommended settings use available models from connected providers. To customize a grade, save its models in order of preference.")}</Text>
-      {data && <RouteEditor
-        data={data}
-        theme={theme}
-        busy={busy || loading}
-        save={async (grade, candidates, expectedRevision) => {
-          const result = await act(
-            () => savePolicy({ grade, candidates, expectedRevision }),
-            grade === "M" ? t("운영 세션 모델을 저장했습니다. 다음 생성 또는 교체부터 적용됩니다.", "Coordinator model saved for the next creation or replacement.") : t("배정표를 저장했습니다. 다음 배정부터 적용됩니다.", "Routing saved for the next assignment."),
-            "routing",
-          );
-          if (live.current) await refresh(!!result);
-          return !!result;
-        }}
-      />}
+      <Text style={{ color: muted }}>{t("어떤 일에 어떤 모델을 쓰는지 한눈에 보고, 그 줄에서 바로 바꿉니다. 바꾼 내용은 바로 저장되어 다음 배정부터 적용됩니다.", "See which model each kind of work uses and change it on its row. Changes are saved at once and apply from the next assignment.")}</Text>
+      {data && <RouteEditor data={data} theme={theme} busy={busy || loading}
+        save={(grade, candidates, expectedRevision) => saveRouting({ grade, candidates, expectedRevision })} />}
       {feedbackArea === "routing" && feedback}
     </View>
     {configured && coordinator && <CoordinatorReplace theme={theme} coordinator={coordinator} data={data} loading={loading} disabled={busy}

@@ -132,7 +132,7 @@ export function clarificationTarget(card: ClarificationCard, view: Clarification
         r.id === card.id &&
         r.fingerprint === card.fingerprint,
     );
-    if (!item) return null;
+    if (!item || item.historyUnavailable) return null;
     const current = trackedClarificationCard(item, view.sessions).sessionQuestion;
     if (card.sessionQuestion?.version !== current?.version || card.sessionQuestion?.sessionId !== current?.sessionId ||
         card.sessionQuestion?.projectId !== current?.projectId) return null;
