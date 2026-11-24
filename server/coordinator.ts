@@ -53,7 +53,7 @@ export function attachCoordinatorTools(server: PluginServerContext, prefs: Prefe
   });
   const write = defineAgentTool({
     name: "classify_board_conversation",
-    description: "Classify the cited conversation: question for a specific human action, review for evidence to verify, idle when no action is due. For a human question, put one concise question in content.question. Give an editable complete reply in content.recommendation and a short evidence-based recommendationReason, or specify the missing input in content.needsInput. Include selectable options (label, reply) only when supported. Older unstructured judgments remain valid. Writes a board judgment only. Never approves, completes work, or sends messages.",
+    description: "Classify the cited conversation: question for a specific human action, review for evidence to verify, idle when no action is due. For a human question, put one concise question in content.question. Give an editable complete reply in content.recommendation and a short evidence-based recommendationReason, or specify the missing input in content.needsInput. Include selectable options (label, reply) only when supported. When the session asks about a bare label such as '(b)' or 'Option B', list every option with what it does in content.options; never defer the explanation to the session view. Older unstructured judgments remain valid. Writes a board judgment only. Never approves, completes work, or sends messages.",
     input: judgment.extend({ sessionId: z.string() }),
     async execute(input, { paseo, agent }) {
       const rows = await managedRowsForCoordinator(paseo, prefs, agent.id);

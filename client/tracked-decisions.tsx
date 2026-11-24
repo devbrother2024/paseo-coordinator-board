@@ -18,6 +18,8 @@ import {
   closedRevision, nextFailureStreak, optionId, recommendedChoices, recommendedTrackedReply, redirectAwaitsCheck, trackedBasisRecipient, trackedDraftLayout,
   trackedRecovery, trackedReplyBasis, trackedRetryFingerprint, type FailureStreak,
 } from "./tracked-reply-draft";
+import { ledgerChoiceGaps } from "../shared/choice-gaps";
+import { cardChoiceNotice } from "./choice-display";
 
 import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session-chips";
 
@@ -120,6 +122,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const pullRepository = item.pullRepository ?? item.pullTarget?.repo ?? item.mergeTarget?.repo;
   const headline = isMerge ? undefined : item.ask[0];
   const securityGate = mentionsSecurityGate(item);
+  const choiceNotice = isMerge ? null : cardChoiceNotice(ledgerChoiceGaps(item));
   const articleChoice = item.questions.length === 1 && /(?:글|블로그|blog|article)/i.test(item.questions[0].text);
   const followupTitle = articleChoice ? t("글 작성 선택", "Article writing choice") : t("후속 질문", "Follow-up questions");
   const source = item.projectTitle || item.projectId;
@@ -302,6 +305,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
       : <Text selectable style={{color:c.foregroundMuted}}>{t("PR 링크와 병합 상태 미확인", "Pull request link and merge status unavailable")}</Text>))}
     {!isMerge && target && <TrackedPullStatus repo={target.repo} number={target.number} projectId={item.projectId} theme={theme} reference />}
     {!!headline && headline !== item.title && <HistoryMarkdown theme={theme} source={headline} pullRepository={pullRepository} />}
+    {choiceNotice && <Text accessibilityLiveRegion="polite" selectable style={{ color: c.statusWarning, fontSize: 13 }}>{t(...choiceNotice.notice)}</Text>}
     {canReply && children}
     {!isMerge && <Lines theme={theme} pullRepository={pullRepository} title={t("추천", "Recommendation")} lines={item.recommend.filter(line => line !== headline)} />}
     {!canReply && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{ledgerHistoryUnavailableText(t)}</Text>}
