@@ -1,7 +1,8 @@
 import { useMemo, type ReactNode } from "react";
 import { Platform, Text, View, type TextStyle } from "react-native";
 import { openExternalUrl } from "@getpaseo/plugin/client";
-import { Lexer, type Token, type Tokens } from "./vendor/marked/marked";
+import { lexBoardMarkdown } from "./board-markdown";
+import type { Token, Tokens } from "./vendor/marked/marked";
 import type { Theme } from "./controls";
 
 const codeFont = Platform.OS === "ios" ? "Menlo" : "monospace";
@@ -32,7 +33,7 @@ function inline(tokens:Token[], theme:Theme):ReactNode[] {
 export function HistoryMarkdown({source,theme,preview=false,heading=false,muted=false}:{
   source:string;theme:Theme;preview?:boolean;heading?:boolean;muted?:boolean;
 }) {
-  const tokens=useMemo(()=>Lexer.lex(source,{gfm:true,breaks:true}),[source]);
+  const tokens=useMemo(()=>lexBoardMarkdown(source),[source]);
   const colors=theme.colors;
   const base:TextStyle={color:muted ? colors.foregroundMuted : colors.foreground,fontSize:muted ? 13 : 14,lineHeight:21};
   function paragraph(token:Token,i:number,style?:TextStyle,title=false) {

@@ -1,4 +1,5 @@
-import { Lexer, Parser } from "./vendor/marked/marked";
+import { Parser } from "./vendor/marked/marked";
+import { lexBoardInline } from "./board-markdown";
 import type { Translate } from "./language";
 import { sessionDetail, type Card } from "./model";
 
@@ -6,7 +7,7 @@ import { sessionDetail, type Card } from "./model";
 export function plainDecisionTitle(title: string) {
   const parser = new Parser({ gfm: true });
   const label = title.trim().replace(/^#{1,6}\s+/, "");
-  return parser.parseInline(Lexer.lexInline(label), parser.textRenderer).replace(/\s+/g, " ").trim();
+  return parser.parseInline(lexBoardInline(label), parser.textRenderer).replace(/\s+/g, " ").trim();
 }
 
 // Older coordinator reports combine status, evidence and the question in one text field.
