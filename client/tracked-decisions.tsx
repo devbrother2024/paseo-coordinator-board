@@ -280,9 +280,10 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
       : t("받는 세션을 열어 상태를 확인하거나 그 세션에 직접 답해 주세요. 답은 보드에만 저장할 수도 있습니다.", "Open the receiving session to check it or answer there directly. You can also save the answer on the board."));
   }
   const ownerLabel = item.sourceCoordinatorId !== undefined ? t("운영 코디네이터 세션 열기", "Open ledger owner session") : t("코디네이터 세션 열기", "Open coordinator session");
+  const localSession = links.source?.kind === "local" ? links.source : undefined;
   const openSession = coordinatorCard || outcome?.mode === "fallback"
     ? links.owner && { open: links.owner.open, label: ownerLabel }
-    : links.source && { open: links.source, label: t("작업 세션 열기", "Open work session") };
+    : localSession && { open: localSession.open, label: t("작업 세션 열기", "Open work session") };
   const notice = noticeText();
   const unsent = !keepsUnsent && needsRefresh && outcome?.answer;
 
