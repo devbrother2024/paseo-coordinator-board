@@ -14,8 +14,8 @@ import { TrackedPullStatus } from "./pull-requests";
 import { useBoardLanguage } from "./language";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
 import {
-  closedRevision, nextFailureStreak, optionId, recommendedChoices, recommendedTrackedReply, trackedBasisRecipient, trackedDraftLayout, trackedReplyBasis,
-  trackedRetryFingerprint, type FailureStreak,
+  closedRevision, nextFailureStreak, optionId, recommendedChoices, recommendedTrackedReply, trackedBasisRecipient, trackedDraftLayout, trackedRecovery,
+  trackedReplyBasis, trackedRetryFingerprint, type FailureStreak,
 } from "./tracked-reply-draft";
 
 import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session-chips";
@@ -74,8 +74,6 @@ const blocks: Record<TrackedReplyBlock, readonly [string, string]> = {
 const recipientBlocks: Partial<Record<TrackedReplyReason, TrackedReplyBlock>> = {
   "recipient-closed": "closed", "recipient-error": "error", "recipient-missing": "missing",
 };
-// These keep the form and the typed reply. The rest need a fresh card first.
-const recoverable = new Set<TrackedReplyReason>(["revised", "owner-changed", "recipient-changed", "recipient-closed", "recipient-error", "recipient-missing"]);
 const wrap = { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 6 };
 
 function Lines({ title, lines, theme }: { title: string; lines: readonly string[]; theme: Theme }) {
@@ -126,10 +124,7 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
   const recordActions = !item.matchedSessionId || !!item.questions.length;
   // A receipt belongs to the revision it answered, so a newer revision of the same card opens again.
   const isClosed = closedRevision(outcome) === item.fingerprint;
-  const needsRefresh = result === "out-of-scope" || result === "unavailable" || (result === "changed" && !(outcome?.reason && recoverable.has(outcome.reason)));
-  const awaitingRevision = outcome?.reason === "revised" && (outcome.requested ?? outcome.fingerprint) === item.fingerprint;
-  const blocking = result === "changed" && (needsRefresh || awaitingRevision || (outcome?.reason !== "revised" && !!outcome?.reason && recoverable.has(outcome.reason)));
-  const stuck = blocking && (streak?.count ?? 0) >= 2;
+  const { needsRefresh, awaitingRevision, stuck } = trackedRecovery(outcome, item.fingerprint, streak);
   const example = trackedReplyExample(item);
   const template = /<[^>]+>/.test(example);
   const recommendation = recommendedTrackedReply(item);

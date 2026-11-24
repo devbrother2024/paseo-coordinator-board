@@ -5,8 +5,8 @@ import { join } from "node:path";
 import contribute from "../index.server";
 import { recordActionKey, recordRowKey } from "../client/decision-receipts";
 import {
-  closedRevision, nextFailureStreak, recommendedChoices, recommendedTrackedReply, trackedBasisRecipient, trackedDraftLayout, trackedReplyBasis,
-  trackedRetryFingerprint,
+  closedRevision, nextFailureStreak, recommendedChoices, recommendedTrackedReply, trackedBasisRecipient, trackedDraftLayout, trackedRecovery,
+  trackedReplyBasis, trackedRetryFingerprint,
 } from "../client/tracked-reply-draft";
 import { boardSnapshot, boardScope } from "../shared/contract";
 import { projectFolderMap } from "../shared/project-folders";
@@ -136,8 +136,30 @@ test("an owner the board cannot find on this host is reported missing, and a rep
   expect(nextFailureStreak(streak, {status: "changed", reason: "recipient-missing"}, "operator")?.count).toBe(1);
   expect(nextFailureStreak(streak, {status: "changed", reason: "revised"}, "general")?.count).toBe(1);
   expect(nextFailureStreak(streak, {status: "busy"}, "general")).toBeNull();
+  expect(trackedRecovery({...second, fingerprint: item.fingerprint}, item.fingerprint, streak)).toEqual({needsRefresh: false, awaitingRevision: false, stuck: true});
   f.hidden.delete("general");
   expect(await f.reply(item, {recipientId: "general"})).toEqual({status: "sent"});
+});
+
+test("a rejected reply keeps the form, waits for the newer revision, or asks for a refresh", () => {
+  const twice = {key: "same", count: 2};
+  const rejected = (status: string, reason?: string) => ({status, ...(reason ? {reason} : {}), requested: "rev-1", fingerprint: "rev-1"});
+  // The typed reply stays editable when the owner or recipient changed. The same rejection twice points to the session.
+  for (const reason of ["owner-changed", "recipient-changed", "recipient-closed", "recipient-error", "recipient-missing"]) {
+    expect(trackedRecovery(rejected("changed", reason), "rev-1", null)).toEqual({needsRefresh: false, awaitingRevision: false, stuck: false});
+    expect(trackedRecovery(rejected("changed", reason), "rev-1", twice).stuck).toBe(true);
+  }
+  // A changed card holds the send button until its newer revision is on screen. Then the reply can be reviewed and sent.
+  expect(trackedRecovery(rejected("changed", "revised"), "rev-1", twice)).toEqual({needsRefresh: false, awaitingRevision: true, stuck: true});
+  expect(trackedRecovery(rejected("changed", "revised"), "rev-2", twice)).toEqual({needsRefresh: false, awaitingRevision: false, stuck: false});
+  for (const outcome of [rejected("changed", "removed"), rejected("changed", "conflict"), rejected("changed", "queue-stopped"), rejected("changed"),
+    rejected("out-of-scope"), rejected("unavailable")]) {
+    expect(trackedRecovery(outcome, "rev-1", null)).toEqual({needsRefresh: true, awaitingRevision: false, stuck: false});
+  }
+  expect(trackedRecovery(rejected("changed", "removed"), "rev-1", twice).stuck).toBe(true);
+  for (const outcome of [null, rejected("sent"), rejected("busy"), rejected("unconfirmed")]) {
+    expect(trackedRecovery(outcome, "rev-1", twice)).toEqual({needsRefresh: false, awaitingRevision: false, stuck: false});
+  }
 });
 
 test("a closed work session is never offered; the reply can go to the verified ledger owner once", async () => {

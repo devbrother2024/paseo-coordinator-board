@@ -1,5 +1,5 @@
 import { isLongReply } from "./decision-reply-state";
-import type { TrackedDecision, TrackedReplyRoute } from "../shared/tracked-decisions";
+import type { TrackedDecision, TrackedReplyReason, TrackedReplyRoute } from "../shared/tracked-decisions";
 
 export const optionId = (option: { key: string; text: string }) => JSON.stringify([option.key, option.text]);
 
@@ -59,6 +59,20 @@ export function nextFailureStreak(previous: FailureStreak, outcome: { status: st
   if (outcome.status !== "changed") return null;
   const key = JSON.stringify([outcome.reason ?? null, recipientId]);
   return { key, count: previous?.key === key ? previous.count + 1 : 1 };
+}
+
+// These reasons keep the form and the typed reply. The rest need a fresh card first.
+const recoverable = new Set<string>(["revised", "owner-changed", "recipient-changed", "recipient-closed", "recipient-error", "recipient-missing"] satisfies TrackedReplyReason[]);
+
+// What a rejected reply leaves the person able to do. A changed card holds the send button until its newer revision is
+// on screen. Any other rejection repeated for the same recipient points to the session instead of another refresh.
+export function trackedRecovery(outcome: { status: string; reason?: string; requested?: string; fingerprint: string } | null,
+  fingerprint: string, streak: FailureStreak) {
+  const changed = outcome?.status === "changed";
+  const needsRefresh = outcome?.status === "out-of-scope" || outcome?.status === "unavailable" || (changed && !recoverable.has(outcome.reason ?? ""));
+  const awaitingRevision = outcome?.reason === "revised" && (outcome.requested ?? outcome.fingerprint) === fingerprint;
+  const blocking = changed && (outcome.reason !== "revised" || awaitingRevision);
+  return { needsRefresh, awaitingRevision, stuck: blocking && (streak?.count ?? 0) >= 2 };
 }
 
 // Fill only questions the person has not answered or skipped, using the ledger's own recommended options.
