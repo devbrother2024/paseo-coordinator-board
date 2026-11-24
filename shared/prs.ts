@@ -57,9 +57,9 @@ export const pullMergeActivity = z.object({
   projectId: z.string(), title: z.string(), at: z.string().datetime(), pullMerge: pullMergeEvidence,
 });
 export type PullMergeActivity = z.infer<typeof pullMergeActivity>;
-export const pullLifecycle = z.enum(["OPEN", "CLOSED", "MERGED", "UNKNOWN"]);
+export const pullLifecycle = z.enum(["OPEN", "DRAFT", "CLOSED", "MERGED", "UNKNOWN"]);
 export const readPullLifecycle = defineRpc({
-  name: "board.read-pull-lifecycle", input: mergeTarget, output: z.object({ state: pullLifecycle }),
+  name: "board.read-pull-lifecycle", input: mergeTarget.extend({ reference: z.literal(true).optional() }), output: z.object({ state: pullLifecycle }),
 });
 export const pullUrl = (repo: string, number: number) => `https://github.com/${repo}/pull/${number}`;
 const mergePreview = z.object({

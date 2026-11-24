@@ -30,11 +30,11 @@ import { PreferenceStore } from "./preferences";
 import { registerDispatchHosts, withAssignmentHost } from "./host-assignment";
 import { WorkerAssignment } from "./worker-assignment";
 
-export function createOperations(store: PreferenceStore, workspaceDir: string, facts?: Pick<BoardFacts, "prepareCycle" | "bindMessage">,
+export function createOperations(store: PreferenceStore, operatingRoot: string, facts?: Pick<BoardFacts, "prepareCycle" | "bindMessage">,
   invalidate = () => {}) {
   const assignment = new WorkerAssignment(store, invalidate);
   const sessionPhotos = new SessionPhotoStore(join(store.directory, "session-photos"));
-  const lifecycle = new CoordinatorLifecycle(store, workspaceDir);
+  const lifecycle = new CoordinatorLifecycle(store, operatingRoot);
   function ownerScope(caller: string) {
     const scope = store.read();
     if (scope.coordinator !== caller) throw new Error("현재 지정된 코디네이터만 작업을 배정할 수 있습니다.");
@@ -147,6 +147,7 @@ export function createOperations(store: PreferenceStore, workspaceDir: string, f
       const result = await lifecycle.ensure(paseo, {
         expectedCoordinator: input.expectedCoordinator,
         replace: input.replace,
+        language: input.language,
         config: { ...configForRoute(input.expectedRoute), modeId: mode.id }, verifyRoute,
       });
       if (input.selection !== "default") return result;

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { createPaseoApi } from "@getpaseo/client";
 import { dispatchWorker, readCatalog, readManagedWorkspaces } from "../server/dispatch";
-import { resolveRoute, validateCandidates, type CatalogModel, type DispatchInput, type RouteChoice } from "../shared/dispatch";
+import { recommendedRoutes, resolveRoute, validateCandidates, type CatalogModel, type DispatchInput, type RouteChoice } from "../shared/dispatch";
 
 const gemini: RouteChoice = { provider: "cursor", model: "gemini-4-neon-high", effort: null };
 const sol: RouteChoice = { provider: "codex", model: "gpt-6.2-sol", effort: "high" };
@@ -238,4 +238,21 @@ test("일부 모델 목록 장애는 다른 실행기를 막지 않고 전체 �
   assert.deepEqual((await readCatalog(sdk)).map(m => m.provider), ["codex"]);
   daemon.listProviderModels = async () => { throw new Error("synthetic account diagnostic"); };
   await assert.rejects(readCatalog(sdk), /연결을 확인/);
+});
+
+test("the board's own candidates are listed best first, and the first one is what an unsaved grade uses", () => {
+  const opus = { provider: "claude", model: "claude-opus-5-5", label: "Opus", efforts: ["high", "xhigh"], isDefault: true };
+  const sonnet = { provider: "claude", model: "claude-sonnet-5-5", label: "Sonnet", efforts: ["medium", "high"], isDefault: false };
+  const catalog = [...models, sonnet, opus];
+  assert.deepEqual(recommendedRoutes("C", catalog), [
+    { provider: "claude", model: "claude-opus-5-5", effort: "high" }, sol, { provider: "claude", model: "claude-sonnet-5-5", effort: "high" }, gemini,
+  ]);
+  for (const grade of ["A", "B", "C", "D", "M"] as const) {
+    assert.deepEqual(recommendedRoutes(grade, catalog)[0] ?? null, resolveRoute(grade, {}, catalog));
+  }
+  // Providers a grade does not accept are left out, and hooks narrow the list further.
+  assert.deepEqual(recommendedRoutes("A", catalog).map(route => route.provider), ["claude", "codex"]);
+  assert.deepEqual(recommendedRoutes("C", catalog, true).map(route => route.provider), ["claude", "codex", "claude"]);
+  assert.deepEqual(recommendedRoutes("D", []), []);
+  assert.deepEqual(recommendedRoutes("C", [models[0]]), [gemini]);
 });

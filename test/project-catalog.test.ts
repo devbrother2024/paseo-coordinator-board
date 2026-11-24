@@ -89,7 +89,10 @@ test("a deleted project stays removable in settings but its missing ledger does 
     expect(prefs.read().projects).toEqual(["active"]);
     projects.push({ projectId: "deleted", projectDisplayName: "Restored", projectRootPath: active });
     await rpc(boardScope, { kind: "project", projectId: "deleted", enabled: true });
-    expect((await snapshot()).trackedDecisions.status).toBe("partial");
+    expect((await snapshot()).trackedDecisions).toMatchObject({
+      status: "partial", items: [{ id: "question" }],
+      diagnostics: { count: 1, issues: [{ kind: "source", source: "deleted", projectTitle: "deleted" }] },
+    });
     entries.push({ agent: { id: "sample-agent", status: "idle", pendingPermissions: [] }, project: { projectKey: "", projectName: "Direct session" } });
     const fallback = (await snapshot()).projects.find(p => p.id === "unassigned");
     expect(fallback).toEqual({ id: "unassigned", title: "Direct session", path: "", selected: false, temporary: false });

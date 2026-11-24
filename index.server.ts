@@ -32,6 +32,7 @@ import { recordDigestCompletion } from "./server/digest";
 import { coordinatorReach, operatingProjects } from "./server/coordinator-reach";
 import { discoverBoardSessions } from "./server/board-sessions";
 import { withAssignmentHost } from "./server/host-assignment";
+import { operatingDirectories, operatingDirectory } from "./server/operating-folders";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(hostVisibility);
@@ -44,8 +45,9 @@ export default function contribute(server: PluginServerContext) {
   const projectRoots = new ProjectRootReader();
   const facts = new BoardFacts(prefs, notes, reader);
   facts.register(server);
-  const operatingFolder = join(home, "plugin-workspaces", "coordinator-board");
-  const operations = createOperations(prefs, operatingFolder, facts, () => invalidateCount());
+  const operatingRoot = join(home, "plugin-workspaces");
+  const operatingFolders = operatingDirectories(operatingRoot);
+  const operations = createOperations(prefs, operatingRoot, facts, () => invalidateCount());
   operations.register(server);
   registerSessionLinks(server, prefs);
   const decisions = new DecisionSender(prefs, notes, reader);
@@ -57,11 +59,7 @@ export default function contribute(server: PluginServerContext) {
   });
   const prs = new ProjectPullRequests(prefs);
   const tracked = new TrackedDecisionStore(join(dataDir, "tracked-decisions.json"),
-    selected => {
-      let partial = false;
-      const items = readProjectDecisionSources(join(dataDir, "tracked-sources.json"), selected, () => { partial = true; });
-      return {items,partial};
-    });
+    selected => readProjectDecisionSources(join(dataDir, "tracked-sources.json"), selected));
   const mergeNotifications = new MergeNotifications(prefs,(target,coordinator)=>tracked.mergeRecipient(target,coordinator),
     (sdk,target)=>prs.mergeScope(sdk,target));
   server.handle(boardReadiness, async () => {
@@ -132,9 +130,12 @@ export default function contribute(server: PluginServerContext) {
     const clarifications = clarificationHistory(prefs, targets, evidence);
     const listedCoordinator = coordinatorRow?.id === latest.coordinator ? coordinatorRow : undefined;
     const projects = [...choices.values()];
-    const reach = await coordinatorReach(paseo, latest, listedCoordinator, operatingFolder, projects, projectRoots);
-    const operating = await operatingProjects(projects, operatingFolder, latest, listedCoordinator, projectRoots);
-    const knownProjects = projects.map(p => ({ ...p, selected: selected.has(p.id), ...(operating.has(p.id) ? { operating: true } : {}) }));
+    const reach = await coordinatorReach(paseo, latest, listedCoordinator, operatingRoot, projects, projectRoots);
+    const inUseFolders = [latest.createdCoordinator?.id === latest.coordinator ? latest.createdCoordinator : undefined, latest.pendingCoordinator]
+      .flatMap(record => record ? [operatingDirectory(operatingRoot, record.language)] : []);
+    const operating = await operatingProjects(projects, operatingFolders, latest, listedCoordinator, projectRoots, inUseFolders);
+    const knownProjects = projects.map(p => ({ ...p, selected: selected.has(p.id),
+      ...(operating.has(p.id) ? { operating: true, operatingActive: operating.get(p.id) } : {}) }));
     const missingProjects = latest.projects.filter(id => !selected.has(id)).map(id => ({
       id, title: id, path: "", selected: true, missing: true as const, temporary: false,
     }));
@@ -209,7 +210,7 @@ export default function contribute(server: PluginServerContext) {
       item.source === card.source && item.projectId === card.projectId && item.id === card.id && item.fingerprint === card.fingerprint;
     const before = view.trackedDecisions?.items.find(sameCard);
     const now = records.items.find(sameCard);
-    return !!before && !!now && now.sourceCoordinatorId === before.sourceCoordinatorId;
+    return !!before && !!now && !now.historyUnavailable && now.sourceCoordinatorId === before.sourceCoordinatorId;
   });
   server.handle(askClarification, async (input, { paseo }) => {
     try {

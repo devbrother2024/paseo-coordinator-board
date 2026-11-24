@@ -1,7 +1,7 @@
 import type { BoardReadiness } from "../shared/readiness";
-import { matchesProject, historySessionLinks, type HistoryLinks } from "./history-sessions";
+import { historySessionLinks, type HistoryLinks } from "./history-sessions";
 import { ReplyHistory } from "./reply-history";
-import { trackedSessionTargets } from "./tracked-session-targets";
+import { createRemoteWorkSessionLookup, trackedSessionOwner, trackedWorkSession } from "./tracked-session-targets";
 import type { TrackedSessionLinks } from "./tracked-session-chips";
 import { TrackedDecisionCard } from "./tracked-decisions";
 import { mentionsSecurityGate, trackedCoverage, trackedRecipient, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
@@ -38,6 +38,7 @@ import { ProjectFilterBar } from "./project-filter-bar";
 import { shouldRefreshDigest } from "./digest-freshness";
 import { DigestFeedback, useDigestRequest } from "./digest-request";
 import { assignmentFailures, platformLabels } from "../shared/host-assignment";
+import { LedgerWarnings } from "./ledger-warnings";
 
 type Actions = { sessionHostLabel?: string; coordinator?: string | null; onCoordinator?: (id: string | null) => void; changing?: boolean; onOpen?: (id: string) => void; onEdit: (id: string) => void };
 
@@ -125,7 +126,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const projectName=(id:string|null)=>filterNames.get(id) ?? displayed.get(id ?? "")?.title ?? id ?? t("공통","Host-wide");
   const incomplete = snapshot?.trackedDecisions && ["partial","unavailable","invalid"].includes(snapshot.trackedDecisions.status);
   const [settings, setSettings] = useState(false);
-  const {groups: peers, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
+  const {groups: peers, hosts: peerHosts, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
+  const peerKey = JSON.stringify(peerHosts.map(host => host.serverId));
+  const lookupWorkSession = useMemo(() => createRemoteWorkSessionLookup(getPaseoClient), [hostId, updatedAt, peerKey]);
   const assigned = new Set(snapshot?.sessions.filter(row => row.serverId).map(row => JSON.stringify([row.serverId, row.id])));
   const visiblePeers = peers.map(group => ({ ...group, rows: group.rows.filter(row =>
     inFilter(row.projectId) && !assigned.has(JSON.stringify([group.host.serverId, row.sessionId]))) }));
@@ -207,20 +210,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             setReceipts(prior => [result, ...prior.filter(r => !(r.projectId === result.projectId && r.sessionId === result.sessionId))].slice(0, 20));
             onRefresh();
           }} />;
-  function linkedSession(item: TrackedDecision) {
-    const id = item.matchedSessionId || item.sessionId;
-    if (!id) return;
-    if (item.sessionHost && item.sessionHost !== hostId) {
-      const peer = peers.find(g => g.host.serverId === item.sessionHost && g.rows.some(s => s.sessionId === id && s.projectId === item.projectId));
-      const tracked = snapshot?.sessions.some(row => row.serverId === item.sessionHost && row.id === id && row.projectId === item.projectId);
-      return (peer || tracked) && onOpenHostSession ? () => onOpenHostSession(item.sessionHost!, id) : undefined;
-    }
-    const local = snapshot?.sessions.find(s => s.id === id && (matchesProject(s.projectId,item.projectId,historyRepos) || s.id === item.matchedSessionId));
-    return local && actions.onOpen ? () => actions.onOpen!(local.id) : undefined;
-  }
   function recordLinks(item: TrackedDecision, showSource = true): TrackedSessionLinks {
     if (!snapshot) return {};
-    const { ownerId, sameSession } = trackedSessionTargets(item, snapshot.coordinator, hostId);
+    const ownerId = trackedSessionOwner(item, snapshot.coordinator);
     const open = actions.onOpen;
     const listed = snapshot.sessions.some(session => session.id === ownerId);
     const owner = ownerId && open && (ownerId === snapshot.coordinator || listed || hostId) ? {
@@ -231,7 +223,15 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       gate: ownerId === snapshot.coordinator ? { known: snapshot.coordinatorReach, onBlocked: showBanner }
         : !listed && hostId ? { check: () => readSessionReach(getPaseoClient(hostId), ownerId) } : undefined,
     } : undefined;
-    return { owner, source: showSource && !(owner && sameSession) ? linkedSession(item) : undefined };
+    const target = showSource ? trackedWorkSession(item, {
+      hostId, hostLabel, sessions: snapshot.sessions, hosts: peerHosts, repos: historyRepos,
+    }) : undefined;
+    if (target?.kind === "local" && owner?.id === target.id) return { owner };
+    if (target?.kind === "local" && open) return { owner, source: { kind: "local", open: () => open(target.id) } };
+    if (target?.kind === "remote" && onOpenHostSession) {
+      return { owner, source: { ...target, lookup: lookupWorkSession, open: onOpenHostSession } };
+    }
+    return { owner, source: target && { kind: "unavailable" } };
   }
   function renderPull(pr:PullRequestItem, projectId:string, decision=false, securityGate=false, embedded=false, rowKey?: string, scope: (string | null)[] = pr.projectIds, priority?: string) {
     const workSessions:WorkSessionLink[] = [];
@@ -339,10 +339,16 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             return <Button key={p.id} theme={theme} selected={p.selected} disabled={actions.changing}
               label={label} onPress={() => onProject(p.id, !p.selected)} />;
           })}
-          {snapshot.projects.filter(p => p.operating).map(p => <Text key={p.id} accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>
-            {t(`‘${p.title}’ 프로젝트는 코디네이터 운영 폴더입니다. Paseo에서 이 프로젝트를 제거하면 워크스페이스와 코디네이터 세션이 함께 보관되어, 코디네이터에게 보내는 요청과 답장이 전달되지 않습니다. Paseo 프로젝트 목록에 그대로 두세요.`,
-              `“${p.title}” is the coordinator's operating folder. Removing this project in Paseo archives its workspace and the coordinator session with it, so requests and replies stop reaching the coordinator. Keep it in your Paseo project list.`)}
-          </Text>)}
+          {snapshot.projects.filter(p => p.operating).map(p => {
+            const inactive = p.operatingActive === false;
+            return <Text key={p.id} accessibilityLiveRegion="polite" style={{ color: inactive ? c.foregroundMuted : c.statusWarning }}>
+              {inactive
+                ? t(`‘${p.title}’은 현재 쓰지 않는 운영 폴더입니다. 이 프로젝트를 제거해도 현재 코디네이터 연결에는 영향이 없습니다.`,
+                  `“${p.title}” is an unused operations folder. Removing it will not disconnect the current coordinator.`)
+                : t(`‘${p.title}’은 코디네이터 운영에 사용 중입니다. 제거하면 워크스페이스가 보관되어 요청과 답장이 전달되지 않습니다. Paseo 프로젝트 목록에 그대로 두세요.`,
+                  `“${p.title}” is in use for coordinator operations. Removing it archives the workspace and stops requests and replies. Keep it in your Paseo project list.`)}
+            </Text>;
+          })}
         </>}
       </View>}
       {settings && snapshot && configured && <SessionLinks projects={activeProjects} theme={theme} onChange={onRefresh} />}
@@ -385,8 +391,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             disabled={busy || digest.waiting} onPress={() => void digest.request(true)} />}
         </View>
         {showDigestRefresh && <DigestFeedback theme={theme} feedback={digest.feedback} />}
-        {incomplete &&
-          <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{t("일부 결정 기록을 읽지 못했습니다. 현재 건수에는 확인한 항목만 포함됩니다.", "Some decision records could not be loaded. The count includes the available items.")}</Text>}
+        {incomplete && <LedgerWarnings diagnostics={snapshot.trackedDecisions?.diagnostics} theme={theme} />}
         {filters.size > 0 && !filteredTotal && total > 0 && !incomplete && <Text style={{color:c.foregroundMuted}}>{t("선택한 프로젝트에 결정할 일이 없습니다.","No decisions in the selected projects.")}</Text>}
         {total === 0 && !incomplete && <Text style={{ color: c.foregroundMuted }}>{t("지금 결정할 일이 없습니다.", "No decisions are waiting for you.")}</Text>}
         {mergeNotice && inFilter(mergeNotice.projectId) && snapshot.projects.some(p => p.selected && p.id === mergeNotice.projectId) && (mergeNotice.status === "merged" || mergeNotice.status === "already-merged" ||

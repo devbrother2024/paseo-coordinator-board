@@ -19,7 +19,7 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 ### Immutable
 
 - 플러그인 서버가 스스로 시작하는 전송에는 반드시 `sourceAgentId`를 붙인다. 출처 없는 전송은 받는 세션 기록에 사람이 쓴 말과 같은 꼴로 남고, 받는 쪽은 그것을 승인으로 읽을 수 있다. 출처 없는 `send`는 사용자가 화면에서 쓰고 누른 글에만 쓴다(받는 세션이 바빠 대기열에 넣었다가 나중에 보내는 답 포함). 보드가 만든 문장을 그 길로 보내지 않는다.
-  - 근거(비대칭): 보드가 만든 문장을 보내는 `server/board-facts.ts:220`과 `server/merge-notifications.ts:115`는 `sourceAgentId`를 붙인다. 사용자 글을 보내는 `server/decisions.ts:178`, `server/digest.ts:64`, `server/tracked-decisions.ts:321`, 대기 답장의 `index.server.ts:234`는 붙이지 않는다.
+  - 근거(비대칭): 보드가 만든 문장을 보내는 `server/board-facts.ts:220`과 `server/merge-notifications.ts:115`는 `sourceAgentId`를 붙인다. 사용자 글을 보내는 `server/decisions.ts:178`, `server/digest.ts:64`, `server/tracked-decisions.ts:321`, 대기 답장의 `index.server.ts:259`는 붙이지 않는다.
   - `server/board-facts.ts:219` 주석대로, 출처를 붙인 전송이 실패하면 출처 없는 전송으로 다시 보내지 않는다. 자동 재시도도 하지 않는다.
 - 권한 요청을 기다리는 세션에는 보내지 않는다. Paseo는 메시지를 받은 세션의 대기 중 권한 요청을 지운다. 새 전송 경로를 만들 때 같은 검사를 넣는다.
   - 근거(이중 방어): `server/discovery.ts:18`(`canReceiveBoardInput`), `server/merge-notifications.ts:110`, `server/board-facts.ts:201`.
@@ -32,7 +32,7 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 - 병합은 사용자가 확인한 head 커밋에 고정한다. `expectedHeadOid`로 보내고 SHA는 40자 hex로 검증한다(`server/pr-merge.ts:31`, `server/pr-merge.ts:35`).
 - 플러그인 데이터 파일은 임시 파일에 쓴 뒤 `renameSync`로 바꾸고 `mode: 0o600`을 준다(`server/preferences.ts:90`, `server/notes.ts:44`, `server/session-photos.ts:34`).
 - 화면 문구는 `client/language.tsx`의 `t(한국어, 영어)`로 두 언어를 함께 쓴다. 한쪽만 바꾸지 않는다.
-- 브라우저 전용 API(`document`, `navigator`, `FileReader`, DOM 요소)는 `Platform.OS === "web"`과 `typeof` 검사 뒤에서만 쓴다. 같은 클라이언트가 모바일 앱에서도 돈다(`client/photo-composer.tsx:87`, `client/send-input.tsx:9`).
+- 브라우저 전용 API(`document`, `navigator`, `FileReader`, DOM 요소)는 `Platform.OS === "web"`과 `typeof` 검사 뒤에서만 쓴다. 같은 클라이언트가 모바일 앱에서도 돈다(`client/photo-composer.tsx:86`, `client/send-input.tsx:9`).
 - 로직은 `client/*.ts`, `shared/*.ts`, `server/*.ts`에 두고 `.tsx`에는 화면만 둔다. 테스트가 `.tsx`를 하나도 불러오지 않는다(테스트 경계). 시험할 판단을 `.tsx` 안에 쓰면 검증 밖으로 빠진다.
 
 ### Don't
@@ -42,11 +42,35 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 - 새 최상위 폴더를 만들면 `package.json`의 `files`에 더한다. 빠지면 배포 ZIP에서 조용히 빠진다. 꼭 있어야 할 파일은 `scripts/package_release.py`의 `required`에도 더한다.
 - `client/vendor/`, `third-party/`의 외부 코드를 고치지 않는다. 바꿀 때는 `THIRD_PARTY_NOTICES.md`와 라이선스 파일을 함께 갱신한다.
 
+## Portability (범용성)
+
+이 플러그인은 설치하자마자 누구나 그대로 써야 한다. 기준 환경은 다음과 같다.
+
+- 호스트: macOS, Windows, Linux
+- 화면: 데스크톱 앱, 웹, iOS·Android 앱
+- 실행기: Claude Code와 Codex 가운데 하나만 있어도 동작해야 하고, 다른 실행기도 고려한다.
+- 언어: 한국어, 영어
+- 빈 상태: 관리 프로젝트, 코디네이터, `gh` 로그인, 원격 호스트, 선택 설정 파일이 모두 없는 상태
+
+### Do
+
+- 사람에게 보이는 모든 문구를 두 언어로 쓴다. 화면 문구, 서버 오류, 세션에 보내는 안내와 헌장이 모두 포함된다. 화면은 서버 오류를 받은 그대로 보여 준다(`client/operations.tsx:82`).
+- 경로는 `node:path`로 다룬다. 구분자(`/`), 대소문자 구분, 홈 경로 모양을 가정하지 않는다.
+- 외부 도구(`gh`, `git`)가 없거나 로그인되지 않았으면 그 기능만 끄고 이유를 보여 준다. 보드 전체가 멈추면 안 된다. 실행 파일을 못 찾는 경우의 처리(`server/prs.ts:68`)는 운영체제마다 확인한다.
+- 실행기, 모델, 계정, 호스트 이름을 기본값으로 박아 두지 않는다. 그 호스트에 연결된 것에서 고른다.
+- 선택 설정 파일(`tracked-decisions.json`, `tracked-sources.json`, `account-usage.json`)은 없어도 보드가 동작해야 한다.
+
+### Don't
+
+- 유지관리자 한 사람의 환경(특정 폴더 구조, 계정 수, 기기, 운영 문서)에만 맞는 동작을 기본으로 넣지 않는다.
+- 범용으로 만들 수 없는 변경은 구현하기 전에 멈추고 유지관리자에게 묻는다. 이미 만든 뒤에 알았다면 PR 본문 맨 위에 적는다.
+- PR 본문에는 "범용성" 줄을 둔다. 영향이 없으면 "영향 없음"으로, 영향이 있으면 어떤 환경에서 무엇이 달라지는지와 확인한 방법을 적는다.
+
 ## Standards & References
 
 - 사용자에게 보이는 기능을 바꾸는 PR은 `README.md`(한국어)와 `OVERVIEW.md`(영어)를 같은 내용으로 함께 고친다. 버전(`package.json`, `package-lock.json`)은 기능 PR에서 올리지 않고 릴리스 PR에서만 올린다. 여러 기능 PR이 동시에 열려도 버전이 충돌하지 않게 하기 위해서다.
 - 한국어 문서와 화면 문구에 em dash를 쓰지 않는다. 마침표, 쉼표, 쌍점, 괄호로 바꾼다.
-- 커밋·PR 제목은 한국어 명령형 한 줄로 쓴다(예: "전송 단축키를 버튼의 호버 및 포커스 안내로 옮겨라").
+- 커밋·PR·이슈 제목은 한국어 명사형으로 끝낸다(예: "전송 단축키 안내를 버튼 호버·포커스로 이동"). "~하라", "~해라" 같은 명령형과 "~하세요"는 쓰지 않는다. 본문 목록도 명사형 개조식. 2026-11-24 이전 PR 제목의 명령형은 옛 관례다.
 - 브랜치: PR은 `next`로 연다(`gh pr create --base next`). `next`에 병합된 변경은 유지관리자 호스트에서 먼저 써 본다. `main`은 공개 배포 버전만 담고, 릴리스 PR(`next` → `main`)로만 바뀐다. 두 브랜치 모두 직접 커밋하지 않는다. 기능 PR 병합은 squash, 릴리스 PR은 merge commit이다. 절차는 `CONTRIBUTING.md`.
 - 외부 기여 PR은 저장소 시크릿 없이 읽기 권한으로만 검증된다(`verify-release.yml`의 `permissions: contents: read`). 의존성, 패키지 스크립트, 워크플로를 바꾸는 PR은 코드보다 먼저 그 부분을 검토한다.
 - Maintenance Policy: 이 파일의 규칙이나 근거 줄 번호가 코드와 어긋나면, 같은 PR에서 고치거나 고칠 것을 PR 본문에 적는다.

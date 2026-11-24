@@ -89,9 +89,10 @@ const githubPulls = async (repo:string) => parseOpenPulls(repo,await run("gh",[
 ]));
 
 async function githubLifecycle(target: MergeTarget) {
-  const output = await run("gh", ["pr", "view", String(target.number), "--repo", "github.com/" + target.repo, "--json", "state,url"]);
-  const row = z.object({state:pullLifecycle, url:z.string()}).parse(JSON.parse(output));
-  return row.url.toLowerCase() === pullUrl(target.repo, target.number) ? row.state : "UNKNOWN";
+  const output = await run("gh", ["pr", "view", String(target.number), "--repo", "github.com/" + target.repo, "--json", "state,isDraft,url"]);
+  const row = z.object({state:pullLifecycle, isDraft:z.boolean(), url:z.string()}).parse(JSON.parse(output));
+  if (row.url.toLowerCase() !== pullUrl(target.repo, target.number)) return "UNKNOWN";
+  return row.state === "OPEN" && row.isDraft ? "DRAFT" : row.state;
 }
 
 type Mapping = {mode:"auto"|"manual"|"off";repo:string|null};
@@ -120,13 +121,21 @@ export class ProjectPullRequests {
     }
   }
 
-  async lifecycle(paseo: Sdk, input: MergeTarget) {
+  async lifecycle(paseo: Sdk, {reference, ...target}: z.output<typeof readPullLifecycle.input>) {
     try {
       return await this.limited(async () => {
-        const current = await this.mergeScope(paseo, input);
+        const current = await this.mergeScope(paseo, target);
         if (!current()) return "UNKNOWN" as const;
-        const state = await this.lookupLifecycle(input);
-        return current() ? state : "UNKNOWN" as const;
+        const cached = reference ? this.sources.get(target.repo) : undefined;
+        if (cached && cached.expires !== Infinity && cached.expires > this.deps.now()) {
+          const source = await cached.value;
+          const pull = source?.items.find(p => p.number === target.number);
+          if (!current()) return "UNKNOWN" as const;
+          if (pull) return pull.reason === "draft" ? "DRAFT" as const : "OPEN" as const;
+        }
+        const state = await this.lookupLifecycle(target);
+        if (!current()) return "UNKNOWN" as const;
+        return state === "DRAFT" && !reference ? "OPEN" as const : state;
       });
     } catch { return "UNKNOWN" as const; }
   }
