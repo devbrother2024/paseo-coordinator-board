@@ -1,5 +1,6 @@
 import type { getPaseoClient } from "@getpaseo/plugin/client";
 import type { Translate } from "./language";
+import type { SentRecord } from "../shared/answered-requests";
 
 type AgentHandle = ReturnType<ReturnType<typeof getPaseoClient>["agents"]["ref"]>;
 export type PendingRequest = NonNullable<AgentHandle["pendingPermissions"]>[number];
@@ -8,14 +9,15 @@ export type PermissionResponse = Parameters<AgentHandle["respondToPermission"]>[
 export type QuestionOption = { label: string; description?: string; preview?: string };
 export type Question = {
   question: string; header: string; options: QuestionOption[];
-  multiSelect: boolean; allowOther: boolean; allowEmpty: boolean; placeholder?: string;
+  multiSelect: boolean; allowOther: boolean; allowEmpty: boolean; masked: boolean; placeholder?: string;
 };
 // What the person chose and typed for each question. Choices keep the order they were pressed in.
 export type Draft = { selected: number[][]; other: string[] };
-export type PlanAction = { id: string; label: string; behavior: "allow" | "deny"; intent?: string };
+export type PlanAction = { id: string; label: string; behavior: "allow" | "deny"; intent: "implement" | "dismiss"; danger: boolean };
+// `more` marks a plan with further choices the board leaves to the work session.
 export type RequestView =
   | { mode: "question"; questions: Question[] }
-  | { mode: "plan"; plan: string; actions: PlanAction[] }
+  | { mode: "plan"; plan: string; actions: PlanAction[]; more: boolean }
   | { mode: "session" };
 
 // Paseo's own app sends these fixed values with a denial. The board sends the same ones, so a
@@ -46,7 +48,9 @@ export function parseQuestions(input: unknown): Question[] | null {
     }
     questions.push({
       question, header, options, multiSelect: q.multiSelect === true,
-      allowOther: q.allowOther === true || q.isOther === true, allowEmpty: q.allowEmpty === true, placeholder: text(q.placeholder),
+      allowOther: q.allowOther === true || q.isOther === true, allowEmpty: q.allowEmpty === true,
+      // Codex marks a question whose answer must not be shown.
+      masked: q.isSecret === true, placeholder: text(q.placeholder),
     });
   }
   return questions;
@@ -109,6 +113,12 @@ export function answerResponse(request: PendingRequest, questions: Question[], d
   return { behavior: "allow", updatedInput: { ...request.input, answers: buildAnswers(questions, draft) } };
 }
 
+// What the board keeps on screen about an answer. A masked answer is never shown again.
+export function answerSummary(questions: Question[], draft: Draft) {
+  const answers = buildAnswers(questions, draft);
+  return questions.flatMap(question => !answers[question.header] ? [] : [question.masked ? "••••" : answers[question.header]]).join(" · ");
+}
+
 export function dismissResponse(request: PendingRequest, questions: Question[], draft: Draft): PermissionResponse {
   // A form made only of optional free answers is closed by answering it empty.
   if (questions.every(question => question.allowEmpty && !question.options.length)) return answerResponse(request, questions, draft);
@@ -120,37 +130,55 @@ export function actionResponse(action: PlanAction): PermissionResponse {
     : { behavior: "deny", selectedActionId: action.id, message: denied };
 }
 
-function planActions(actions: unknown): PlanAction[] | null {
+// Requests whose form and effect were checked against Paseo's providers. A provider can use the
+// question kind for other things, such as a yes or no dialog that approves a tool run, so a
+// question or plan from any other source stays in the work session.
+const questionSources: Record<string, readonly string[]> = {
+  claude: ["AskUserQuestion"], codex: ["request_user_input", "request_user_input_async"], opencode: ["question"],
+};
+const planSources: Record<string, readonly string[]> = { claude: ["ExitPlanMode"], codex: ["CodexPlanApproval"] };
+const known = (sources: Record<string, readonly string[]>, request: PendingRequest) =>
+  Object.hasOwn(sources, request.provider) && sources[request.provider].includes(request.name);
+
+// The board offers only rejecting a plan and implementing it. A choice that also changes the
+// permission mode, or one it does not know, is left to the work session.
+function planActions(actions: unknown) {
   if (!Array.isArray(actions) || !actions.length) return null;
-  const list: PlanAction[] = [];
+  const offered: PlanAction[] = [];
+  let more = false;
   for (const entry of actions) {
     const action = record(entry);
-    const id = text(action?.id), label = text(action?.label), behavior = action?.behavior;
-    if (!id || !label || (behavior !== "allow" && behavior !== "deny") || list.some(prior => prior.id === id)) return null;
-    list.push({ id, label, behavior, intent: text(action?.intent) });
+    const id = text(action?.id), label = text(action?.label), behavior = action?.behavior, intent = action?.intent;
+    if (!id || !label || (behavior !== "allow" && behavior !== "deny")) return null;
+    const usable = (intent === "implement" && behavior === "allow") || (intent === "dismiss" && behavior === "deny");
+    if (!usable || offered.some(prior => prior.id === id || prior.intent === intent)) { more = true; continue; }
+    offered.push({ id, label, behavior, intent, danger: action?.variant === "danger" });
   }
-  return list;
+  return offered.length ? { actions: offered, more } : null;
 }
 
 // Decides what the board offers for a request. Anything it cannot read fully stays in the work session.
 export function requestView(request: PendingRequest): RequestView {
   if (request.kind === "question") {
+    if (!known(questionSources, request) || request.metadata?.extensionUiMethod !== undefined || request.metadata?.ompAsk !== undefined) return { mode: "session" };
     const questions = parseQuestions(request.input);
     return questions ? { mode: "question", questions } : { mode: "session" };
   }
   if (request.kind === "plan") {
+    if (!known(planSources, request)) return { mode: "session" };
     const plan = text(request.metadata?.planText) || text(request.input?.plan) || "";
-    const actions = planActions(request.actions);
-    return plan.trim() && actions ? { mode: "plan", plan, actions } : { mode: "session" };
+    const choices = planActions(request.actions);
+    return plan.trim() && choices ? { mode: "plan", plan, ...choices } : { mode: "session" };
   }
   return { mode: "session" };
 }
 
-export function actionLabel(action: PlanAction, t: Translate) {
-  if (action.intent === "implement") return t("계획 승인 · 구현 시작", "Approve plan · Start implementing");
-  if (action.intent === "implement_resume") return t("계획 승인 · ", "Approve plan · ") + action.label;
-  if (action.intent === "dismiss" && action.behavior === "deny") return t("계획 거절 · 구현하지 않음", "Reject plan · Do not implement");
-  return (action.behavior === "allow" ? t("승인 · ", "Approve · ") : t("거절 · ", "Reject · ")) + action.label;
+// Says in words what pressing a plan button does in that provider.
+export function actionLabel(action: PlanAction, provider: string, t: Translate) {
+  if (action.intent === "dismiss") return t("계획 거절 · 구현하지 않음", "Reject plan · Do not implement");
+  return provider === "claude"
+    ? t("계획 승인 · 편집 자동 허용으로 전환해 구현 시작", "Approve plan · Switch to auto-accept edits and implement")
+    : t("계획 승인 · 계획 모드를 끄고 구현 시작", "Approve plan · Leave plan mode and implement");
 }
 
 // Names a request by its kind and title.
@@ -180,7 +208,11 @@ type AgentPort = {
 // Sends a person's response to one waiting request. It first reads the session again and sends only
 // when that request is still waiting, takes one response at a time, and never sends a request twice.
 // The host does not acknowledge a response, so the result is confirmed by the request leaving the list.
-export function createResponder(agent: AgentPort, { checks = 10, wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)) } = {}) {
+// `wasSent` and `onSent` keep the record of sent requests outside the card that drew the button.
+export function createResponder(agent: AgentPort, { checks = 10, wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
+  wasSent = () => false, onSent = () => {} }: {
+  checks?: number; wait?: (ms: number) => Promise<void>; wasSent?: (requestId: string) => boolean; onSent?: (requestId: string) => void;
+} = {}) {
   let busy = false;
   const sent = new Set<string>();
   const waiting = async (requestId: string) => {
@@ -199,13 +231,14 @@ export function createResponder(agent: AgentPort, { checks = 10, wait = (ms: num
     // Reads whether a response that already went out was taken. It sends nothing.
     check: (requestId: string) => once(async () => await cleared(requestId) ? "sent" : "unconfirmed"),
     respond: (requestId: string, response: PermissionResponse) => once(async () => {
-      if (sent.has(requestId)) return await cleared(requestId) ? "sent" : "unconfirmed";
+      if (sent.has(requestId) || wasSent(requestId)) return await cleared(requestId) ? "sent" : "unconfirmed";
       let current: boolean | null;
       try { current = await waiting(requestId); } catch { return "failed"; }
       if (current === null) return "failed";
       if (!current) return "handled";
       try { await agent.respondToPermission({ requestId, response }); } catch { return "failed"; }
       sent.add(requestId);
+      try { onSent(requestId); } catch { /* The response went out. Recording it must not undo that. */ }
       for (let attempt = 0; attempt < checks; attempt++) {
         await wait(400);
         if (await cleared(requestId)) return "sent";
@@ -225,4 +258,13 @@ export function outcomeText(outcome: Outcome, t: Translate) {
     busy: "",
   };
   return words[outcome];
+}
+
+// Requests answered in this app session, per host, until the stored record includes them.
+const sentHere = new Map<string, { host: string; record: SentRecord }>();
+export function noteSent(host: string, session: string, request: string, at: number) {
+  sentHere.set(JSON.stringify([host, session, request]), { host, record: { session, request, at } });
+}
+export function sentOn(host: string): SentRecord[] {
+  return [...sentHere.values()].filter(entry => entry.host === host).map(entry => entry.record);
 }

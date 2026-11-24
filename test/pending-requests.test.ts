@@ -2,14 +2,17 @@ import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  actionLabel, actionResponse, answerResponse, buildAnswers, canSubmit, createResponder, dismissResponse, emptyDraft,
-  outcomeText, parseQuestions, requestName, requestView, toggleOption, waitingLine, writeOther, type PendingRequest, type PermissionResponse,
+  actionLabel, actionResponse, answerResponse, answerSummary,buildAnswers, canSubmit, createResponder, dismissResponse, emptyDraft,
+  noteSent, outcomeText, parseQuestions, requestName, requestView, sentOn, toggleOption, waitingLine, writeOther, type PendingRequest, type PermissionResponse,
 } from "../client/pending-requests";
+import { wasSent, withSent } from "../shared/answered-requests";
 import { sessionDetail } from "../client/model";
 
 const ko = (korean: string) => korean;
 const en = (_: string, english: string) => english;
 const request = (value: Record<string, unknown>) => ({ id: "request-1", provider: "claude", name: "Tool", ...value }) as unknown as PendingRequest;
+const claudeQuestion = (value: Record<string, unknown> = {}) => request({ kind: "question", name: "AskUserQuestion", ...value });
+const claudePlan = (value: Record<string, unknown> = {}) => request({ kind: "plan", name: "ExitPlanMode", ...value });
 
 // The shape a Claude AskUserQuestion request carries after the host normalizes it.
 const claudeInput = {
@@ -53,7 +56,8 @@ test("an input the board cannot read as questions is left to the work session", 
     // Answers are keyed by header, so two questions with one header cannot both be answered.
     { questions: [one, { ...claudeInput.questions[1], header: "Database" }] },
   ]) expect(parseQuestions(input)).toBeNull();
-  expect(requestView(request({ kind: "question", input: { prompt: "Which one?" } }))).toEqual({ mode: "session" });
+  expect(requestView(claudeQuestion({ input: { prompt: "Which one?" } }))).toEqual({ mode: "session" });
+  expect(requestView(claudeQuestion({ input: claudeInput }))).toMatchObject({ mode: "question" });
 });
 
 test("one choice replaces another, a typed answer replaces the choice, and multiple choice keeps both in click order", () => {
@@ -113,6 +117,25 @@ test("a submitted answer allows the request with the original input and only the
   }
 });
 
+test("a masked answer is sent to the session and never kept on the board", () => {
+  const input = { questions: [
+    { id: "0", header: "Token", question: "Paste the sample token.", options: [], isOther: true, isSecret: true },
+    { id: "1", header: "Region", question: "Which region?", options: [{ label: "East" }, { label: "West" }], isOther: true },
+  ] };
+  const pending = request({ kind: "question", provider: "codex", name: "request_user_input", input });
+  const view = requestView(pending);
+  if (view.mode !== "question") throw Error("question expected");
+  expect(view.questions.map(q => q.masked)).toEqual([true, false]);
+  let draft = writeOther(view.questions, emptyDraft(view.questions), 0, "sample-value-123");
+  draft = toggleOption(view.questions, draft, 1, 1);
+  expect(answerResponse(pending, view.questions, draft)).toMatchObject({ updatedInput: { answers: { Token: "sample-value-123", Region: "West" } } });
+  expect(answerSummary(view.questions, draft)).toBe("•••• · West");
+  expect(answerSummary(view.questions, draft)).not.toContain("sample-value-123");
+  const plain = parseQuestions(claudeInput)!;
+  expect(plain.every(q => !q.masked)).toBe(true);
+  expect(answerSummary(plain, toggleOption(plain, toggleOption(plain, emptyDraft(plain), 0, 0), 1, 1))).toBe("SQLite · Migrations");
+});
+
 test("closing a question denies it, and a question that accepts an empty answer is answered empty", () => {
   const questions = parseQuestions(claudeInput)!;
   const pending = request({ kind: "question", input: claudeInput });
@@ -124,44 +147,89 @@ test("closing a question denies it, and a question that accepts an empty answer 
     .toEqual({ behavior: "allow", updatedInput: { ...input, answers: { Note: "" } } });
 });
 
-test("a plan request shows its text and actions, and each action sends only its own choice", () => {
+test("a plan request shows its text, offers only rejecting and implementing, and each sends its own choice", () => {
   const actions = [
     { id: "reject", label: "Reject", behavior: "deny", variant: "danger", intent: "dismiss" },
     { id: "implement", label: "Implement", behavior: "allow", variant: "primary", intent: "implement" },
-    { id: "implement_resume", label: "Implement with Auto", behavior: "allow", intent: "implement_resume" },
   ];
-  const view = requestView(request({ kind: "plan", input: { plan: "1. Add the table" }, actions }));
-  expect(view).toEqual({ mode: "plan", plan: "1. Add the table", actions: actions.map(({ id, label, behavior, intent }) => ({ id, label, behavior, intent })) });
-  expect(requestView(request({ kind: "plan", metadata: { planText: "From metadata" }, input: { plan: "From input" }, actions })))
+  const offered = [
+    { id: "reject", label: "Reject", behavior: "deny", intent: "dismiss", danger: true },
+    { id: "implement", label: "Implement", behavior: "allow", intent: "implement", danger: false },
+  ];
+  const view = requestView(claudePlan({ input: { plan: "1. Add the table" }, actions }));
+  expect(view).toEqual({ mode: "plan", plan: "1. Add the table", actions: offered, more: false });
+  expect(requestView(claudePlan({ metadata: { planText: "From metadata" }, input: { plan: "From input" }, actions })))
     .toMatchObject({ mode: "plan", plan: "From metadata" });
+  expect(requestView(request({ kind: "plan", provider: "codex", name: "CodexPlanApproval", input: { plan: "A plan" }, actions })))
+    .toMatchObject({ mode: "plan", actions: offered });
   if (view.mode !== "plan") throw Error("plan expected");
   expect(view.actions.map(actionResponse)).toEqual([
     { behavior: "deny", selectedActionId: "reject", message: "Denied by user" },
     { behavior: "allow", selectedActionId: "implement" },
-    { behavior: "allow", selectedActionId: "implement_resume" },
   ]);
-  expect(view.actions.map(action => actionLabel(action, ko))).toEqual(
-    ["계획 거절 · 구현하지 않음", "계획 승인 · 구현 시작", "계획 승인 · Implement with Auto"]);
-  expect(view.actions.map(action => actionLabel(action, en))).toEqual(
-    ["Reject plan · Do not implement", "Approve plan · Start implementing", "Approve plan · Implement with Auto"]);
-  const unknown = [{ id: "later", label: "Ask again later", behavior: "deny" as const }, { id: "go", label: "Go", behavior: "allow" as const }];
-  expect(unknown.map(action => actionLabel(action, ko))).toEqual(["거절 · Ask again later", "승인 · Go"]);
-  expect(unknown.map(action => actionLabel(action, en))).toEqual(["Reject · Ask again later", "Approve · Go"]);
+  // The button says what approving changes in that provider.
+  expect(view.actions.map(action => actionLabel(action, "claude", ko))).toEqual(
+    ["계획 거절 · 구현하지 않음", "계획 승인 · 편집 자동 허용으로 전환해 구현 시작"]);
+  expect(view.actions.map(action => actionLabel(action, "claude", en))).toEqual(
+    ["Reject plan · Do not implement", "Approve plan · Switch to auto-accept edits and implement"]);
+  expect(actionLabel(view.actions[1], "codex", ko)).toBe("계획 승인 · 계획 모드를 끄고 구현 시작");
+  expect(actionLabel(view.actions[1], "codex", en)).toBe("Approve plan · Leave plan mode and implement");
+});
+
+test("a plan choice that changes the permission mode, or one the board does not know, is left to the work session", () => {
+  const reject = { id: "reject", label: "Reject", behavior: "deny", variant: "danger", intent: "dismiss" };
+  const implement = { id: "implement", label: "Implement", behavior: "allow", intent: "implement" };
+  for (const extra of [
+    { id: "implement_resume", label: "Implement with Bypass", behavior: "allow", intent: "implement_resume" },
+    { id: "later", label: "Ask again later", behavior: "deny" },
+    { id: "go", label: "Go", behavior: "allow" },
+    { id: "implement_again", label: "Implement", behavior: "allow", intent: "implement" },
+    { id: "odd", label: "Implement", behavior: "deny", intent: "implement" },
+  ]) {
+    const view = requestView(claudePlan({ input: { plan: "A plan" }, actions: [reject, implement, extra] }));
+    expect(view).toMatchObject({ mode: "plan", more: true });
+    if (view.mode !== "plan") throw Error("plan expected");
+    expect(view.actions.map(action => action.id)).toEqual(["reject", "implement"]);
+  }
+  // Nothing the board may send: the whole request stays in the work session.
+  expect(requestView(claudePlan({ input: { plan: "A plan" }, actions: [{ id: "implement_resume", label: "Implement with Auto", behavior: "allow", intent: "implement_resume" }] })))
+    .toEqual({ mode: "session" });
+});
+
+test("only questions and plans from checked sources are answered on the board", () => {
+  const yesNo = { questions: [{ header: "Confirm", question: "Delete the build folder?", options: [{ label: "Yes" }, { label: "No" }], multiSelect: false }] };
+  const actions = [{ id: "implement", label: "Implement", behavior: "allow", intent: "implement" }];
+  for (const [provider, name] of [["claude", "AskUserQuestion"], ["codex", "request_user_input"], ["codex", "request_user_input_async"], ["opencode", "question"]]) {
+    expect(requestView(request({ kind: "question", provider, name, input: yesNo }))).toMatchObject({ mode: "question" });
+    // A dialog raised through an extension is not a plain question, whatever it is named.
+    expect(requestView(request({ kind: "question", provider, name, input: yesNo, metadata: { extensionUiMethod: "confirm" } }))).toEqual({ mode: "session" });
+    expect(requestView(request({ kind: "question", provider, name, input: yesNo, metadata: { ompAsk: true } }))).toEqual({ mode: "session" });
+  }
+  for (const [provider, name] of [
+    ["pi", "confirm"], ["pi", "ask_user"], ["omp", "ask"], ["omp", "select"], ["claude", "Bash"], ["codex", "AskUserQuestion"],
+    ["opencode", "AskUserQuestion"], ["custom", "AskUserQuestion"], ["hasOwnProperty", "AskUserQuestion"], ["claude", "question"],
+  ]) {
+    expect(requestView(request({ kind: "question", provider, name, input: yesNo }))).toEqual({ mode: "session" });
+    expect(requestView(request({ kind: "plan", provider, name, input: { plan: "A plan" }, actions }))).toEqual({ mode: "session" });
+  }
+  expect(requestView(request({ kind: "plan", provider: "codex", name: "ExitPlanMode", input: { plan: "A plan" }, actions }))).toEqual({ mode: "session" });
 });
 
 test("a plan without text or usable actions and every tool, mode or other request stays in the work session", () => {
-  const actions = [{ id: "implement", label: "Implement", behavior: "allow" }];
+  const actions = [{ id: "implement", label: "Implement", behavior: "allow", intent: "implement" }];
   for (const value of [
-    { kind: "plan", input: { plan: "A plan" } },
-    { kind: "plan", input: { plan: "A plan" }, actions: [] },
-    { kind: "plan", input: { plan: "A plan" }, actions: [{ id: "", label: "Implement", behavior: "allow" }] },
-    { kind: "plan", input: { plan: "A plan" }, actions: [{ id: "x", label: "Maybe", behavior: "ask" }] },
-    { kind: "plan", input: { plan: "  " }, actions },
-    { kind: "plan", input: {}, actions },
-    { kind: "tool", name: "Bash", title: "Run command", input: { command: "rm -rf build" }, actions },
-    { kind: "mode", title: "Switch mode", actions },
-    { kind: "other", title: "Something else", input: claudeInput, actions },
+    { kind: "plan", name: "ExitPlanMode", input: { plan: "A plan" } },
+    { kind: "plan", name: "ExitPlanMode", input: { plan: "A plan" }, actions: [] },
+    { kind: "plan", name: "ExitPlanMode", input: { plan: "A plan" }, actions: [{ id: "", label: "Implement", behavior: "allow", intent: "implement" }] },
+    { kind: "plan", name: "ExitPlanMode", input: { plan: "A plan" }, actions: [...actions, { id: "x", label: "Maybe", behavior: "ask" }] },
+    { kind: "plan", name: "ExitPlanMode", input: { plan: "  " }, actions },
+    { kind: "plan", name: "ExitPlanMode", input: {}, actions },
+    { kind: "tool", name: "Bash", title: "Run command", input: { command: "npm run deploy" }, actions },
+    { kind: "tool", name: "AskUserQuestion", input: claudeInput, actions },
+    { kind: "mode", name: "ExitPlanMode", title: "Switch mode", input: { plan: "A plan" }, actions },
+    { kind: "other", name: "AskUserQuestion", title: "Something else", input: claudeInput, actions },
   ]) expect(requestView(request(value))).toEqual({ mode: "session" });
+  expect(requestView(claudePlan({ input: { plan: "A plan" }, actions }))).toMatchObject({ mode: "plan" });
   expect(waitingLine(request({ kind: "tool", name: "Bash", title: "Run command", description: "rm -rf build" }), ko))
     .toBe("도구 실행 승인 · Run command · rm -rf build");
   expect(waitingLine(request({ kind: "tool", name: "Bash" }), en)).toBe("Tool approval · Bash");
@@ -292,8 +360,52 @@ test("the card headline counts waiting requests in English and keeps the request
 
 test("only the client responder answers a waiting request, never the plugin server", () => {
   const root = join(import.meta.dir, "..");
-  const sources = (folder: string) => readdirSync(join(root, folder)).filter(name => /\.tsx?$/.test(name)).map(name => join(folder, name));
+  const sources = (folder: string): string[] => readdirSync(join(root, folder), { withFileTypes: true }).flatMap(entry =>
+    entry.isDirectory() ? sources(join(folder, entry.name)) : /\.tsx?$/.test(entry.name) ? [join(folder, entry.name)] : []);
   const callers = [...sources("server"), ...sources("shared"), ...sources("client"), "index.server.ts", "index.client.tsx"]
-    .filter(file => /\.respondToPermission\(/.test(readFileSync(join(root, file), "utf8")));
+    .filter(file => /respondToPermission\b/.test(readFileSync(join(root, file), "utf8")));
   expect(callers).toEqual([join("client", "pending-requests.ts")]);
+});
+
+test("a request another card, an earlier visit or another device answered is checked, not sent again", async () => {
+  const { state, port } = agent(["request-1", "request-2"]);
+  state.clearOnSend = false;
+  const recorded: string[] = [];
+  const { respond } = createResponder(port, { ...quick, wasSent: id => recorded.includes(id), onSent: id => { recorded.push(id); } });
+  expect(await respond("request-1", allow)).toBe("unconfirmed");
+  expect(recorded).toEqual(["request-1"]);
+  // A new card for the same session starts with no memory of its own and reads the shared record.
+  const redrawn = createResponder(port, { ...quick, wasSent: id => recorded.includes(id) });
+  expect(await redrawn.respond("request-1", allow)).toBe("unconfirmed");
+  expect(state.sent).toHaveLength(1);
+  state.pending = ["request-2"];
+  expect(await redrawn.respond("request-1", allow)).toBe("sent");
+  expect(state.sent).toHaveLength(1);
+  // Nothing is recorded for a response that did not go out.
+  state.failSend = true;
+  expect(await respond("request-2", allow)).toBe("failed");
+  expect(recorded).toEqual(["request-1"]);
+  // A record that cannot be written does not turn a sent response into a failure.
+  state.failSend = false; state.clearOnSend = true;
+  const failing = createResponder(port, { ...quick, onSent: () => { throw Error("storage"); } });
+  expect(await failing.respond("request-2", allow)).toBe("sent");
+});
+
+test("the record of sent requests keeps one entry per request, drops old ones and stays bounded", () => {
+  const day = 24 * 60 * 60 * 1000, now = 100 * day;
+  const stored = [{ session: "worker-1", request: "request-1", at: now - 20 * day }, { session: "worker-1", request: "request-2", at: now - day }];
+  const next = withSent(stored, [{ session: "worker-2", request: "request-2", at: now }, { session: "worker-1", request: "request-2", at: now }], now);
+  expect(next).toEqual([{ session: "worker-1", request: "request-2", at: now }, { session: "worker-2", request: "request-2", at: now }]);
+  expect(wasSent(next, "worker-1", "request-2")).toBe(true);
+  expect(wasSent(next, "worker-2", "request-1")).toBe(false);
+  expect(wasSent(next, "worker-1", "request-1")).toBe(false);
+  const many = Array.from({ length: 260 }, (_, index) => ({ session: "worker-1", request: "request-" + index, at: now - 260 + index }));
+  const bounded = withSent(many, [], now);
+  expect(bounded).toHaveLength(200);
+  expect(bounded.at(-1)).toEqual(many.at(-1)!);
+  // Records made in this app session are held per host until they are stored.
+  noteSent("host-a", "worker-9", "request-9", now);
+  noteSent("host-a", "worker-9", "request-9", now + 1);
+  expect(sentOn("host-a").filter(entry => entry.session === "worker-9")).toEqual([{ session: "worker-9", request: "request-9", at: now + 1 }]);
+  expect(sentOn("host-b")).toEqual([]);
 });
