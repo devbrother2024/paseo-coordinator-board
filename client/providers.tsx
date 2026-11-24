@@ -14,20 +14,22 @@ function catalogStatus(provider: Provider, t: Translate) {
   return provider.modelCount === null ? t("모델 수 미확인", "Model count unknown") : t(`모델 ${provider.modelCount}개`, `Models: ${provider.modelCount}`);
 }
 
-function roles(id: string, catalog: CatalogModel[], t: Translate) {
+function roles(id: string, catalog: CatalogModel[], t: Translate, projectScope: boolean) {
   const grades = workerGradeSchema.options.filter(grade => eligibleProvider(grade, id, false, catalog));
   const worker = grades.length === 4 ? "A~D" : grades.join("·");
   const scope = [t(`작업 ${worker}`, `Work ${worker}`)];
-  if (eligibleProvider("M", id, false, catalog)) scope.push(t("운영 M", "Coordinator M"));
+  if (!projectScope && eligibleProvider("M", id, false, catalog)) scope.push(t("운영 M", "Coordinator M"));
   if (eligibleProvider("D", id, true)) scope.push(t("필수 훅", "Required hooks"));
   return scope.join(" / ");
 }
 
-export function ProviderSettings({ providers, catalog, theme, busy, overrides, setMode }: {
+export function ProviderSettings({ providers, catalog, theme, busy, change, overrides, setMode, projectExclusions }: {
   providers: Provider[]; catalog: CatalogModel[];
   theme: Theme;
   busy: boolean;
   overrides?: Record<string,string>;
+  projectExclusions?: readonly string[];
+  change: (provider: string, included: boolean) => void;
   setMode: (provider: string, mode: string | null) => void;
 }) {
   const { t } = useBoardLanguage();
@@ -37,7 +39,8 @@ export function ProviderSettings({ providers, catalog, theme, busy, overrides, s
   const cardWidth = width > 0 ? Math.floor((width - 8 * (columns - 1)) / columns) : "100%";
   const c = theme.colors;
   if (!providers.length) return <Text style={{ color: c.foregroundMuted }}>{t("Paseo가 발견한 실행기가 없습니다. Paseo에서 실행기를 연결한 뒤 새로 고쳐 주세요.", "Paseo found no providers. Connect a provider in Paseo, then refresh.")}</Text>;
-  const included = providers.filter(p => p.included);
+  const isIncluded = (p: Provider) => p.included && !projectExclusions?.includes(p.id);
+  const included = providers.filter(isIncluded);
   const ready = included.filter(p => p.available && p.status === "ready");
   return <View style={{ gap: 8 }}>
     <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
@@ -51,16 +54,39 @@ export function ProviderSettings({ providers, catalog, theme, busy, overrides, s
       }}>
         <Text selectable style={{ fontWeight: "600", color: c.foreground }}>{provider.label}</Text>
         <Text selectable style={{ fontSize: 12, color: c.foregroundMuted }}>{provider.id} · {catalogStatus(provider, t)}</Text>
-        <Text style={{ fontSize: 12, color: c.foregroundMuted }}>{roles(provider.id, catalog, t)}</Text>
-        {overrides && (provider.workerModes?.length || Object.hasOwn(overrides, provider.id) || recommendedWorkerMode(provider.id)) ? <WorkerPermissions
+        {(!projectExclusions || isIncluded(provider)) &&
+          <Text style={{ fontSize: 12, color: c.foregroundMuted }}>{roles(provider.id, catalog, t, !!projectExclusions)}</Text>}
+        {!projectExclusions && overrides && (provider.workerModes?.length || Object.hasOwn(overrides, provider.id) || recommendedWorkerMode(provider.id)) ? <WorkerPermissions
           provider={provider.id} modes={provider.workerModes} selected={Object.hasOwn(overrides, provider.id) ? overrides[provider.id] : undefined}
           theme={theme} busy={busy} save={setMode} /> : null}
-        {!provider.included && <Text style={{ fontSize: 12, color: c.statusWarning }}>
-          {t("자동 배정에서 꺼짐 · ‘계정과 사용량’에서 다시 켤 수 있습니다.", "Turned off for automatic assignment · Turn it back on under Accounts and usage.")}
-        </Text>}
+        {projectExclusions ? <ProjectProviderInclusion {...{ provider, theme, busy, change }} excluded={projectExclusions.includes(provider.id)} /> :
+          !provider.included && <Text style={{ fontSize: 12, color: c.statusWarning }}>
+            {t("자동 배정에서 꺼짐 · ‘계정과 사용량’에서 다시 켤 수 있습니다.", "Turned off for automatic assignment · Turn it back on under Accounts and usage.")}
+          </Text>}
       </View>)}
     </View>}
   </View>;
+}
+
+function ProjectProviderInclusion({ provider, excluded, theme, busy, change }: {
+  provider: Provider; excluded: boolean; theme: Theme; busy: boolean;
+  change: (provider: string, included: boolean) => void;
+}) {
+  const { t } = useBoardLanguage();
+  const muted = theme.colors.foregroundMuted;
+  return <>
+    {!provider.included && <Text style={{ color: muted }}>{t("호스트에서 제외됨", "Excluded on this host")}</Text>}
+    {(provider.included || excluded) && <Text style={{ color: muted }}>{excluded
+      ? t("이 프로젝트에서 제외됨", "Excluded for this project")
+      : t("보드 기본값에 따라 포함됨", "Included by board default")}</Text>}
+    {(provider.included || excluded) && <View style={{ flexDirection: "row" }}>
+      <Button theme={theme} disabled={busy}
+        label={excluded ? t("보드 기본값 따르기", "Use board default") : t("이 프로젝트에서 제외", "Exclude for this project")}
+        accessibilityLabel={excluded ? t(`${provider.id} · 보드 기본값 따르기`, `Use the board default for ${provider.id}`)
+          : t(`${provider.id} · 이 프로젝트에서 제외`, `Exclude ${provider.id} for this project`)}
+        onPress={() => change(provider.id, excluded)} />
+    </View>}
+  </>;
 }
 
 function WorkerPermissions({provider, modes, selected, theme, busy, save}: {

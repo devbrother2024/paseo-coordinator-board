@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { reportingKey } from "../shared/contract";
 import {
-  available, dispatchInputSchema, includedCatalog, resolveRoute, sameRoute, effectiveWorkerMode, supportsWorkerHooks,
-  type CatalogModel, type DispatchInput, type ProviderEntry, type RouteChoice, type RoutePolicy, type WorkspaceChoice,
+  available, dispatchInputSchema, effectiveWorkerMode, includedCatalog, projectProviderExclusions,
+  resolveRoute, routingForProject, sameRoute, supportsWorkerHooks,
+  type CatalogModel, type DispatchInput, type ProviderEntry, type ProjectExcludedProviders, type ProjectRouting, type RouteChoice, type RoutePolicy, type WorkspaceChoice,
 } from "../shared/dispatch";
 import { readAccountUsage } from "./usage-routing";
 import { canReceiveBoardInput, readPages } from "./discovery";
@@ -14,7 +15,16 @@ export { resolveRoute, validateCandidates } from "../shared/dispatch";
 type Sdk = PluginHandlerContext["paseo"];
 type PaseoWorkspace = Awaited<ReturnType<Sdk["workspaces"]["list"]>>["entries"][number];
 type PaseoAgentConfig = Parameters<Sdk["agents"]["create"]>[0]["config"];
-type DispatchScope = { projects: string[]; routing: RoutePolicy; coordinator: string | null; excludedProviders: string[]; usageRouting?: boolean; workerModeOverrides?: Record<string,string> };
+type DispatchScope = {
+  projects: string[];
+  routing: RoutePolicy;
+  projectRouting?: ProjectRouting;
+  projectExcludedProviders?: ProjectExcludedProviders;
+  coordinator: string | null;
+  excludedProviders: string[];
+  usageRouting?: boolean;
+  workerModeOverrides?: Record<string, string>;
+};
 type Directory = { providers: Omit<ProviderEntry, "included">[]; catalog: CatalogModel[] };
 
 // Only built-in adapters with a known permission contract and a Paseo tool transport.
@@ -180,7 +190,13 @@ export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | 
     const state = getScope();
     if (typeof state.coordinator !== "string" || !state.coordinator) throw new Error("현재 기기의 코디네이터를 먼저 지정해 주세요.");
     if (!state.projects.includes(input.projectId)) throw new Error("이 호스트에서 관리할 프로젝트를 먼저 선택해 주세요.");
-    return { workerModeOverrides: state.workerModeOverrides ?? {}, coordinator: state.coordinator, routing: state.routing, excluded: state.excludedProviders, usageRouting: state.usageRouting !== false };
+    return {
+      workerModeOverrides: state.workerModeOverrides ?? {},
+      coordinator: state.coordinator,
+      routing: routingForProject(state.routing, state.projectRouting, input.projectId),
+      excluded: [...state.excludedProviders, ...projectProviderExclusions(state.projectExcludedProviders, input.projectId)],
+      usageRouting: state.usageRouting !== false,
+    };
   };
   const initial = scopeForProject();
   const routeSource = input.routeSource ?? "board";

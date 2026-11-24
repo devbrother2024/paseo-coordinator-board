@@ -69,7 +69,8 @@ export async function planWorkerPlacement(paseo: HostSdk, scope: Preferences, pr
 }
 
 function dispatchScope(scope: Preferences, coordinator: string) {
-  return { projects: scope.projects, routing: scope.routing, coordinator, excludedProviders: scope.excludedProviders,
+  return { projects: scope.projects, routing: scope.routing, projectRouting: scope.projectRouting, projectExcludedProviders: scope.projectExcludedProviders,
+    coordinator, excludedProviders: scope.excludedProviders,
     usageRouting: scope.usageRouting, workerModeOverrides: scope.workerModeOverrides };
 }
 

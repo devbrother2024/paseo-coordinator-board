@@ -5,7 +5,7 @@ import { z } from "zod";
 import { sessionLinkSchema } from "../shared/session-links";
 import {clarificationCard, clarificationEntry} from "../shared/clarifications";
 import { decisionSchema, decisionFields, decisionRequest } from "../shared/decision-actions";
-import { dispatchInputSchema, routePolicySchema, workerModeProvider } from "../shared/dispatch";
+import { dispatchInputSchema, projectExcludedProvidersSchema, projectRoutingSchema, routePolicySchema, workerModeProvider } from "../shared/dispatch";
 import { pullMergeActivity, repositoryOverride } from "../shared/prs";
 import { replyDetails } from "../shared/reply-history";
 import { factSchema } from "../shared/board-facts";
@@ -97,6 +97,8 @@ const schema = z.object({
   judgments: z.record(z.string(), judgment.extend({ projectId: z.string(), requestedAt:z.string().optional() })),
   sessionLinks: z.record(z.string(), sessionLinkSchema).default({}),
   routing: routePolicySchema.default({}),
+  projectRouting: projectRoutingSchema.default({}),
+  projectExcludedProviders: projectExcludedProvidersSchema.default({}),
   excludedProviders: z.array(z.string().min(1).max(256)).default([]),
   usageRouting: z.boolean().default(true),
   routingRevision: z.number().int().nonnegative().default(0),

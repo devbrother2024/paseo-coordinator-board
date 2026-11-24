@@ -1,7 +1,7 @@
 import { Modal } from "@getpaseo/plugin/client/ui";
 import { useEffect, useRef, useState } from "react";
 import { AccessibilityInfo, Text, View } from "react-native";
-import type { Grade, RouteChoice } from "../shared/dispatch";
+import { projectRouteOverrides, type Grade, type RouteChoice } from "../shared/dispatch";
 import type { Operations } from "../shared/operations";
 import { Button, type Theme } from "./controls";
 import { useBoardLanguage, type Translate } from "./language";
@@ -22,11 +22,11 @@ export const wrap = { flexDirection: "row" as const, flexWrap: "wrap" as const, 
 // The latest stored revision comes back with a refusal, so a change that lost to another screen can be told apart.
 export type RoutingSave = { ok: true } | { ok: false; message: string; revision: number | null };
 type Props = {
-  data: Operations; theme: Theme; busy: boolean;
+  data: Operations; projectId: string | null; theme: Theme; busy: boolean;
   save: (grade: Grade, candidates: RouteChoice[], revision: number) => Promise<RoutingSave>;
 };
 
-export function RouteEditor({ data, theme, busy, save }: Props) {
+export function RouteEditor({ data, projectId, theme, busy, save }: Props) {
   const { t } = useBoardLanguage();
   const [open, setOpen] = useState<Grade | null>(null);
   const [adding, setAdding] = useState<Grade | null>(null);
@@ -43,11 +43,17 @@ export function RouteEditor({ data, theme, busy, save }: Props) {
   }, [edits]);
   const c = theme.colors;
   const compact = width > 0 && width < 640;
-  const rows = routingOverview(data, t);
+  const overrides = projectId ? projectRouteOverrides(data.projectRouting, projectId) : null;
+  const savedCandidates = (grade: Grade) => overrides
+    ? (grade === "M" ? [] : overrides[grade] ?? [])
+    : data.routing[grade] ?? [];
+  const resetLabel = projectId ? t("보드 기본값 따르기", "Use board default") : t("추천으로 되돌리기", "Back to recommended");
+  const rows = routingOverview(data, t, grade => savedCandidates(grade).length ? resetLabel : null)
+    .filter(row => !projectId || row.grade !== "M");
 
   async function commit(grade: Grade, candidates: RouteChoice[], undo = false) {
     if (busy || edits[grade]?.saving) return;
-    const previous = data.routing[grade] ?? [];
+    const previous = savedCandidates(grade);
     if (sameList(candidates, previous)) return;
     const revision = data.revision;
     // A grade that followed remaining usage stops doing so once it has a saved order.
@@ -69,7 +75,9 @@ export function RouteEditor({ data, theme, busy, save }: Props) {
   };
 
   return <View style={{ gap: 10 }} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
-    <Text style={{ fontSize: 12, color: c.foregroundMuted }}>{t("적용 범위 · 보드 기본", "Applies to · Board default")}</Text>
+    <Text style={{ fontSize: 12, color: c.foregroundMuted }}>{projectId
+      ? t("적용 범위 · 이 프로젝트", "Applies to · This project")
+      : t("적용 범위 · 보드 기본", "Applies to · Board default")}</Text>
     <View role={compact ? undefined : "table"} style={{ gap: compact ? 8 : 0, borderWidth: compact ? 0 : 1, borderColor: c.border, borderRadius: 8, overflow: "hidden" }}>
       {!compact && <View role="row" style={{ flexDirection: "row", gap: 10, paddingHorizontal: 10, paddingVertical: 7, backgroundColor: c.surface0 }}>
         {[[t("등급", "Grade"), columns.grade], [t("쓰는 일", "Used for"), columns.purpose], [t("지금 쓰는 모델", "Model in use"), columns.model],
@@ -79,6 +87,7 @@ export function RouteEditor({ data, theme, busy, save }: Props) {
       </View>}
       {rows.map(row => <GradeRow key={row.grade} row={row} data={data} theme={theme} compact={compact} busy={busy}
         open={open === row.grade} adding={adding === row.grade} edit={edits[row.grade]} usageRouting={!!data.usageRouting}
+        projectScope={!!projectId} canReset={savedCandidates(row.grade).length > 0} resetLabel={resetLabel}
         undoBlocked={edits[row.grade]?.undo ? undoIssue(data, row.grade, edits[row.grade]!.undo!.previous, t) : null}
         onToggle={() => { setOpen(open === row.grade ? null : row.grade); setAdding(null); }}
         onAdding={value => setAdding(value ? row.grade : null)}
@@ -97,16 +106,18 @@ const columns = {
 
 type RowProps = {
   row: RoutingRow; data: Operations; theme: Theme; compact: boolean; busy: boolean; open: boolean; adding: boolean; edit: RowEdit | undefined;
-  usageRouting: boolean; undoBlocked: string | null;
+  usageRouting: boolean; projectScope: boolean; canReset: boolean; resetLabel: string; undoBlocked: string | null;
   onToggle: () => void; onAdding: (value: boolean) => void; onChange: (next: RouteChoice[]) => void;
   onReset: () => void; onUndo: () => void; onRetry: () => void; onDismiss: () => void;
 };
 
-function GradeRow({ row, data, theme, compact, busy, open, adding, edit, usageRouting, undoBlocked, onToggle, onAdding, onChange, onReset, onUndo, onRetry, onDismiss }: RowProps) {
+function GradeRow({ row, data, theme, compact, busy, open, adding, edit, usageRouting, projectScope, canReset, resetLabel, undoBlocked, onToggle, onAdding, onChange, onReset, onUndo, onRetry, onDismiss }: RowProps) {
   const { t } = useBoardLanguage();
   const c = theme.colors;
   const locked = busy || !!edit?.saving;
   const list = row.candidates.map(candidate => candidate.route);
+  const inherited = projectScope && !canReset;
+  const mode = inherited ? t("보드 기본값", "Board default") : modeLabel(row.mode, t);
   const model = <Text selectable style={{ color: row.active ? c.foreground : c.statusWarning, fontWeight: "600" }}>{routeLabel(row.active, t)}</Text>;
   const toggle = <Button theme={theme} expanded={open} label={open ? t("닫기", "Close") : t("바꾸기", "Change")}
     accessibilityLabel={row.label + " · " + (open ? t("닫기", "Close") : t("바꾸기", "Change"))} onPress={onToggle} />;
@@ -121,17 +132,17 @@ function GradeRow({ row, data, theme, compact, busy, open, adding, edit, usageRo
       </View>
       <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{row.purpose}</Text>
       {model}
-      <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{modeLabel(row.mode, t)} · {fallbacks}</Text>
+      <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{mode} · {fallbacks}</Text>
     </> : <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
       <Text style={{ ...columns.grade, color: c.foreground, fontWeight: "700" }}>{row.label}</Text>
       <Text style={{ ...columns.purpose, color: c.foregroundMuted, fontSize: 12 }}>{row.purpose}</Text>
       <View style={columns.model}>{model}</View>
-      <Text style={{ ...columns.mode, color: c.foregroundMuted, fontSize: 12 }}>{modeLabel(row.mode, t)}</Text>
+      <Text style={{ ...columns.mode, color: c.foregroundMuted, fontSize: 12 }}>{mode}</Text>
       <Text accessibilityLabel={fallbacks} style={{ ...columns.fallbacks, color: c.foregroundMuted, fontSize: 12 }}>{row.fallbacks}</Text>
       <View style={{ ...columns.action, alignItems: "flex-end" }}>{toggle}</View>
     </View>}
     {row.notice && <Text selectable style={{ color: c.statusWarning, fontSize: 12 }}>{row.notice}</Text>}
-    <SaveStatus edit={edit} label={row.label} theme={theme} busy={busy} undoBlocked={undoBlocked} onUndo={onUndo} onRetry={onRetry} onDismiss={onDismiss} onReset={onReset} />
+    <SaveStatus edit={edit} label={row.label} theme={theme} busy={busy} undoBlocked={undoBlocked} onUndo={onUndo} onRetry={onRetry} onDismiss={onDismiss} onReset={onReset} resetLabel={resetLabel} />
     {open && <View style={{ gap: 8, padding: compact ? 0 : 10, paddingTop: compact ? 4 : 10, borderRadius: 7, backgroundColor: compact ? undefined : c.surface0 }}>
       {row.grade === "M" && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
         {t("바꿔도 지금 코디네이터는 그대로 일합니다. 다음에 코디네이터를 만들거나 교체할 때 적용됩니다.", "The current coordinator keeps working. This applies the next time a coordinator is created or replaced.")}
@@ -139,7 +150,10 @@ function GradeRow({ row, data, theme, compact, busy, open, adding, edit, usageRo
       {row.mode === "custom" && usageRouting && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
         {t("이 등급은 직접 정한 순서로 고릅니다. 사용량 자동 선택은 적용되지 않습니다.", "This grade follows the order saved here. Usage-based selection does not apply to it.")}
       </Text>}
-      {row.mode !== "custom" && !!list.length && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
+      {inherited && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
+        {t("이 등급은 보드 기본값을 따릅니다. 여기서 바꾸면 이 프로젝트에만 적용됩니다.", "This grade follows the board default. Changes here apply only to this project.")}
+      </Text>}
+      {!projectScope && row.mode !== "custom" && !!list.length && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
         {t("보드가 고른 순서입니다. 여기서 바꾸면 이 등급은 직접 지정으로 저장됩니다.", "This is the board's own order. A change here saves this grade as custom.")}
       </Text>}
       {row.candidates.map((candidate, index) => <View key={JSON.stringify(candidate.route)}
@@ -160,15 +174,15 @@ function GradeRow({ row, data, theme, compact, busy, open, adding, edit, usageRo
             accessibilityLabel={candidate.route.model + " · " + t("맨 위로", "Move to top")} onPress={() => onChange(moveFirst(list, index))} />}
           {index > 0 && <Button theme={theme} disabled={locked} label={t("위로", "Move up")}
             accessibilityLabel={candidate.route.model + " · " + t("위로", "Move up")} onPress={() => onChange(moveUp(list, index))} />}
-          {canRemove(list, row.mode === "custom") && <Button theme={theme} disabled={locked} label={t("빼기", "Remove")}
+          {canRemove(list, canReset) && <Button theme={theme} disabled={locked} label={t("빼기", "Remove")}
             accessibilityLabel={candidate.route.model + " · " + t("빼기", "Remove")} onPress={() => onChange(removeCandidate(list, index))} />}
         </View>
       </View>)}
       <View style={wrap}>
         <Button theme={theme} expanded={adding} disabled={locked} label={adding ? t("후보 추가 닫기", "Close add candidate") : t("+ 후보 추가", "+ Add candidate")}
           accessibilityLabel={row.label + " · " + (adding ? t("후보 추가 닫기", "Close add candidate") : t("후보 추가", "Add candidate"))} onPress={() => onAdding(!adding)} />
-        {row.mode === "custom" && <Button theme={theme} disabled={locked} label={t("추천으로 되돌리기", "Back to recommended")}
-          accessibilityLabel={row.label + " · " + t("추천으로 되돌리기", "Back to recommended")} onPress={onReset} />}
+        {canReset && <Button theme={theme} disabled={locked} label={resetLabel}
+          accessibilityLabel={row.label + " · " + resetLabel} onPress={onReset} />}
       </View>
       {adding && (compact
         // The host's sheet owns the safe area, the close gesture and keyboard positioning.
@@ -213,8 +227,8 @@ function AddCandidate({ data, grade, list, theme, locked, onAdd }: {
   </View>;
 }
 
-function SaveStatus({ edit, label, theme, busy, undoBlocked, onUndo, onRetry, onDismiss, onReset }: {
-  edit: RowEdit | undefined; label: string; theme: Theme; busy: boolean; undoBlocked: string | null;
+function SaveStatus({ edit, label, theme, busy, undoBlocked, onUndo, onRetry, onDismiss, onReset, resetLabel }: {
+  edit: RowEdit | undefined; label: string; theme: Theme; busy: boolean; undoBlocked: string | null; resetLabel: string;
   onUndo: () => void; onRetry: () => void; onDismiss: () => void; onReset: () => void;
 }) {
   const { t } = useBoardLanguage();
@@ -242,7 +256,7 @@ function SaveStatus({ edit, label, theme, busy, undoBlocked, onUndo, onRetry, on
       <Text accessibilityLiveRegion="polite" style={{ flexShrink: 1, color: c.statusWarning, fontSize: 12 }}>
         {t("이 등급은 이제 직접 정한 순서로 고릅니다(사용량 자동 선택 꺼짐).", "This grade now follows the order saved here (usage-based selection is off for it).")}
       </Text>
-      <Button theme={theme} disabled={busy} {...named(t("추천으로 되돌리기", "Back to recommended"))} onPress={onReset} />
+      <Button theme={theme} disabled={busy} {...named(resetLabel)} onPress={onReset} />
     </View>}
   </View>;
 }

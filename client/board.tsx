@@ -225,6 +225,10 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const lastDigest = snapshot?.lastDigestAt;
   const digest = useDigestRequest(coordinatorId ?? null, !!configured, coordinatorAction, onRefresh, lastDigest);
   const operationsReady = !!snapshot || !!(readiness?.configured && readiness.coordinator && !settings);
+  const projectMembershipKey = snapshot ? JSON.stringify(snapshot.projects
+    .filter(project => project.selected)
+    .map(project => [project.id, project.catalogued])
+    .sort()) : null;
   const reach = snapshot?.coordinatorReach;
   // Opening a session in an archived workspace shows an empty screen. The banner explains instead.
   const coordinatorOpens = !reach || opensSession(reach.state);
@@ -493,7 +497,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         <BoardHosts current={{ id: hostId, label: hostLabel }} settings={false} theme={theme} open={onOpenHostSession} />
       </>}
       <OperationsPanel settings={operationsReady && settings} theme={theme} coordinator={operationsReady ? coordinatorId ?? null : null} configured={operationsReady && !!configured}
-        refreshBoard={onRefresh} openCoordinator={coordinatorOpens ? actions.onOpen : undefined} action={coordinatorAction} digest={digest} />
+        projectMembershipKey={projectMembershipKey} scopeChanging={actions.changing} refreshBoard={onRefresh} openCoordinator={coordinatorOpens ? actions.onOpen : undefined} action={coordinatorAction} digest={digest} />
       {assignmentNotice && inFilter(assignmentNotice.projectId) && <View style={{ gap: 4, padding: 10, borderLeftWidth: 3, borderColor: c.statusWarning, backgroundColor: c.surface1 }}>
         <Text style={{ color: c.foreground, fontWeight: "600" }}>{t("작업 배정 실패", "Assignment failed")} · {projectName(assignmentNotice.projectId)}</Text>
         <Text accessibilityLiveRegion="polite" style={{ color: c.foreground }}>

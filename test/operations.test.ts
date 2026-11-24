@@ -45,14 +45,15 @@ function scenario(facts?: Parameters<typeof createOperations>[2]) {
   ];
   const nativePins = new Map<string, string>();
   const sessions = new Map<string, CreateInput>();
+  const sessionWorkspaces = new Map<string, string>();
   const sent: { agentId: string; text: string; messageId: string }[] = [];
   // Sent messages show up in a session's conversation only once `visible` is set.
   const history = { visible: false };
   const events: string[] = [];
-  const activity = { quotas: {} as Record<string,number>, modes: [{id:"auto",label:"Default Permissions"}, {id:"auto-review",label:"Auto-review"}], beforeModelList: () => {}, providers: ["codex", "cursor"] };
+  const activity = { quotas: {} as Record<string,number>, modes: [{id:"auto",label:"Default Permissions"}, {id:"auto-review",label:"Auto-review"}], beforeModelList: () => {}, providers: ["codex", "cursor"], hiddenProjects: new Set<string>() };
   const runtime = { supportsToolInvocations:true, supportsMcpServers:true };
   const paseo = {
-    projects: { list: async () => ({projects: workspaces.map(w => ({projectId: w.projectId, projectDisplayName: w.projectDisplayName, projectRootPath: w.workspaceDirectory}))}) },
+    projects: { list: async () => ({projects: workspaces.filter(w => !activity.hiddenProjects.has(w.projectId)).map(w => ({projectId: w.projectId, projectDisplayName: w.projectDisplayName, projectRootPath: w.workspaceDirectory}))}) },
     workspaces: {
       open: async () => ({
         id: workspaceId, current: () => ({ title: "코디네이터 운영" }),
@@ -67,7 +68,10 @@ function scenario(facts?: Parameters<typeof createOperations>[2]) {
           events.push("workspace.agents.create");
           const receipt = sessions.get(input.agentId);
           if (receipt) expect(input).toEqual(receipt);
-          else sessions.set(input.agentId, input);
+          else {
+            sessions.set(input.agentId, input);
+            sessionWorkspaces.set(input.agentId, id);
+          }
           return { id: input.agentId, workspaceId: id };
         } } }),
     },
@@ -76,7 +80,7 @@ function scenario(facts?: Parameters<typeof createOperations>[2]) {
       ref: (id: string) => ({ refresh: async () => {
         if (id === coordinator) return {agent: {id, workspaceId, status:"idle", activeTurn:null, pendingPermissions:[]}};
         const existing = sessions.get(id);
-        return existing ? {agent: {id, workspaceId, provider:existing.config.provider.split("/", 1)[0], options:existing.config.options,
+        return existing ? {agent: {id, workspaceId: sessionWorkspaces.get(id) ?? workspaceId, provider:existing.config.provider.split("/", 1)[0], options:existing.config.options,
           capabilities:runtime, currentModeId: existing.config.modeId, status:"idle", pendingPermissions:[], metadata: existing.metadata}} : null;
       }, send: async (text: string, options: {messageId: string}) => { sent.push({agentId:id, text, messageId:options.messageId}); },
       timeline: { refetch: async () => page(history.visible ? sent.filter(m => m.agentId === id)
@@ -117,28 +121,29 @@ function scenario(facts?: Parameters<typeof createOperations>[2]) {
 test("initial setup requests only the diagnostics needed for its coordinator preview", async () => {
   const s = scenario();
   s.activity.providers.push("custom-agent");
-  const calls = { labels: 0, usage: 0 };
+  const calls = { labels: 0, usage: 0, projects: 0 };
   const providers = s.paseo.providers;
-  const sdk = { providers: {
+  const sdk = { projects: { list: () => { calls.projects++; return s.paseo.projects.list(); } }, providers: {
     ...providers,
     snapshot: () => { calls.labels++; return providers.snapshot(); },
     listUsage: () => { calls.usage++; return providers.listUsage(); },
   } };
   s.store.change(scope => { scope.coordinator = null; scope.usageRouting = false; });
   const preview = await s.call(operationState, { view: "setup" }, sdk);
-  expect(calls).toEqual({ labels: 0, usage: 0 });
+  expect(calls).toEqual({ labels: 0, usage: 0, projects: 0 });
   expect(preview.usage).toBeUndefined();
+  expect(preview.routingProjects).toBeUndefined();
   expect(preview.coordinatorMode?.id).toBe("auto-review");
 
   s.store.change(scope => { scope.usageRouting = true; });
   await s.call(operationState, { view: "setup" }, sdk);
-  expect(calls).toEqual({ labels: 0, usage: 1 });
+  expect(calls).toEqual({ labels: 0, usage: 1, projects: 0 });
   s.store.change(scope => { scope.routing.M = [route]; });
   await s.call(operationState, { view: "setup" }, sdk);
-  expect(calls).toEqual({ labels: 0, usage: 1 });
+  expect(calls).toEqual({ labels: 0, usage: 1, projects: 0 });
 
   const settings = await s.call(operationState, {}, sdk);
-  expect(calls).toEqual({ labels: 1, usage: 2 });
+  expect(calls).toEqual({ labels: 1, usage: 2, projects: 1 });
   expect(settings.usage).toBeDefined();
   expect(settings.providers.find((p: { id: string }) => p.id === "custom-agent")?.label).toBe("My Code Studio");
 });
@@ -375,6 +380,110 @@ test("a saved C-grade route reaches the actual worker, the local coordinator is 
   expect(s.sessions.get(receipt.sessionId)).toMatchObject({parent: coordinator, config: {provider: "cursor/gemini-4-neon-high"}, prompt: job.prompt});
 });
 
+test("routing settings return the current managed catalog and its overrides together", async () => {
+  const s = scenario();
+  const other = "other-project";
+  const sessionOnly = "session-only-project";
+  s.store.change(scope => {
+    scope.projects.push(sessionOnly);
+    scope.projectRouting = { [projectId]: { D: [route] }, [other]: { D: [alternate] }, [sessionOnly]: { D: [route] } };
+    scope.projectExcludedProviders = { [projectId]: ["cursor"], [other]: ["codex"], [sessionOnly]: ["codex"] };
+  });
+  const initial = await s.call(operationState, {});
+  expect(initial.routingProjects).toEqual([{ id: projectId, title: "예제 프로젝트", path: "/synthetic/selected" }]);
+  expect(initial.projectRouting).toEqual({ [projectId]: { D: [route] } });
+  expect(initial.projectExcludedProviders).toEqual({ [projectId]: ["cursor"] });
+  await expect(s.call(updateRouting, { projectId: sessionOnly, grade: "D", candidates: [], expectedRevision: 0 })).rejects.toThrow(/Project not found/);
+  await expect(s.tool("plan_board_assignment", { projectId: sessionOnly })).rejects.toThrow(/Managed project not found/);
+
+  const sdk = { ...s.paseo, projects: { list: async () => {
+    const catalog = await s.paseo.projects.list();
+    s.store.change(scope => { scope.projects = [other, sessionOnly]; });
+    return catalog;
+  } } };
+  const updated = await s.call(operationState, {}, sdk);
+  expect(updated.routingProjects).toEqual([{ id: other, title: "예제 프로젝트", path: "/synthetic/other" }]);
+  expect(updated.projectRouting).toEqual({ [other]: { D: [alternate] } });
+  expect(updated.projectExcludedProviders).toEqual({ [other]: ["codex"] });
+
+  s.store.change(scope => { scope.projects.push(projectId); });
+  s.activity.hiddenProjects.add(other);
+  const plan = await s.tool("plan_board_assignment", {});
+  expect(plan.projects.map(p => p.id)).toEqual([projectId]);
+  expect(plan.workspaces.map(w => w.projectId)).toEqual([projectId]);
+});
+
+test("project overrides persist per grade and reset to the latest board defaults", async () => {
+  const s = scenario();
+  const save = (grade: string, candidates: unknown[], expectedRevision: number, id?: string) =>
+    s.call(updateRouting, { grade, candidates, expectedRevision, ...(id && { projectId: id }) });
+  expect((await s.call(operationState, {})).projectRouting).toEqual({});
+  await save("M", [route], 0);
+  await save("C", [route], 1);
+  await save("C", [alternate, route], 2, projectId);
+  await save("D", [route], 3, projectId);
+  await expect(save("C", [], 3, projectId)).rejects.toThrow(/배정표/);
+  await expect(save("M", [route], 4, projectId)).rejects.toThrow();
+  await expect(save("C", [route], 4, "other-project")).rejects.toThrow(/프로젝트/);
+  s.store.change(scope => { scope.projects.push("unknown-project"); });
+  await expect(save("C", [route], 4, "unknown-project")).rejects.toThrow(/프로젝트/);
+  await save("C", [route, alternate], 4);
+  expect((await s.call(operationState, {})).projectRouting).toEqual({
+    [projectId]: { C: [alternate, route], D: [route] },
+  });
+  await save("C", [], 5, projectId);
+  const state = await s.call(operationState, {});
+  expect(state.projectRouting).toEqual({ [projectId]: { D: [route] } });
+  expect(state.routing).toMatchObject({ C: [route, alternate], M: [route] });
+  expect(state.coordinatorMode?.id).toBe("auto-review");
+  const scoped = await s.tool("plan_board_assignment", { projectId });
+  expect(scoped.routes.find(r => r.grade === "C").route).toEqual(route);
+  await save("D", [], 6, projectId);
+  expect(s.store.read().projectRouting).toEqual({});
+});
+
+test("planning and dispatch use the destination project's candidate order and retain retry receipts", async () => {
+  const s = scenario();
+  const other = "other-project";
+  s.store.change(scope => { scope.projects.push(other); });
+  await s.call(updateRouting, { grade: "C", candidates: [route, alternate], expectedRevision: 0 });
+  const before = await s.tool("plan_board_assignment", {});
+  expect(before.routes.find(r => r.grade === "C").route).toEqual(route);
+  await s.call(updateRouting, { projectId: other, grade: "C", candidates: [alternate, route], expectedRevision: 1 });
+
+  const plan = await s.tool("plan_board_assignment", {});
+  const routeFor = (id: string) => plan.projects.find(p => p.id === id).routes.find(r => r.grade === "C");
+  expect(plan.routes).toBeUndefined();
+  expect(routeFor(projectId)).toMatchObject({ route, expectedModeId: "auto-review" });
+  expect(routeFor(other).route).toEqual(alternate);
+  const scoped = await s.tool("plan_board_assignment", { projectId: other, needsHooks: true });
+  expect(scoped.projects.map(p => p.id)).toEqual([other]);
+  expect(scoped.workspaces.map(w => w.id)).toEqual(["other-space"]);
+  expect(scoped.routes.find(r => r.grade === "C")).toMatchObject({ route, expectedModeId: "auto-review" });
+
+  const destination = { ...job, projectId: other, workspaceId: "other-space" };
+  await expect(s.tool("assign_board_worker", { job: destination })).rejects.toThrow(/미리보기/);
+  const input = { job: { ...destination, expectedRoute: alternate } };
+  const receipt = await s.tool("assign_board_worker", input);
+  expect(s.sessions.get(receipt.sessionId)?.config.provider).toBe("cursor/gemini-4-neon-high");
+  await s.call(updateRouting, { projectId: other, grade: "C", candidates: [], expectedRevision: 2 });
+  expect(await s.tool("assign_board_worker", input)).toEqual(receipt);
+  expect(s.sessions.size).toBe(1);
+  await expect(s.tool("assign_board_worker", { job: { ...input.job, requestKey: "new-project-job" } })).rejects.toThrow(/미리보기/);
+  s.store.change(scope => { scope.projects = [projectId, "unknown-project"]; });
+  await expect(s.tool("plan_board_assignment", { projectId: other })).rejects.toThrow(/프로젝트/);
+  await expect(s.tool("plan_board_assignment", { projectId: "unknown-project" })).rejects.toThrow(/프로젝트/);
+  await expect(s.tool("assign_board_worker", input)).rejects.toThrow(/프로젝트/);
+});
+
+test("dispatch rechecks the project override after discovering models", async () => {
+  const s = scenario();
+  await s.call(updateRouting, { projectId, grade: "C", candidates: [route, alternate], expectedRevision: 0 });
+  s.activity.beforeModelList = () => s.store.change(scope => { scope.projectRouting[projectId].C = [alternate, route]; });
+  await expect(s.tool("assign_board_worker", { job })).rejects.toThrow(/미리보기/);
+  expect(s.sessions.size).toBe(0);
+});
+
 test("the coordinator cannot dispatch to an excluded project, mismatched workspace, or withdrawn scope", async () => {
   const s = scenario();
   await expect(s.tool("assign_board_worker",{job:{...job, projectId:"other-project",workspaceId:"other-space"}})).rejects.toThrow(/프로젝트/);
@@ -465,6 +574,102 @@ test("excluding a provider preserves ordered overrides across reloads, and gates
   expect((await s.tool("plan_board_assignment",{})).routes.find(r=>r.grade==="C").route).toEqual(route);
   expect(s.store.read().routing.C).toEqual([route,alternate]);
   await expect(s.call(setProviderInclusion,{provider:"not-registered",included:false,expectedRevision:4})).rejects.toThrow(/실행기/);
+});
+
+test("project provider exclusions gate all worker grades, preserve fallback order, and leave coordinator routing on the host", async () => {
+  const s = scenario();
+  const other = "other-project";
+  s.store.change(scope => { scope.projects.push(other); });
+  await s.call(updateRouting, { grade: "C", candidates: [route, alternate], expectedRevision: 0 });
+  const receipt = await s.tool("assign_board_worker", { job });
+
+  const exclude = { projectId, provider: "codex", included: false, expectedRevision: 1 };
+  await s.call(setProviderInclusion, exclude);
+  await expect(s.call(setProviderInclusion, { ...exclude, included: true })).rejects.toThrow(/바뀌/);
+  await s.call(setProviderInclusion, { ...exclude, expectedRevision: 2 });
+  const state = await s.call(operationState, {});
+  expect(state.revision).toBe(2);
+  expect(state.projectExcludedProviders).toEqual({ [projectId]: ["codex"] });
+  expect(state.providers.find(p => p.id === "codex").included).toBe(true);
+  expect(state.coordinatorMode?.id).toBe("auto-review");
+  expect((await s.call(operationState, { view: "setup" })).projectExcludedProviders).toBeUndefined();
+  expect(s.store.read().routing.C).toEqual([route, alternate]);
+
+  const plan = await s.tool("plan_board_assignment", {});
+  expect(plan.routes).toBeUndefined();
+  expect(plan.projects.find(p => p.id === projectId).routes.map(r => r.route)).toEqual(Array(4).fill(alternate));
+  expect(plan.projects.find(p => p.id === other).routes.find(r => r.grade === "C").route).toEqual(route);
+  const hooks = await s.tool("plan_board_assignment", { projectId, needsHooks: true });
+  expect(hooks.routes.every(r => r.route === null)).toBe(true);
+  await expect(s.call(updateRouting, { projectId, grade: "D", candidates: [route], expectedRevision: 2 })).rejects.toThrow(/등급/);
+  await s.call(updateRouting, { projectId, grade: "A", candidates: [alternate], expectedRevision: 2 });
+  await expect(s.tool("assign_board_worker", { job: { ...job, requestKey: "excluded-project-job" } })).rejects.toThrow(/미리보기/);
+  expect(await s.tool("assign_board_worker", { job })).toEqual(receipt);
+  const fallback = await s.tool("assign_board_worker", { job: { ...job, expectedRoute: alternate, requestKey: "fallback-project-job" } });
+  expect(s.sessions.get(fallback.sessionId)?.config.provider).toBe("cursor/gemini-4-neon-high");
+  expect(s.sessions.size).toBe(2);
+});
+
+test("host provider switches apply across projects and preserve project exclusions", async () => {
+  const s = scenario();
+  const other = "other-project";
+  const toggle = (provider: string, included: boolean, expectedRevision: number, id?: string) =>
+    s.call(setProviderInclusion, { provider, included, expectedRevision, ...(id && { projectId: id }) });
+  await expect(toggle("codex", false, 0, other)).rejects.toThrow(/프로젝트/);
+  s.store.change(scope => { scope.projects.push(other, "unknown-project"); });
+  await expect(toggle("codex", false, 0, "unknown-project")).rejects.toThrow(/프로젝트/);
+  await expect(toggle("unknown-provider", false, 0, projectId)).rejects.toThrow(/실행기/);
+
+  await toggle("codex", false, 0, projectId);
+  await toggle("codex", false, 1);
+  await expect(toggle("codex", false, 2, other)).rejects.toThrow(/호스트/);
+  expect((await s.call(operationState, {})).coordinatorMode).toBeNull();
+  expect((await s.tool("plan_board_assignment", { projectId: other })).routes.every(r => r.route?.provider === "cursor")).toBe(true);
+  await toggle("codex", true, 2);
+  expect((await s.call(operationState, {})).projectExcludedProviders).toEqual({ [projectId]: ["codex"] });
+  expect((await s.tool("plan_board_assignment", { projectId })).routes.find(r => r.grade === "C").route).toEqual(alternate);
+  expect((await s.tool("plan_board_assignment", { projectId: other })).routes.find(r => r.grade === "C").route).toEqual(route);
+  s.store.change(scope => { scope.projects = [other]; });
+  expect((await s.call(operationState, {})).projectExcludedProviders).toEqual({});
+  s.store.change(scope => { scope.projects.push(projectId); });
+  await toggle("codex", true, 3, projectId);
+  expect(s.store.read().projectExcludedProviders).toEqual({});
+  expect((await s.tool("plan_board_assignment", { projectId })).routes.find(r => r.grade === "C").route).toEqual(route);
+});
+
+test("a project can clear its own provider exclusion while the host keeps that provider disabled", async () => {
+  const s = scenario();
+  await s.call(setProviderInclusion, { projectId, provider: "codex", included: false, expectedRevision: 0 });
+  await s.call(setProviderInclusion, { provider: "codex", included: false, expectedRevision: 1 });
+  await s.call(setProviderInclusion, { projectId, provider: "codex", included: true, expectedRevision: 2 });
+  const settings = await s.call(operationState, {});
+  expect(settings.projectExcludedProviders).toEqual({});
+  expect(settings.providers.find(p => p.id === "codex").included).toBe(false);
+  expect(s.store.read().excludedProviders).toEqual(["codex"]);
+  const planned = await s.tool("plan_board_assignment", { projectId });
+  expect(planned.routes.every(r => r.route?.provider === "cursor")).toBe(true);
+});
+
+test("project routing settings reject a project removed while the host checks it", async () => {
+  for (const [contract, edit] of [
+    [setProviderInclusion, { provider: "codex", included: false }],
+    [updateRouting, { grade: "C", candidates: [alternate] }],
+  ] as const) {
+    const s = scenario();
+    const sdk = { ...s.paseo, projects: { list: async () => {
+      s.store.change(scope => { scope.projects = []; });
+      return s.paseo.projects.list();
+    } } };
+    await expect(s.call(contract, { ...edit, projectId, expectedRevision: 0 }, sdk)).rejects.toThrow(/프로젝트/);
+    expect(s.store.read().routingRevision).toBe(0);
+  }
+});
+
+test("dispatch rechecks project provider exclusions after discovering models", async () => {
+  const s = scenario();
+  s.activity.beforeModelList = () => s.store.change(scope => { scope.projectExcludedProviders = { [projectId]: ["codex"] }; });
+  await expect(s.tool("assign_board_worker", { job })).rejects.toThrow(/미리보기/);
+  expect(s.sessions.size).toBe(0);
 });
 
 test("all providers failing discovery still render settings and preserve existing preferences", async () => {
