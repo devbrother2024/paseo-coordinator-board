@@ -381,6 +381,7 @@ test("a display-only edit keeps the draft's basis; anything the reply answers ne
   expect(revised.fingerprint).not.toBe(item.fingerprint);
   expect(await f.reply(item, {recipientId: "operator", questionIndexes: [0]})).toEqual({status: "changed", reason: "revised"});
   expect(trackedReplyBasis(revised, null)).toBe(trackedReplyBasis(item, null));
+  expect(trackedReplyBasis({...revised, pullRepository: "studio/app", pullTarget: {repo: "studio/app", number: 7}}, null)).toBe(trackedReplyBasis(item, null));
   expect(recordRowKey(revised)).toBe(recordRowKey(item));
   expect(recordActionKey(revised)).not.toBe(recordActionKey(item));
   const [delete_, keep] = item.questions[0].options;

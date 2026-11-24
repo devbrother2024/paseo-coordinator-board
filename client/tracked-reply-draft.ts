@@ -3,10 +3,10 @@ import type { TrackedDecision, TrackedReplyReason, TrackedReplyRoute } from "../
 
 export const optionId = (option: { key: string; text: string }) => JSON.stringify([option.key, option.text]);
 
-// Evidence, risks, urgency, the example answer, history and labels may change under a draft. The ledger owner
+// Evidence, risks, urgency, the example answer, PR links, history and labels may change under a draft. The ledger owner
 // has its own confirmation, and the rest is bookkeeping.
 const unaffected = new Set(["why", "risk", "urgency", "howToAnswer", "qa", "replyHistory", "since", "projectTitle", "owner",
-  "dueAt", "blocksWork", "sourceCoordinatorId", "key", "fingerprint", "queuedReply", "matchedPull"]);
+  "dueAt", "blocksWork", "pullTarget", "pullRepository", "sourceCoordinatorId", "key", "fingerprint", "queuedReply", "matchedPull"]);
 
 // Any other edit changes what the reply answers, so the person looks again before sending it.
 export function trackedReplyBasis(item: TrackedDecision, recipientId: string | null) {

@@ -26,6 +26,7 @@ export const trackedDecisionInputSchema = reference.extend({
   qa:z.array(z.object({q:text, a:optionalText.default(null), askedAt:optionalText, answeredAt:optionalText})).max(512).default([]),
   replyHistory:z.array(z.object({text,at:optionalText})).max(512).default([]),
   sessionId:id.nullable().default(null), sessionHost:id.nullish(), mergeTarget:target.nullish(),
+  pullRepository:repositorySlug.optional(), pullTarget:target.optional(),
   sessionMatch:z.object({projectId,sessionId:id,question:text}).nullish(),
   since:optionalText, howToAnswer:optionalText, projectTitle:optionalText, urgency:optionalText,
   where:z.enum(["human","manager","session","unknown"]).nullish(), owner:optionalText, answerLead:optionalText,

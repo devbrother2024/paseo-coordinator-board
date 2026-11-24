@@ -77,11 +77,11 @@ const recipientBlocks: Partial<Record<TrackedReplyReason, TrackedReplyBlock>> = 
 };
 const wrap = { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 6 };
 
-function Lines({ title, lines, theme }: { title: string; lines: readonly string[]; theme: Theme }) {
+function Lines({ title, lines, theme, pullRepository }: { title: string; lines: readonly string[]; theme: Theme; pullRepository?: string }) {
   if (!lines.length) return null;
   return <View style={{ gap: 3 }}>
     <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, fontWeight: "600" }}>{title}</Text>
-    {lines.map((line, index) => <HistoryMarkdown key={index} theme={theme} source={line} />)}
+    {lines.map((line, index) => <HistoryMarkdown key={index} theme={theme} source={line} pullRepository={pullRepository} />)}
   </View>;
 }
 
@@ -114,7 +114,8 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const c = theme.colors;
   const words = kinds[item.kind];
   const isMerge = item.kind === "merge";
-  const target = trackedPullTarget(item);
+  const target = isMerge ? trackedPullTarget(item) : item.pullTarget;
+  const pullRepository = item.pullRepository ?? item.pullTarget?.repo ?? item.mergeTarget?.repo;
   const headline = isMerge ? undefined : item.ask[0];
   const securityGate = mentionsSecurityGate(item);
   const articleChoice = item.questions.length === 1 && /(?:글|블로그|blog|article)/i.test(item.questions[0].text);
@@ -290,13 +291,14 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
       <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[source || t("보드 공통", "Board-wide"), t(words[0], words[1]), where, item.owner, priorityLabel].filter(Boolean).join(" · ")}</Text>
       <TrackedSessionChips title={item.title} theme={theme} links={links} />
     </View>
-    <HistoryMarkdown theme={theme} source={isMerge ? t("PR 병합", "PR merge") : item.title} heading />
-    {!!headline && headline !== item.title && <HistoryMarkdown theme={theme} source={headline} />}
+    <HistoryMarkdown theme={theme} source={isMerge ? t("PR 병합", "PR merge") : item.title} pullRepository={pullRepository} heading />
     {isMerge && (pull || (target
       ? <TrackedPullStatus repo={target.repo} number={target.number} projectId={item.projectId} theme={theme} securityGate={securityGate} />
       : <Text selectable style={{color:c.foregroundMuted}}>{t("PR 링크와 병합 상태 미확인", "Pull request link and merge status unavailable")}</Text>))}
+    {!isMerge && target && <TrackedPullStatus repo={target.repo} number={target.number} projectId={item.projectId} theme={theme} reference />}
+    {!!headline && headline !== item.title && <HistoryMarkdown theme={theme} source={headline} pullRepository={pullRepository} />}
     {canReply && children}
-    {!isMerge && <Lines theme={theme} title={t("추천", "Recommendation")} lines={item.recommend.filter(line => line !== headline)} />}
+    {!isMerge && <Lines theme={theme} pullRepository={pullRepository} title={t("추천", "Recommendation")} lines={item.recommend.filter(line => line !== headline)} />}
     {!canReply && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{ledgerHistoryUnavailableText(t)}</Text>}
     {queue && <View style={{gap:5, padding:10, borderRadius:7, backgroundColor:c.surface0}}>
       {canReply && <Text accessibilityLiveRegion="polite" style={{color:queue.stopped ? c.statusWarning : c.foreground,fontWeight:"600"}}>
@@ -316,7 +318,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
           setSelected(previous => ({ ...previous, ...picks }));
         }} /></View>}
       {item.questions.map((question, index) => <View key={index} style={{ gap: 6 }}>
-        <HistoryMarkdown theme={theme} source={question.text} heading />
+        <HistoryMarkdown theme={theme} source={question.text} pullRepository={pullRepository} heading />
         {canReply && !!question.options.length && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
           {question.multi ? t("여러 개 선택", "Choose any that apply") : t("하나 선택", "Choose one")}
         </Text>}
@@ -432,14 +434,14 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
         {t("기록 시각", "Recorded at")} · {item.since}
       </Text>}
       {isMerge && <>
-        <Lines theme={theme} title={t("기록 당시 제목", "Original record title")} lines={[item.title]} />
-        <Lines theme={theme} title={t("기록 당시 추천", "Original recommendation")} lines={item.recommend} />
-        {item.howToAnswer && <Lines theme={theme} title={t("기록 당시 답장 예시", "Original example reply")} lines={[item.howToAnswer]} />}
+        <Lines theme={theme} pullRepository={pullRepository} title={t("기록 당시 제목", "Original record title")} lines={[item.title]} />
+        <Lines theme={theme} pullRepository={pullRepository} title={t("기록 당시 추천", "Original recommendation")} lines={item.recommend} />
+        {item.howToAnswer && <Lines theme={theme} pullRepository={pullRepository} title={t("기록 당시 답장 예시", "Original example reply")} lines={[item.howToAnswer]} />}
       </>}
-      <Lines theme={theme} title={isMerge ? t("기록 당시 요청", "Original request") : t("요청한 일", "Requested action")} lines={item.ask.filter(line => line !== headline)} />
-      <Lines theme={theme} title={t("진행 단계", "Steps")} lines={item.steps} />
-      <Lines theme={theme} title={t("근거", "Evidence")} lines={item.why} />
-      <Lines theme={theme} title={t("위험", "Risks")} lines={item.risk} />
+      <Lines theme={theme} pullRepository={pullRepository} title={isMerge ? t("기록 당시 요청", "Original request") : t("요청한 일", "Requested action")} lines={item.ask.filter(line => line !== headline)} />
+      <Lines theme={theme} pullRepository={pullRepository} title={t("진행 단계", "Steps")} lines={item.steps} />
+      <Lines theme={theme} pullRepository={pullRepository} title={t("근거", "Evidence")} lines={item.why} />
+      <Lines theme={theme} pullRepository={pullRepository} title={t("위험", "Risks")} lines={item.risk} />
       {(!renderClarification || !canReply) && !!item.qa.length && <View style={{ gap: 5 }}>
         <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{t("이전 문답", "Question history")}</Text>
         {item.qa.map((entry, i) => <View key={i} style={{ gap: 3 }}>
@@ -447,7 +449,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
           <Text selectable style={{ color: c.foregroundMuted }}>{entry.a ? [t("답", "Answer"), entry.answeredAt, entry.a].filter(Boolean).join(" · ") : t("답변 대기", "Awaiting reply")}</Text>
         </View>)}
       </View>}
-      <Lines theme={theme} title={t("이전 답변", "Previous replies")} lines={item.replyHistory.map(entry => [entry.at, entry.text].filter(Boolean).join(" · "))} />
+      <Lines theme={theme} pullRepository={pullRepository} title={t("이전 답변", "Previous replies")} lines={item.replyHistory.map(entry => [entry.at, entry.text].filter(Boolean).join(" · "))} />
       {canReply && !queue && !isClosed && !needsRefresh && !humanCheck && !item.matchedSessionId && !hasDraft && !outstanding && <View style={wrap}>
         {confirming && <Text style={{ color: c.foregroundMuted }}>{t("답변 전송 없이 이 보드 기록을 닫습니다.", "Close this board record without sending a reply.")}</Text>}
         <Button theme={theme} {...named(confirming ? t("기록 닫기 확정", "Confirm closing record") : t("기록 닫기", "Close record"))}

@@ -1,9 +1,10 @@
 import { useDecisionInteraction } from "./decision-editing";
-import { openExternalUrl, useRpc } from "@getpaseo/plugin/client";
+import { useRpc } from "@getpaseo/plugin/client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Platform, Text, TextInput, View } from "react-native";
-import { confirmPullRequestMerge, previewPullRequestMerge, pullUrl, readPullLifecycle, setProjectRepository, type MergeMethod, type MergePreview, type MergeReason, type MergeResult, type PullRequestView } from "../shared/prs";
+import { Text, TextInput, View } from "react-native";
+import { confirmPullRequestMerge, previewPullRequestMerge, readPullLifecycle, setProjectRepository, type MergeMethod, type MergePreview, type MergeReason, type MergeResult, type PullRequestView } from "../shared/prs";
 import { Button, SessionChip, type Theme } from "./controls";
+import { GitHubPullLink } from "./github-pull-link";
 import { mergeNotificationLabel } from "./merge-notification";
 import { useBoardLanguage, type Translate } from "./language";
 
@@ -59,22 +60,9 @@ export function MergeFeedback({ notice, theme }: { notice: MergeNotice; theme: T
 
 export type WorkSessionLink = { key: string; label: string; open: () => void };
 
-function GitHubPullLink({repo, number, theme}: {repo:string; number:number; theme:Theme}) {
-  const {t} = useBoardLanguage();
-  const [failed, setFailed] = useState(false);
-  const url = pullUrl(repo, number);
-  const label = repo + " #" + number;
-  return <>
-    <Text accessibilityRole="link" accessibilityLabel={label + " · " + t("GitHub에서 보기", "View on GitHub")}
-      {...(Platform.OS === "web" && { href:url, hrefAttrs:{target:"_blank", rel:"noopener noreferrer"} })}
-      onPress={event => { event.preventDefault(); void openExternalUrl(url).then(() => setFailed(false), () => setFailed(true)); }}
-      style={{ maxWidth:"100%", color:theme.colors.foreground, textDecorationLine:"underline", fontSize:13 }}>{label}</Text>
-    {failed && <Text selectable style={{color:theme.colors.foregroundMuted}}>{url}</Text>}
-  </>;
-}
-
 type Lifecycle = ReturnType<typeof readPullLifecycle.output.parse>["state"];
-export function TrackedPullStatus({repo, number, projectId, theme, securityGate}: {repo:string; number:number; projectId:string|null; theme:Theme; securityGate:boolean}) {
+const referenceStates = { OPEN: ["열림", "Open"], DRAFT: ["초안", "Draft"], MERGED: ["병합됨", "Merged"], CLOSED: ["닫힘", "Closed"] } as const;
+export function TrackedPullStatus({repo, number, projectId, theme, securityGate = false, reference = false}: {repo:string; number:number; projectId:string|null; theme:Theme; securityGate?:boolean; reference?:boolean}) {
   const {t} = useBoardLanguage();
   const lookup = useRpc(readPullLifecycle);
   const [state, setState] = useState<Lifecycle | null>(null);
@@ -85,7 +73,7 @@ export function TrackedPullStatus({repo, number, projectId, theme, securityGate}
     async function refresh() {
       let current: Lifecycle = "UNKNOWN";
       if (projectId) {
-        try { current = (await lookup({repo, number, projectId})).state; } catch { /* Show the link when GitHub is unavailable. */ }
+        try { current = (await lookup({repo, number, projectId, ...(reference ? {reference: true} : {})})).state; } catch { /* Show the link when GitHub is unavailable. */ }
       }
       if (!active) return;
       setState(current);
@@ -93,8 +81,10 @@ export function TrackedPullStatus({repo, number, projectId, theme, securityGate}
     }
     void refresh();
     return () => { active = false; clearTimeout(timer); };
-  }, [repo, number, projectId, lookup]);
-  const message = state === "MERGED" ? t("병합 완료", "Merged")
+  }, [repo, number, projectId, lookup, reference]);
+  const referenceWords = state && state !== "UNKNOWN" ? referenceStates[state] : null;
+  const message = reference ? (referenceWords ? t(referenceWords[0], referenceWords[1]) : null)
+    : state === "MERGED" ? t("병합 완료", "Merged")
     : state === "CLOSED" ? t("병합 없이 닫힘", "Closed without merging")
     : state === "OPEN" && securityGate ? t("열린 PR · 보안 게이트 통과 여부 확인 필요", "Open · Security gate unverified")
     : state === "OPEN" ? t("열린 PR · 병합 조건 미확인", "Open · Merge requirements unverified")
@@ -102,7 +92,7 @@ export function TrackedPullStatus({repo, number, projectId, theme, securityGate}
     : t("GitHub 상태 확인 중…", "Checking GitHub status…");
   return <View style={{...wrap, alignItems:"baseline"}}>
     <GitHubPullLink repo={repo} number={number} theme={theme} />
-    <Text selectable accessibilityLiveRegion="polite" style={{color:state === "MERGED" ? theme.colors.statusSuccess : theme.colors.foregroundMuted}}>{message}</Text>
+    {message && <Text selectable accessibilityLiveRegion="polite" style={{color:state === "MERGED" ? theme.colors.statusSuccess : theme.colors.foregroundMuted}}>{message}</Text>}
   </View>;
 }
 
