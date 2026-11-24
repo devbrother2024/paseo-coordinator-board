@@ -362,7 +362,7 @@ test("confirmed board merges survive a fresh read; repeats keep their original t
     else process.env.PASEO_HOME = oldHome;
   }
   const page = {entries:[], pageInfo:{hasMore:false, nextCursor:null}};
-  const paseo = {agents:{list:async()=>page}, workspaces:{list:async()=>page}, projects:{list:async()=>({projects:[]})}};
+  const paseo = {agents:{list:async()=>page}, workspaces:{list:async()=>page}, projects:{list:async()=>({projects:[{projectId:target.projectId, projectRootPath:""}]})}};
   const snapshot = async () => boardSnapshot.output.parse(await handlers.get(boardSnapshot.name)({fresh:true}, {paseo}));
   f.store.change(scope => {scope.projectRepositories[target.projectId] = {mode:"off"};});
   expect((await snapshot()).replyHistory).toEqual([{...entries[0], key:"merge:org/site#7", status:"recorded"}]);

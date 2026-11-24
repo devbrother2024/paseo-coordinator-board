@@ -1,5 +1,5 @@
 import { canReceiveBoardInput } from "./discovery";
-import type { PluginHandlerContext } from "@getpaseo/plugin/server";
+import type { PluginHandlerContext, PluginHookEvents } from "@getpaseo/plugin/server";
 import { createHash } from "node:crypto";
 import { photoDigest } from "./reply-photos";
 import { PreferenceStore } from "./preferences";
@@ -63,4 +63,33 @@ export async function sendCoordinatorRequest(
   options.beforeSend?.(messageId);
   await handle.send(text, { messageId, activeTurnBehavior: "steer", ...(images?.length ? {images} : {}) });
   return { ok: true };
+}
+
+export async function recordDigestCompletion(
+  store: PreferenceStore,
+  paseo: PluginHandlerContext["paseo"],
+  { agent, turnId, outcome }: PluginHookEvents["agent.turn.after"],
+  at = new Date().toISOString(),
+) {
+  if (!turnId || outcome?.kind !== "completed" || store.read().coordinator !== agent.id) return;
+  const page = await paseo.agents.ref(agent.id).timeline.refetch({ direction: "tail", projection: "projected", limit: 1, wholeTurns: true });
+  if (page.error || page.gap || page.staleCursor) return;
+  const tools = new Set<string>();
+  let requested = false;
+  for (const entry of page.entries) {
+    if (entry.turnId !== turnId) continue;
+    const item = entry.item;
+    const text = item.type === "user_message" ? item.text : item.type === "tool_call" && item.agentMessage?.event === "message" ? item.agentMessage.text : "";
+    const cycle = /"cycleId":"([a-f0-9]{64})"\}$/.exec(text)?.[1];
+    requested ||= text === digestPrompt || text === englishDigestPrompt ||
+      !!cycle && (text === digestWithFactReplies("ko", cycle) || text === digestWithFactReplies("en", cycle));
+    if (item.type === "tool_call" && item.status === "completed") tools.add(item.name.split("__").at(-1) ?? item.name);
+  }
+  // Scheduled reviews can use their own prompt. Require both board review steps in that turn.
+  if (!requested && !(tools.has("read_board_conversation") && tools.has("review_board_records"))) return;
+  const scope = store.read();
+  const previous = scope.lastDigest;
+  if (scope.coordinator !== agent.id ||
+    (previous && (at <= previous.at || (previous.coordinator === agent.id && previous.turnId === turnId)))) return;
+  store.change(current => { current.lastDigest = { coordinator: agent.id, turnId, at }; });
 }

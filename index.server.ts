@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { boardDecisionCount, boardScope, boardSnapshot, reportingKey, saveNote, setReporting } from "./shared/contract";
 import { canReceiveBoardInput, discoverSessions } from "./server/discovery";
-import { projectFolders } from "./server/project-folders";
+import { projectFolderMap } from "./shared/project-folders";
 import { attachReportTool } from "./server/reporting";
 import { ConversationReader, excerpt } from "./server/conversation";
 import { isManagedCoordinator, setCoordinator, PreferenceStore } from "./server/preferences";
@@ -28,6 +28,8 @@ import { NoteStore } from "./server/notes";
 import { askClarification, sourceQuestion } from "./shared/clarifications";
 import { ClarificationSender, clarificationHistory, restoreClarifiedDecision } from "./server/clarifications";
 import { BoardFacts } from "./server/board-facts";
+import { ProjectRootReader } from "./server/project-root";
+import { recordDigestCompletion } from "./server/digest";
 import { coordinatorReach, operatingProjects } from "./server/coordinator-reach";
 
 export default function contribute(server: PluginServerContext) {
@@ -38,6 +40,7 @@ export default function contribute(server: PluginServerContext) {
 
   const prefs = new PreferenceStore(join(dataDir, "scope.json"));
   const reader = new ConversationReader();
+  const projectRoots = new ProjectRootReader();
   const facts = new BoardFacts(prefs, notes, reader);
   facts.register(server);
   const operatingFolder = join(home, "plugin-workspaces", "coordinator-board");
@@ -77,18 +80,19 @@ export default function contribute(server: PluginServerContext) {
     ]);
     const { choices, sessions, evidence, coordinatorRow } = sessionView;
     const latest = prefs.read();
+    const selected = new Set(latest.projects.filter(id => choices.has(id)));
+    const activeScope = { ...latest, projects: [...selected] };
     // Loading the board should not wait on an idle check or a provider turn.
     if (Object.values(latest.pullMergeHistory).some(entry => entry.pullMerge.notification?.status === "queued")) {
       void mergeNotifications.resume(paseo).catch(() => console.warn("Could not resume queued merge notifications."));
     }
-    const visible = sessions.filter(row => isCurrentMembership(row, latest));
+    const visible = sessions.filter(row => isCurrentMembership(row, activeScope));
     const visibleNotes = notes.visible(new Set(visible.map(s => s.id)));
     facts.decorate(visible, evidence, visibleNotes);
     for (const row of visible) {
       decorateDecision(row, visibleNotes[row.id], latest, evidence.get(row.id));
       restoreClarifiedDecision(row, visibleNotes[row.id], latest, evidence.get(row.id));
     }
-    const selected = new Set(latest.projects);
     const pullRequests = {
       projects: fetched.projects.filter(p => selected.has(p.projectId)),
       items: fetched.items.map(pr => ({ ...pr, projectIds: pr.projectIds.filter(id => selected.has(id)) })).filter(pr => pr.projectIds.length),
@@ -126,27 +130,35 @@ export default function contribute(server: PluginServerContext) {
     const replyHistory = activity.sort((a,b) => b.at.localeCompare(a.at));
     const clarifications = clarificationHistory(prefs, targets, evidence);
     const listedCoordinator = coordinatorRow?.id === latest.coordinator ? coordinatorRow : undefined;
-    const reach = await coordinatorReach(paseo, latest, listedCoordinator, operatingFolder);
-    const operating = await operatingProjects([...choices.values()], operatingFolder, latest, listedCoordinator);
+    const projects = [...choices.values()];
+    const reach = await coordinatorReach(paseo, latest, listedCoordinator, operatingFolder, projects, projectRoots);
+    const operating = await operatingProjects(projects, operatingFolder, latest, listedCoordinator, projectRoots);
+    const knownProjects = projects.map(p => ({ ...p, selected: selected.has(p.id), ...(operating.has(p.id) ? { operating: true } : {}) }));
+    const missingProjects = latest.projects.filter(id => !selected.has(id)).map(id => ({
+      id, title: id, path: "", selected: true, missing: true as const, temporary: false,
+    }));
     return { sessions: visible, notes: visibleNotes, pullRequests, trackedDecisions, replyHistory, ...(clarifications.length ? { clarifications } : {}),
-      projects: [...choices.values()].map(p => ({ ...p, selected: selected.has(p.id), ...(operating.has(p.id) ? { operating: true } : {}) })),
-      coordinator: latest.coordinator, ...(reach ? { coordinatorReach: reach } : {}) };
+      projects: [...knownProjects, ...missingProjects], coordinator: latest.coordinator, lastDigestAt: latest.lastDigest?.at, ...(reach ? { coordinatorReach: reach } : {}) };
   }
   async function buildSessionView(paseo: PluginHandlerContext["paseo"],
     catalog: Awaited<ReturnType<PluginHandlerContext["paseo"]["projects"]["list"]>>,
     rows: Awaited<ReturnType<typeof discoverSessions>>) {
-    const scope = prefs.read();
-    const folders = projectFolders(catalog.projects);
-    const choices = new Map<string, { id: string; title: string; path: string; folder?: string; selected: boolean }>(catalog.projects.map(p => {
-      const id = p.projectId;
-      return [id, { id, title: p.projectCustomName || p.projectDisplayName, path: p.projectRootPath, folder: folders[id], selected: scope.projects.includes(id) }];
-    }));
+    const known = new Map(catalog.projects.map(p => [p.projectId, {
+      id: p.projectId, title: p.projectCustomName || p.projectDisplayName || p.projectId, path: p.projectRootPath || "",
+    }]));
     for (const row of rows) {
-      if (!choices.has(row.projectId)) choices.set(row.projectId, { id: row.projectId, title: row.projectTitle, path: "", selected: scope.projects.includes(row.projectId) });
+      if (!known.has(row.projectId)) known.set(row.projectId, { id: row.projectId, title: row.projectTitle, path: "" });
     }
-    const titles = new Map([...choices].map(([id, p]) => [id, p.title]));
+    const saved = prefs.read();
+    const scope = { ...saved, projects: saved.projects.filter(id => known.has(id)) };
+    const titles = new Map([...known].map(([id, p]) => [id, p.title]));
     const sessions = managedSessions(rows, scope, titles);
-    const evidence = await reader.decorate(paseo, sessions, scope);
+    const projects = [...known.values()];
+    const [evidence, roots] = await Promise.all([
+      reader.decorate(paseo, sessions, scope),
+      projectRoots.describe(projects, new Set(scope.projects)),
+    ]);
+    const choices = new Map(projects.map((project, i) => [project.id, { ...project, ...roots[i] }]));
     const coordinatorRow = rows.find(row => row.id === scope.coordinator);
     if (coordinatorRow && !sessions.some(row => row.id === coordinatorRow.id)) {
       const observed = await reader.read(paseo, coordinatorRow).catch(() => null);
@@ -216,16 +228,30 @@ export default function contribute(server: PluginServerContext) {
     }
     await mergeNotifications.resume(context.paseo,event.agent.id);
   };
-  const removeMergeTurn = server.addHook("agent.turn.after",onRecipientAvailable);
+  const removeMergeTurn = server.addHook("agent.turn.after", async (event, context) => {
+    await Promise.all([
+      onRecipientAvailable(event, context),
+      recordDigestCompletion(prefs, context.paseo, event).catch(() => console.warn("Could not record the completed digest.")),
+    ]);
+  });
   const removeReplyClose = server.addHook("agent.close.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });
   const removeReplyArchive = server.addHook("agent.archive.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });
   const removeMergePermission = server.addHook("agent.permission.after",onRecipientAvailable);
+  // The board's own same-folder judgment, read again when a reply goes out. Only selected projects get a key.
+  async function currentFolders(paseo: PluginHandlerContext["paseo"]) {
+    try {
+      const projects = (await paseo.projects.list()).projects.map(p => ({ id: p.projectId, path: p.projectRootPath || "" }));
+      const roots = await projectRoots.describe(projects, new Set(prefs.read().projects));
+      return projectFolderMap(projects.map((project, i) => ({ ...project, ...roots[i] })));
+    } catch {
+      return {};
+    }
+  }
   const resumeReplies = tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, async (item,targetId,{paseo},route) => {
     let rows = await discoverSessions(paseo);
     // Only a card's own local session may sit in another project on the same folder.
     // Without the project list, that session counts only in the card's own project.
-    const folders = item.where === "session" && item.sessionId && !item.sessionHost
-      ? await paseo.projects.list().then(({projects}) => projectFolders(projects), () => ({})) : {};
+    const folders = item.where === "session" && item.sessionId && !item.sessionHost ? await currentFolders(paseo) : {};
     const fallback = route === "coordinator";
     const owned = fallback ? item.sourceCoordinatorId !== undefined : usesSourceCoordinator(item);
     const mismatch = (): TrackedReplyReason | null => {

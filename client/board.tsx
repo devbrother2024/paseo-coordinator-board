@@ -34,7 +34,11 @@ import { Button, type Theme } from "./controls";
 import { Project } from "./project-kanban";
 import { SessionProgress } from "./session-progress";
 import { BoardLanguageSetting, useBoardLanguage } from "./language";
-import { projectCards, projectFilterNames, type Card, type Snapshot } from "./model";
+import { projectCards, type Card, type Snapshot } from "./model";
+import { groupProjects, selectedProjectIds, toggleProjectFilter, type ProjectFilter } from "./project-filters";
+import { ProjectFilterBar } from "./project-filter-bar";
+import { shouldRefreshDigest } from "./digest-freshness";
+import { DigestFeedback, useDigestRequest } from "./digest-request";
 
 type Actions = { sessionHostLabel?: string; coordinator?: string | null; onCoordinator?: (id: string | null) => void; changing?: boolean; onOpen?: (id: string) => void; onEdit: (id: string) => void };
 
@@ -47,6 +51,8 @@ export type BoardViewProps = Actions & {
 export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostId, onOpenHostSession, error, loading, updatedAt, onRefresh, onProject, ...actions }: BoardViewProps) {
   const { t, language } = useBoardLanguage();
   const { human, projects } = useMemo(() => snapshot ? projectCards(snapshot) : { human: [], projects: [] }, [snapshot]);
+  const activeProjects = useMemo(() => snapshot?.projects.filter(p => !p.missing) ?? [], [snapshot?.projects]);
+  const projectGroups = useMemo(() => groupProjects(activeProjects), [activeProjects]);
   const pullRequests = snapshot?.pullRequests;
   const readyPrs = pullRequests?.items.filter(pr => pr.lane === "review") ?? [];
   const records = useMemo(() => {
@@ -74,7 +80,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const allPending = decisionsFor(() => true);
   const total = allPending.prs.length + allPending.records.length + allPending.sessions.length;
   const byProject=new Map<string|null,number>();
-  const projectIds=new Set<string|null>(snapshot?.projects.filter(p=>p.selected).map(p=>p.id));
+  const projectIds=new Set<string|null>(activeProjects.filter(p=>p.selected).map(p=>p.id));
   for (const item of records) {
     projectIds.add(item.projectId);
     if (item.projectId && !displayed.has(item.projectId)) displayed.set(item.projectId,{id:item.projectId,title:names.get(item.projectId) ?? item.projectTitle ?? item.projectId,cards:[]});
@@ -102,30 +108,30 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     const list=decisionsFor(projectId=>projectId===id);
     byProject.set(id,list.records.length+list.sessions.length+list.prs.length);
   }
+  const filterGroups: ProjectFilter[] = projectGroups.map(group => {
+    if (group.ids.length === 1) return { ...group, count: byProject.get(group.ids[0]) ?? 0 };
+    const list = decisionsFor(id => group.ids.includes(id));
+    return { ...group, count: list.records.length + list.sessions.length + list.prs.length };
+  });
+  if (byProject.has(null)) filterGroups.push({ ids: [null], label: t("공통", "Host-wide"), count: byProject.get(null) ?? 0 });
   const [chosenProjects,setChosenProjects]=useState<(string|null)[]>([]);
-  const filters=chosenProjects.filter(id=>byProject.has(id));
-  const inFilter=(id:string|null)=>!filters.length || filters.includes(id);
+  const filters = selectedProjectIds(filterGroups, chosenProjects);
+  const inFilter = (id: string | null) => !filters.size || filters.has(id);
   const visibleProjects = [...displayed.values()].filter(project => inFilter(project.id));
   const showHostWide = byProject.has(null) && inFilter(null);
   const {records:filteredRecords,sessions:filteredSessions,prs:filteredPrs}=decisionsFor(inFilter);
   const filteredTotal=filteredRecords.length+filteredSessions.length+filteredPrs.length;
   const filteredHistory=history.filter(entry=>inFilter(entry.projectId));
   const [historyOpen,setHistoryOpen]=useState<boolean|null>(null);
-  const filterNames = projectFilterNames(snapshot?.projects.filter(project => byProject.has(project.id)) ?? []);
-  const projectName=(id:string|null)=>filterNames.get(id ?? "") ?? displayed.get(id ?? "")?.title ?? id ?? t("공통","Host-wide");
-  function toggleFilter(id:string|null) {
-    setChosenProjects(previous=>{
-      const active=previous.filter(value=>byProject.has(value));
-      return active.includes(id) ? active.filter(value=>value!==id) : [...active,id];
-    });
-  }
+  const filterNames = new Map(filterGroups.flatMap(group => group.ids.map(id => [id, group.label] as const)));
+  const projectName=(id:string|null)=>filterNames.get(id) ?? displayed.get(id ?? "")?.title ?? id ?? t("공통","Host-wide");
   const incomplete = snapshot?.trackedDecisions && ["partial","unavailable","invalid"].includes(snapshot.trackedDecisions.status);
   const [settings, setSettings] = useState(false);
-  const {groups: peers, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, snapshot?.projects ?? [], pullRequests?.projects ?? [], !!hostId && !settings);
+  const {groups: peers, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
   const visiblePeers = peers.map(group => ({...group, rows: group.rows.filter(row => inFilter(row.projectId))}));
   const historyRepos = useMemo(() => new Map(pullRequests?.projects.flatMap(p =>
     p.repo && p.mode !== "off" ? [[p.projectId,p.repo] as const] : [])), [pullRequests?.projects]);
-  const historyScope = useMemo(() => remoteScope(snapshot?.projects ?? [],pullRequests?.projects ?? []), [snapshot?.projects,pullRequests?.projects]);
+  const historyScope = useMemo(() => remoteScope(activeProjects,pullRequests?.projects ?? []), [activeProjects,pullRequests?.projects]);
   const scopeKey = JSON.stringify([hostId, historyScope, peers.map(p=>p.host.serverId).sort()]);
   const currentHistoryScope = useRef(scopeKey);
   currentHistoryScope.current = scopeKey;
@@ -136,9 +142,14 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const [showError, setShowError] = useState(false);
   const [manage, setManage] = useState(false);
   const [pickSession, setPickSession] = useState(false);
-  const configured = snapshot ? snapshot.projects.some(p => p.selected) : readiness?.configured;
+  const configured = snapshot ? activeProjects.some(p => p.selected) : readiness?.configured;
   const pickingProjects = !configured || (!settings && !snapshot?.coordinator);
   const coordinatorId = snapshot ? snapshot.coordinator : readiness?.coordinator;
+  const pending = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const coordinatorAction = { pending, busy, setBusy };
+  const lastDigest = snapshot?.lastDigestAt;
+  const digest = useDigestRequest(coordinatorId ?? null, !!configured, coordinatorAction, onRefresh, lastDigest);
   const operationsReady = !!snapshot || !!(readiness?.configured && readiness.coordinator && !settings);
   const reach = snapshot?.coordinatorReach;
   // Opening a session in an archived workspace shows an empty screen. The banner explains instead.
@@ -162,6 +173,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const [receipts, setReceipts] = useState<DecisionReceipt[]>([]);
   const matches = (r: DecisionReceipt, card: Card) => r.projectId === card.session.projectId && r.sessionId === card.session.id && r.version === card.session.decision?.version;
   const now = Date.now();
+  const showDigestRefresh = shouldRefreshDigest(lastDigest, allPending.sessions, coordinatorId ?? null, now);
   const ranked = rankDecisionRows({ prs: filteredPrs, records: filteredRecords, sessions: filteredSessions }, now);
   const rankedKeys = ranked.map(row => row.key);
   const { positions, onEditing } = useDecisionEditing(rankedKeys);
@@ -311,14 +323,10 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         }} />
       </View>
       {configured && <ReachExplanation banner reach={reach} theme={theme} onReplace={startReplace} />}
-      {replaceOpen && !settings && configured && coordinatorId && <CoordinatorReplaceLoader theme={theme} coordinator={coordinatorId}
+      {replaceOpen && !settings && configured && coordinatorId && <CoordinatorReplaceLoader theme={theme} coordinator={coordinatorId} disabled={busy}
         onReplaced={onRefresh} onClose={() => setReplaceOpen(false)} />}
-      {!settings && configured && byProject.size > 0 && <View accessibilityLabel={t("프로젝트 필터","Project filters")}
-        style={{flexDirection:"row", flexWrap:"wrap", alignItems:"center", gap:6}}>
-        <Button theme={theme} label={t(`전체 ${total}`,`All ${total}`)} selected={!filters.length} onPress={() => setChosenProjects([])} />
-        {[...byProject].map(([id,count]) => <Button key={JSON.stringify(id)} theme={theme} toggle selected={filters.includes(id)}
-          label={`${projectName(id)} · ${count}`} onPress={() => toggleFilter(id)} />)}
-      </View>}
+      {!settings && configured && <ProjectFilterBar theme={theme} groups={filterGroups} selected={filters} total={total}
+        clear={() => setChosenProjects([])} toggle={group => setChosenProjects(previous => toggleProjectFilter(filterGroups, previous, group))} />}
       {!!error && showError && <Text selectable style={{ color: c.statusDanger }}>{error}</Text>}
       {settings && <BoardLanguageSetting theme={theme} />}
       {!!error && settings && <Button theme={theme} label={t("세션 다시 조회", "Retry session lookup")} disabled={loading} onPress={onRefresh} />}
@@ -328,23 +336,28 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           : <Text accessibilityRole="header" style={{ color: c.foreground, fontSize: 17, fontWeight: "600" }}>{t("다이제스트에서 관리할 프로젝트 선택", "Select projects for your digest")}</Text>}
         {(pickingProjects || manage) && <>
           <Text style={{ color: c.foregroundMuted }}>{t("선택한 프로젝트의 최근 대화를 읽어 내 결정을 찾습니다. 코디네이터를 지정하면 그 세션도 선택한 프로젝트의 발췌를 볼 수 있습니다.", "The board reads recent conversations in selected projects to find decisions. The assigned coordinator can also read excerpts from those projects.")}</Text>
-          {snapshot.projects.map(p => <Button key={p.id} theme={theme} selected={p.selected} disabled={actions.changing}
-            label={`${p.selected ? t("관리에서 제외", "Remove") : t("추가", "Add")} · ${p.title}${snapshot.projects.some(x => x.id !== p.id && x.title === p.title) ? " · " + (p.path || p.id) : ""}`}
-            onPress={() => onProject(p.id, !p.selected)} />)}
+          {snapshot.projects.map(p => {
+            const title = p.title + (activeProjects.some(x => x.id !== p.id && x.title === p.title) ? " · " + (p.path || p.id) : "");
+            const label = p.missing
+              ? `${title} · ${t("Paseo에서 사라짐 · 목록에서 빼기", "Missing from Paseo · Remove from list")}`
+              : `${p.selected ? t("관리에서 제외", "Remove") : t("추가", "Add")} · ${title}${p.temporary ? " · " + t("임시 폴더", "Temporary folder") : ""}`;
+            return <Button key={p.id} theme={theme} selected={p.selected} disabled={actions.changing}
+              label={label} onPress={() => onProject(p.id, !p.selected)} />;
+          })}
           {snapshot.projects.filter(p => p.operating).map(p => <Text key={p.id} accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>
             {t(`‘${p.title}’ 프로젝트는 코디네이터 운영 폴더입니다. Paseo에서 이 프로젝트를 제거하면 워크스페이스와 코디네이터 세션이 함께 보관되어, 코디네이터에게 보내는 요청과 답장이 전달되지 않습니다. Paseo 프로젝트 목록에 그대로 두세요.`,
               `“${p.title}” is the coordinator's operating folder. Removing this project in Paseo archives its workspace and the coordinator session with it, so requests and replies stop reaching the coordinator. Keep it in your Paseo project list.`)}
           </Text>)}
         </>}
       </View>}
-      {settings && snapshot && configured && <SessionLinks projects={snapshot.projects} theme={theme} onChange={onRefresh} />}
+      {settings && snapshot && configured && <SessionLinks projects={activeProjects} theme={theme} onChange={onRefresh} />}
       {settings && pullRequests && !!configured && <PullRequestSettings view={pullRequests} names={names} theme={theme} refresh={onRefresh} />}
       {settings && hostId && <>
         <BoardHosts current={{ id: hostId, label: hostLabel }} settings theme={theme} open={onOpenHostSession} />
         <BoardHosts current={{ id: hostId, label: hostLabel }} settings={false} theme={theme} open={onOpenHostSession} />
       </>}
       <OperationsPanel settings={operationsReady && settings} theme={theme} coordinator={operationsReady ? coordinatorId ?? null : null} configured={operationsReady && !!configured}
-        refreshBoard={onRefresh} openCoordinator={coordinatorOpens ? actions.onOpen : undefined} />
+        refreshBoard={onRefresh} openCoordinator={coordinatorOpens ? actions.onOpen : undefined} action={coordinatorAction} digest={digest} />
       {settings && snapshot && actions.onCoordinator && <View style={{ gap: 8 }}>
         <Button theme={theme} label={pickSession ? t("기존 세션 목록 닫기", "Close session list") : t("기존 세션에서 코디네이터 지정", "Choose an existing coordinator session")} onPress={() => setPickSession(!pickSession)} />
         {pickSession && <>
@@ -360,10 +373,19 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         <Text style={{ color: c.foregroundMuted }}>{t("세션과 PR 상태를 확인하고 있어요.", "Checking session and PR status…")}</Text>
       </View>}
       {!settings && snapshot && configured && <View style={{ gap: layout.compact ? 12 : 16 }}>
-        <Text accessibilityRole="header" style={{ color: c.foreground, fontSize: 17, fontWeight: "700" }}>{filters.length ? t(`내 결정 · ${filteredTotal}건 / 전체 ${total}건`, `My decisions · ${filteredTotal} of ${total}`) : t(`내 결정 · ${total}건`, `My decisions · ${total}`)}</Text>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+          <Text accessibilityRole="header" style={{ color: c.foreground, fontSize: 17, fontWeight: "700" }}>{filters.size ? t(`내 결정 · ${filteredTotal}건 / 전체 ${total}건`, `My decisions · ${filteredTotal} of ${total}`) : t(`내 결정 · ${total}건`, `My decisions · ${total}`)}</Text>
+          {lastDigest && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
+            {t("최근 다이제스트", "Last digest")} · {new Date(lastDigest).toLocaleString(language === "ko" ? "ko-KR" : "en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+          </Text>}
+          {showDigestRefresh && <Button theme={theme}
+            label={digest.waiting ? t("요청함", "Requested") : t("다시 모으기", "Refresh digest")}
+            disabled={busy || digest.waiting} onPress={() => void digest.request(true)} />}
+        </View>
+        {showDigestRefresh && <DigestFeedback theme={theme} feedback={digest.feedback} />}
         {incomplete &&
           <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{t("일부 결정 기록을 읽지 못했습니다. 현재 건수에는 확인한 항목만 포함됩니다.", "Some decision records could not be loaded. The count includes the available items.")}</Text>}
-        {filters.length > 0 && !filteredTotal && total > 0 && !incomplete && <Text style={{color:c.foregroundMuted}}>{t("선택한 프로젝트에 결정할 일이 없습니다.","No decisions in the selected projects.")}</Text>}
+        {filters.size > 0 && !filteredTotal && total > 0 && !incomplete && <Text style={{color:c.foregroundMuted}}>{t("선택한 프로젝트에 결정할 일이 없습니다.","No decisions in the selected projects.")}</Text>}
         {total === 0 && !incomplete && <Text style={{ color: c.foregroundMuted }}>{t("지금 결정할 일이 없습니다.", "No decisions are waiting for you.")}</Text>}
         {mergeNotice && inFilter(mergeNotice.projectId) && snapshot.projects.some(p => p.selected && p.id === mergeNotice.projectId) && (mergeNotice.status === "merged" || mergeNotice.status === "already-merged" ||
           !readyPrs.some(pr => pr.repo + " #" + pr.number === mergeNotice.target)) && <MergeFeedback notice={mergeNotice} theme={theme} />}
@@ -386,7 +408,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           records={records.filter(item=>item.projectId === null)} decisions={byProject.get(null) ?? 0} renderRecord={renderRecord} renderPull={renderPull}
           recordLinks={recordLinks} compact={layout.compact} theme={theme} {...actions} />}
         {visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} history={history.filter(entry=>entry.projectId===p.id)} records={records.filter(r => r.projectId === p.id)} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={pullRequests?.items.filter(pr => pr.projectIds.includes(p.id)) ?? []} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
-        <RemoteRunning groups={visiblePeers} projects={snapshot.projects} open={onOpenHostSession} theme={theme} />
+        <RemoteRunning groups={visiblePeers} projects={activeProjects} open={onOpenHostSession} theme={theme} />
       </SessionProgress>}
     </ScrollView>
   );

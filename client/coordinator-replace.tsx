@@ -1,5 +1,5 @@
 import { useRpc } from "@getpaseo/plugin/client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Pressable, Switch, Text, TextInput, View } from "react-native";
 import { resolveRoute, type RouteChoice } from "../shared/dispatch";
 import { operationState, setupCoordinator, type Operations } from "../shared/operations";
@@ -11,11 +11,11 @@ import { explainEmptyRoute } from "./route-options";
 
 type Props = {
   theme: Theme; coordinator: string; data: Operations | null; loading: boolean; disabled?: boolean;
-  reload: () => void; onReplaced: () => void; onClose?: () => void;
+  reload: () => void; onReplaced: () => void; onClose?: () => void; extraAction?: (replacing: boolean) => ReactNode; footer?: ReactNode;
 };
 
 // Replace the coordinator, optionally with a model picked right here: pick, choose a model, confirm.
-export function CoordinatorReplace({ theme, coordinator, data, loading, disabled = false, reload, onReplaced, onClose }: Props) {
+export function CoordinatorReplace({ theme, coordinator, data, loading, disabled = false, reload, onReplaced, onClose, extraAction, footer }: Props) {
   const { t } = useBoardLanguage();
   const setup = useRpc(setupCoordinator);
   const [picking, setPicking] = useState(false);
@@ -124,9 +124,11 @@ export function CoordinatorReplace({ theme, coordinator, data, loading, disabled
         label={choice ? t("이 모델로 교체", "Replace with this model") : t("새 세션으로 교체", "Switch to new session")} onPress={() => void replace()} />}
       {confirm && <Button theme={theme} disabled={busy} label={choice ? t("선택 취소", "Clear selection") : t("교체 취소", "Cancel replacement")}
         onPress={() => { setConfirm(false); setPicked(null); }} />}
+      {extraAction?.(busy)}
     </View>
     {!!error && <Text accessibilityLiveRegion="polite" selectable style={{ color: c.statusDanger }}>{error}</Text>}
     {!!notice && <Text accessibilityLiveRegion="polite" style={{ color: c.foreground }}>{notice}</Text>}
+    {footer}
   </View>;
 }
 

@@ -24,6 +24,7 @@ const schema = z.object({
   projectRepositories: z.record(z.string(), repositoryOverride).default({}),
   autoPinCoordinatorWorkspace: z.boolean().default(true),
   autoReplyToBoardFacts: z.boolean().default(true),
+  lastDigest: z.object({ at: z.iso.datetime(), coordinator: z.string(), turnId: z.string() }).optional(),
   factHistory: z.record(z.string(), factSchema).default({}),
   workRequestIds: z.record(z.string(), z.string().uuid()).default({}),
   factCycleKeys: z.record(z.string(), z.literal(true)).default({}),

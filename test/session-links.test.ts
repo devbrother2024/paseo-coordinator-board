@@ -9,14 +9,14 @@ import { linkSession, listSessionLinks } from "../shared/session-links";
 import { sendDecision } from "../shared/decision-actions";
 
 function fixture() {
-  const handlers = new Map(), hooks = [], hooksByName=new Map();
+  const handlers = new Map(), hooksByName=new Map();
   const oldHome = process.env.PASEO_HOME;
   process.env.PASEO_HOME = mkdtempSync(join(tmpdir(), "session-links-"));
   const dataDir=join(process.env.PASEO_HOME,"plugin-data","coordinator-board");
   try {
     contribute({
       registerSettings() {}, handle(c, handler) { handlers.set(c.name, handler); },
-      addHook(key, hook) { hooks.push(hook); hooksByName.set(key,hook); return () => {}; },
+      addHook(key, hook) { hooksByName.set(key,hook); return () => {}; },
     });
   } finally {
     if (oldHome === undefined) delete process.env.PASEO_HOME;
@@ -56,7 +56,7 @@ function fixture() {
   async function tools() {
     await rpc(boardScope, { kind:"coordinator", sessionId:"coord" });
     const req={purpose:"interactive",agentId:"coord",metadata:{},tools:[]};
-    const actions = (await Promise.all(hooks.map(h=>h({request:req})))).flatMap(v=>v?.tools ?? []);
+    const actions = (await hooksByName.get("agent.open.before")({request:req}))?.tools ?? [];
     return (name, input) => actions.find(t=>t.name===name).execute(input,{paseo:sdk,agent:{id:"coord"}});
   }
   return { actors, reads, sent, signals, rpc, select, link, board, tools, live, dataDir, emit:(name,id)=>hooksByName.get(name)({agent:{id}},{paseo:sdk}) };

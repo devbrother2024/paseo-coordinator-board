@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
-import type { PreferenceStore } from "../server/preferences";
-import { sendCoordinatorRequest, digestPrompt } from "../server/digest";
+import { PreferenceStore } from "../server/preferences";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { sendCoordinatorRequest, digestPrompt, digestWithFactReplies, recordDigestCompletion } from "../server/digest";
 
 function fixture() {
   let owner = "primary";
@@ -52,4 +55,53 @@ test("pending approval, a busy session or a concurrent rotation prevents a diges
   f.rotate();
   await expect(f.request()).rejects.toThrow();
   expect(f.sent).toHaveLength(0);
+});
+
+test("only a verified complete digest turn advances the host timestamp", async () => {
+  const root = mkdtempSync(join(tmpdir(), "board-digest-"));
+  try {
+    const store = new PreferenceStore(join(root, "scope.json"));
+    store.change(scope => { scope.coordinator = "primary"; scope.projects = ["studio"]; });
+    const entries: unknown[] = [];
+    let rotate = false;
+    let calls = 0;
+    const paseo = { agents: { ref: () => ({ timeline: { refetch: async () => {
+      calls++;
+      if (rotate) store.change(scope => { scope.coordinator = "replacement"; });
+      return { entries };
+    } } }) } } as unknown as PluginHandlerContext["paseo"];
+    const at = "2026-02-01T10:00:00.000Z";
+    const observe = (turnId: string, kind = "completed", id = "primary", time = at) =>
+      recordDigestCompletion(store, paseo, { agent: { id }, turnId, outcome: { kind } } as never, time);
+    const user = (turnId: string, text: string) => ({ turnId, item: { type: "user_message", text } });
+
+    entries.push(user("newer", digestPrompt), user("ordinary", "Please review one session."));
+    await observe("ordinary");
+    await observe("newer", "failed");
+    await observe("newer", "canceled");
+    await observe("newer", "completed", "other");
+    expect(calls).toBe(1);
+    expect(store.read().lastDigest).toBeUndefined();
+    await observe("newer");
+    expect(store.read().lastDigest).toEqual({ turnId: "newer", coordinator: "primary", at });
+    await observe("newer", "completed", "primary", "2026-02-01T11:00:00.000Z");
+    expect(store.read().lastDigest?.at).toBe(at);
+
+    const tool = (name: string) => ({ turnId: "recurring", item: { type: "tool_call", name, status: "completed" } });
+    entries.push(tool("mcp__paseo__read_board_conversation"));
+    await observe("recurring", "completed", "primary", "2026-02-01T11:00:00.000Z");
+    expect(store.read().lastDigest?.at).toBe(at);
+    entries.push(tool("review_board_records"));
+    await observe("recurring", "completed", "primary", "2026-02-01T11:00:00.000Z");
+    expect(store.read().lastDigest).toEqual({ turnId: "recurring", coordinator: "primary", at: "2026-02-01T11:00:00.000Z" });
+
+    entries.push(user("after", digestWithFactReplies("en", "a".repeat(64))));
+    rotate = true;
+    await observe("after", "completed", "primary", "2026-02-01T12:00:00.000Z");
+    expect(store.read().lastDigest?.turnId).toBe("recurring");
+    await observe("after", "completed", "replacement", "2026-02-01T12:00:00.000Z");
+    expect(store.read().lastDigest).toEqual({ turnId: "after", coordinator: "replacement", at: "2026-02-01T12:00:00.000Z" });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

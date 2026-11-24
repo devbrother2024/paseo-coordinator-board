@@ -159,3 +159,22 @@ test("the operating folder is recognised through another spelling of its path", 
   expect(await sameFolder(join(root, "gone"), join(root, "Gone"))).toBe(process.platform === "win32");
   expect(await sameFolder("", folder)).toBe(false);
 });
+
+test("operating project warnings reuse selected identities without probing unrelated unmanaged paths", async () => {
+  const { operatingProjects } = await import("../server/coordinator-reach");
+  const { ProjectRootReader } = await import("../server/project-root");
+  const read: string[] = [];
+  const operatingFolder = join(tmpdir(), "fixture-operating-folder");
+  const folderReader = new ProjectRootReader({ disk: {
+    stat: async path => { read.push(path); return { dev: 1n, ino: 8n, isDirectory: () => true }; },
+    realpath: async path => path,
+  } });
+  const scopes = { coordinator: null };
+  const catalog = [
+    { id: "operating", path: operatingFolder },
+    { id: "selected-alias", path: join(tmpdir(), "fixture-selected-alias"), rootKey: "1:8" },
+    { id: "unrelated", path: join(tmpdir(), "fixture-offline-volume") },
+  ];
+  expect(await operatingProjects(catalog, operatingFolder, scopes, undefined, folderReader)).toEqual(new Set(["operating", "selected-alias"]));
+  expect(read).toEqual([operatingFolder]);
+});
