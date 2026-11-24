@@ -12,6 +12,7 @@ import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session
 import { plainDecisionTitle } from "./decision-summary";
 import { HistoryMarkdown } from "./history-markdown";
 import { ReplyCard } from "./reply-history";
+import { waitedLabel } from "../shared/review-wait";
 type ColumnKind = Lane | "history";
 type Actions = { sessionHostLabel?: string; onOpen?: (id:string) => void; onEdit:(id:string) => void };
 
@@ -21,6 +22,23 @@ function accent(lane: ColumnKind, theme: Theme) {
   if (lane === "running") return c.accent;
   if (lane === "done") return c.statusSuccess;
   return c.foregroundMuted;
+}
+
+function CoordinatorPending({ theme }: { theme: Theme }) {
+  const [open, setOpen] = useState(false);
+  const { t } = useBoardLanguage();
+  const c = theme.colors;
+  return <View style={{ gap: 3 }}>
+    <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => setOpen(value => !value)}
+      accessibilityLabel={t("코디네이터 미처리 · 설명 보기", "Not handled by the coordinator · Show explanation")}
+      style={{ alignSelf: "flex-start", paddingHorizontal: 7, paddingVertical: 2, borderRadius: 10, borderWidth: 1, borderColor: c.statusWarning }}>
+      <Text style={{ color: c.statusWarning, fontSize: 12, fontWeight: "600" }}>{t("코디네이터 미처리", "Not handled by coordinator")}</Text>
+    </Pressable>
+    {open && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
+      {t("코디네이터가 아직 이 세션을 처리하지 않았습니다. 멈춘 이유가 풀렸는지 확인하거나 원장에 올려야 합니다.",
+        "The coordinator has not handled this session yet. Check whether the reason it stopped has cleared, or raise it in the ledger.")}
+    </Text>}
+  </View>;
 }
 
 function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Card; theme: Theme } & Actions) {
@@ -34,6 +52,8 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
     : session.decision?.questionMarkdown ?? question;
   const detailIsQuestion = !!question && (question === session.detail || session.detail.endsWith(" · " + question));
   const runtime = [session.provider, session.model === session.provider ? null : session.model].filter(Boolean).join(" / ");
+  const resting = card.lane === "review" || card.lane === "idle";
+  const waited = resting ? waitedLabel(session.waitingSince, Date.now(), t) : "";
   const noteTitle = note && note.kind !== "clear" ? [note.origin === "agent" ? t("세션 보고", "Session report") : null, noteLabel(note.kind, t)].filter(Boolean).join(" · ") : null;
   return (
     <View style={{ padding: 10, borderRadius: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface0, gap: 6 }}>
@@ -48,11 +68,15 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
           {card.lane === "human" ? t("내 답을 기다리는 중", "Waiting for my decision")
             : session.detail ? sessionDetail(session.detail, t) : laneLabel(card.lane, t)}
         </Text>
+        {resting && (!!waited || !!session.lastSummary) && <Text numberOfLines={expanded ? undefined : 2} style={{ color: c.foregroundMuted, fontSize: 12 }}>
+          {[waited, session.lastSummary].filter(Boolean).join(" · ")}
+        </Text>}
         {!!sessionHostLabel && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
           {t("실행 호스트", "Host")} · {sessionHostLabel}
         </Text>}
       </Pressable>
       {onOpen && <SessionChip theme={theme} label={t("세션", "Session")} accessibilityLabel={t(`세션 열기 · ${session.title}`, `Open session · ${session.title}`)} onPress={() => onOpen(session.id)} />}
+      {card.lane === "review" && session.needsCoordinator && <CoordinatorPending theme={theme} />}
       {fact && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
         {fact.current ? "" : t("이전 · ", "Previous · ")}{factStatus(fact, t)}
       </Text>}
@@ -64,6 +88,12 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
         <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[session.sourceProjectTitle && t(`원래 소속 ${session.sourceProjectTitle}`, `From ${session.sourceProjectTitle}`), session.workspaceTitle, runtime].filter(Boolean).join(" · ")}</Text>
         {!!session.detail && !detailIsQuestion && <HistoryMarkdown theme={theme} source={sessionDetail(session.detail, t)} muted />}
         {!!displayedQuestion && note?.text !== question && <HistoryMarkdown theme={theme} source={displayedQuestion} />}
+        {card.lane === "review" && !!session.lastMessage && <View style={{ gap: 3 }}>
+          <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
+            {session.lastMessageTruncated ? t("세션의 마지막 글 · 앞부분 생략", "Last message from the session · Beginning omitted") : t("세션의 마지막 글", "Last message from the session")}
+          </Text>
+          <HistoryMarkdown theme={theme} source={session.lastMessage} />
+        </View>}
         {noteTitle && note && <View style={{ gap: 3 }}>
           <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{noteTitle}</Text>
           <HistoryMarkdown theme={theme} source={note.text} />
@@ -102,6 +132,9 @@ function Column({lane,entries,theme}: {lane:ColumnKind;entries:Entry[];theme:The
       <Text accessibilityRole="header" style={{color:c.foreground,flex:1,fontWeight:"600"}}>{lane === "history" ? t("결정 후속","Decision follow-up") : laneLabel(lane,t)}</Text>
       <Text style={{color:c.foregroundMuted}}>{entries.length}</Text>
     </View>
+    {lane === "review" && <Text style={{color:c.foregroundMuted,fontSize:12}}>
+      {t("일을 마치고 쉬는 세션입니다. 결정이 필요하면 코디네이터가 '내 결정'으로 올립니다.","Sessions that finished and are resting. If a decision is needed, the coordinator moves it to My decisions.")}
+    </Text>}
     {entries.slice(0,limit).map(entry=><View key={entry.key}>{entry.content}</View>)}
     {entries.length>limit && <Button theme={theme} label={t(`결정·작업 ${entries.length-limit}개 더 보기`,`Show ${entries.length-limit} more items`)} onPress={()=>setLimit(n=>n+10)} />}
   </View>;

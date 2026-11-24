@@ -31,9 +31,11 @@ import { ProjectRootReader } from "./server/project-root";
 import { recordDigestCompletion } from "./server/digest";
 import { coordinatorReach, operatingProjects } from "./server/coordinator-reach";
 import { operatingDirectories, operatingDirectory } from "./server/operating-folders";
+import { coveredSessionIds, decorateReviewWait, reviewWaitThreshold } from "./server/review-wait";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(hostVisibility);
+  const staleHours = reviewWaitThreshold(server);
   const home = process.env.PASEO_HOME || join(homedir(), ".paseo");
   const dataDir = join(home, "plugin-data", "coordinator-board");
   const notes = new NoteStore(join(dataDir, "notes.json"));
@@ -98,6 +100,8 @@ export default function contribute(server: PluginServerContext) {
     if (coordinatorRow && coordinatorRow.id === latest.coordinator) targets.set(coordinatorRow.id, coordinatorRow);
     for (const id of evidence.keys()) if (!targets.has(id)) evidence.delete(id);
     const {history = [], ...trackedDecisions} = tracked.read(selected, visible, pullRequests, evidence);
+    decorateReviewWait(visible, evidence, { coordinator: latest.coordinator, now: Date.now(), thresholdHours: await staleHours(),
+      covered: coveredSessionIds(trackedDecisions.items), judgments: latest.judgments });
     if (tracked.hasWaitingReplies()) {
       void resumeReplies({paseo}).catch(()=>console.warn("Could not check waiting board replies."));
     }
@@ -317,6 +321,8 @@ export default function contribute(server: PluginServerContext) {
     return { ok: true };
   });
   const removeReport = attachReportTool(server, notes);
-  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount)]);
+  const reviewContext = async () => ({ thresholdHours: await staleHours(),
+    covered: coveredSessionIds(tracked.read(new Set(prefs.read().projects), [], { items: [], projects: [] }).items) });
+  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount)], reviewContext);
   return () => { removeMergeTurn(); removeMergePermission(); removeReplyClose(); removeReplyArchive(); removeCoordinator(); removeReport(); };
 }

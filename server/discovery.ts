@@ -70,6 +70,9 @@ export async function discoverSessions(paseo: Pick<Sdk, "agents" | "workspaces">
     }
     const work = workspace && !workspace.internal ? workspacePull(workspace) : undefined;
     const permission = permissionVersion(agent);
+    const state = observedState(agent);
+    const waitingSince = state.lane === "review" ? agent.attentionTimestamp || agent.updatedAt
+      : state.lane === "idle" ? agent.updatedAt : undefined;
     rows.set(agent.id, {
       ...(work ? { workspacePull: work } : {}),
       id: agent.id,
@@ -81,7 +84,8 @@ export async function discoverSessions(paseo: Pick<Sdk, "agents" | "workspaces">
       model: agent.model?.trim() || null,
       ...(agent.metadata?.[reportingKey] === true ? { reporting: true } : {}),
       status: agent.status, activityAt: agent.updatedAt,
-      ...observedState(agent),
+      ...state,
+      ...(waitingSince ? { waitingSince } : {}),
       ...(agent.attentionReason === "permission" && agent.attentionTimestamp ? {decisionRequestedAt:agent.attentionTimestamp} : {}),
       ...(permission ? { permissionVersion: permission } : {}),
     });
