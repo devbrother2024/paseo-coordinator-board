@@ -33,7 +33,8 @@ export class SentRequestStore {
   record(entry: Omit<SentRequest, "at" | "status">) {
     const requests = this.list();
     if (requests.some(request => request.coordinatorId === entry.coordinatorId && request.messageId === entry.messageId)) return;
-    this.write([{ ...entry, at: new Date().toISOString(), status: "pending" }, ...requests].slice(0, retainedSentRequests));
+    const added: SentRequest = { ...entry, at: new Date().toISOString(), status: "pending" };
+    this.write([added, ...requests].slice(0, retainedSentRequests));
   }
 
   mark(coordinatorId: string, messageIds: readonly string[], status: "sent" | "delivered") {
