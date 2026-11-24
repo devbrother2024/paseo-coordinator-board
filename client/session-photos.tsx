@@ -10,7 +10,7 @@ import { BoardLanguageProvider, useBoardLanguage } from "./language";
 
 type MessageProps = PluginTimelineItemProps<z.infer<typeof boardPhotoMessageSchema>>;
 
-function AttachedPhoto({ sessionId, messageId, index, theme, onCount }: {
+export function AttachedPhoto({ sessionId, messageId, index, theme, onCount }: {
   sessionId: string; messageId: string; index: number; theme: Theme; onCount?: (count: number) => void;
 }) {
   const { t } = useBoardLanguage();

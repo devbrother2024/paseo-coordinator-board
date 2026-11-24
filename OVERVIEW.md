@@ -35,6 +35,8 @@ After sending an answer, choose **Open receiving session** on the collapsed card
 
 Use **Expand editor** next to **Request for the coordinator** to review a longer draft. Collapsing and reopening the editor preserves your text and photos.
 
+Requests you send stay under **Sent requests** below the editor, up to the latest 20. Expand it to read the full text, the time, attached photos, and the delivery state (Delivery unconfirmed, Sent, or Delivered), and open the conversation with **Receiving coordinator session**. Delivered means the board found the message in the coordinator's conversation. Requests sent before a coordinator replacement show **Earlier receiving coordinator** instead. Photos stay viewable only while they are among the host's most recent 20 photo messages. The history is kept in the plugin's data on the host, and a request is still delivered when its history cannot be saved.
+
 Click **Start with recommended settings** to create the coordinator, or select **Choose an existing coordinator session** in Settings. Before creating or replacing a coordinator, the board shows the model and tool permission mode. It prefers Auto mode for Claude Code and Auto-review for Codex when supported. OpenCode with Build mode and Copilot with Agent mode can serve as alternatives when their coordinator mode is available on the host. For other providers, you can designate an existing session with Paseo MCP.
 
 Paseo pins a new coordinator workspace in the host’s sidebar by default. Turn this off in **Settings → Sidebar pinning**. Replacing the coordinator in the same workspace preserves its existing pin state. For an existing coordinator, click **Pin current coordinator workspace**.

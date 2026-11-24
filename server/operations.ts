@@ -5,7 +5,9 @@ import { setUsageRouting } from "../shared/usage-routing";
 import { z } from "zod";
 import { join } from "node:path";
 import { boardPhotoMessageId, readSessionPhoto } from "../shared/session-photos";
+import { listSentRequests } from "../shared/sent-requests";
 import { SessionPhotoStore } from "./session-photos";
+import { SentRequestStore } from "./sent-requests";
 import { createHash } from "node:crypto";
 import { askDigest, operationState, requestWork, setProviderInclusion, setWorkerMode, setupCoordinator, updateRouting } from "../shared/operations";
 import { coordinatorPinSettings, pinCurrentCoordinator, setCoordinatorAutoPin } from "../shared/operations";
@@ -30,6 +32,9 @@ import { PreferenceStore } from "./preferences";
 
 export function createOperations(store: PreferenceStore, operatingRoot: string, facts?: Pick<BoardFacts, "prepareCycle" | "bindMessage">) {
   const sessionPhotos = new SessionPhotoStore(join(store.directory, "session-photos"));
+  const sentRequests = new SentRequestStore(join(store.directory, "sent-requests.json"));
+  // The history is a view of what was sent. Failing to update it never blocks the request.
+  const keepHistory = (update: () => void) => { try { update(); } catch {} };
   const lifecycle = new CoordinatorLifecycle(store, operatingRoot);
   function ownerScope(caller: string) {
     const scope = store.read();
@@ -38,6 +43,7 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
   }
   function register(server: PluginServerContext) {
     server.handle(readSessionPhoto, async ({sessionId, messageId, index}) => sessionPhotos.read(sessionId, messageId, index));
+    server.handle(listSentRequests, async (_input, { paseo }) => ({ requests: await sentRequests.confirm(paseo) }));
     server.handle(coordinatorPinSettings, (_input, { paseo }) => lifecycle.pinSettings(paseo));
     server.handle(setCoordinatorAutoPin, async ({ enabled }) => {
       store.change(scope => { scope.autoPinCoordinatorWorkspace = enabled; });
@@ -177,8 +183,9 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
       }
       return sendCoordinatorRequest(paseo, store, input.coordinator, input.requestKey, language === "en" ? englishDigestPrompt : digestPrompt);
     });
-    server.handle(requestWork, (input, { paseo }) =>
-      sendCoordinatorRequest(paseo, store, input.coordinator, input.requestKey, input.text, {
+    server.handle(requestWork, async (input, { paseo }) => {
+      const reserved: { id?: string } = {};
+      const result = await sendCoordinatorRequest(paseo, store, input.coordinator, input.requestKey, input.text, {
         allowActiveCoordinator:true,
         images: input.images,
         reserveMessage(originalId) {
@@ -193,10 +200,15 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
             scope.workRequestIds[key] = messageId;
           });
           if (input.images?.length) sessionPhotos.save(input.coordinator, messageId, input.images);
+          keepHistory(() => sentRequests.record({ messageId, coordinatorId: input.coordinator, text: input.text, photoCount: input.images?.length ?? 0 }));
+          reserved.id = messageId;
           return messageId;
         },
-      }),
-    );
+      });
+      const { id } = reserved;
+      if (id) keepHistory(() => sentRequests.mark(input.coordinator, [id], "sent"));
+      return result;
+    });
   }
   const plan = defineAgentTool({
     name: "plan_board_assignment",

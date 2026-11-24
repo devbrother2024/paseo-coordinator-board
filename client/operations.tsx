@@ -24,6 +24,7 @@ import { RouteEditor, routeName, wrap, type RoutingSave } from "./route-editor";
 import { useBoardLanguage } from "./language";
 import { explainEmptyRoute } from "./route-options";
 import { DigestFeedback, type CoordinatorAction, type DigestRequest } from "./digest-request";
+import { SentRequestHistory } from "./sent-requests";
 
 type Props = {
   theme: Theme;
@@ -50,6 +51,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   const [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [text, setText] = useState("");
+  const [sendAttempts, setSendAttempts] = useState(0);
   const [editorExpanded, setEditorExpanded] = useState(false);
   const { height: windowHeight } = useWindowDimensions();
   const photoDraft = usePhotoDraft();
@@ -163,6 +165,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
         ? t(`사진 ${images.length}장과 함께 코디네이터에게 요청을 보냈습니다.`, `Sent the request to the coordinator with ${images.length} photo${images.length === 1 ? "" : "s"}.`)
         : t("첨부 없이 코디네이터에게 요청을 보냈습니다.", "Sent the request to the coordinator without attachments."),
     );
+    if (live.current) setSendAttempts(n => n + 1);
     if (receipt && live.current) {
       delivery.current = { payload: "", key: "" };
       setText("");
@@ -273,5 +276,6 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
       <View style={wrap}><Button theme={theme} label={data?.routing.M ? t("저장한 모델로 시작", "Start with saved model") : t("추천 설정으로 시작", "Start with recommended settings")} disabled={busy || loading || !model || !mode || !languageReady} onPress={connect} /></View>
     </>}
     {feedback}
+    {coordinator && <SentRequestHistory theme={theme} coordinator={coordinator} open={openCoordinator} refreshKey={sendAttempts} />}
   </View>;
 }
