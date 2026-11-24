@@ -46,7 +46,8 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 
 - `orca/`는 Orca용 보드(MVP)다. Paseo판과 따로 설치되고 버전도 따로다(`orca/orca-plugin.json`). 루트 `package.json`의 `files`와 배포 ZIP에 넣지 않는다.
 - Orca는 플러그인 폴더 밖을 불러오지 못한다. `../shared` 같은 import를 쓰지 않고, 필요한 로직은 의존성 없이 `orca/src/*.ts`에 다시 쓴다. Orca 플러그인에는 `node_modules`가 없으니 zod도 쓰지 않는다.
-- 같은 테스트 경계를 지킨다. 판단은 `orca/src/model.ts`, `github.ts`, `labels.ts`에 두고, `panel.tsx`에는 화면만 둔다.
+- 같은 테스트 경계를 지킨다. 판단은 `orca/src/model.ts`, `github.ts`, `labels.ts`, `summary.ts`에 두고, `panel.tsx`와 `orca/src/dashboard/`에는 화면만 둔다. 테스트는 `dashboard/`를 불러오지 않는다.
+- 대시보드(`orca/src/dashboard/`)는 Orca 편집 탭에서 도는 프레임이라 DOM을 직접 만든다. 글은 `dom.ts`의 `h()`로 텍스트 노드로만 넣고 `innerHTML`을 쓰지 않는다. 열쇠 파일(`.coordinator-board/`)은 `.git/info/exclude`로 숨기고, 사용자 저장소에 `.gitignore`를 새로 만들지 않는다.
 - 출처 규칙의 Orca판: `terminal.sendText`는 사람이 친 글과 구분되지 않는다. 그래서 출처 없는 전송은 사용자가 쓰고 누른 글에만 쓴다. 보드가 만든 문장을 보내는 경로를 만들면 `[coordinator-board]` 머리말을 붙이고, 실패해도 다시 보내지 않는다.
 - 권한 대기 세션에는 보내지 않는다. 전송 직전에 `agents.list`로 상태를 다시 읽고 `replyGuard`(`orca/src/model.ts`)를 거친다.
 - 검증: `npx tsc -p orca`, `orca plugin test orca`, `orca plugin check orca`, `orca plugin validate orca`. CI에는 Orca CLI가 없어서 돌지 않으니 PR 전에 로컬에서 돌린다. 루트 `tsconfig.json`은 `orca`를 `exclude`한다.
