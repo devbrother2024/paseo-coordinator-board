@@ -4,6 +4,7 @@ import { Button, SessionChip, type Theme } from "./controls";
 import { useBoardLanguage } from "./language";
 import { columnWidth, COLUMN_GAP } from "./lane-width";
 import type { PullRequestItem } from "../shared/prs";
+import { pullColumn } from "../shared/pull-judgments";
 import type { TrackedDecision } from "../shared/tracked-decisions";
 import { factStatus, laneLabel, noteLabel, sessionDetail, type Card, type Lane } from "./model";
 import type { ReplyEntry } from "../shared/reply-history";
@@ -127,7 +128,7 @@ export function Project({projectId,title,decisions,cards,records,history=[],hist
   }
   for(const pr of requests) {
     if(records.some(item=>item.matchedPull?.repo===pr.repo && item.matchedPull.number===pr.number)) continue;
-    const lane = pr.lane==="review" ? "human" : ["conflict","checks-failed","changes-requested","blocked","unknown"].includes(pr.reason) ? "review" : "running";
+    const lane = pullColumn(pr);
     groups[lane].push({key:pr.url,content:renderPull(pr,projectId)});
   }
   const lanes=order.filter(lane=>groups[lane].length);

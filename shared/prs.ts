@@ -11,10 +11,21 @@ export const repositoryOverride = z.discriminatedUnion("mode", [
   z.object({ mode:z.literal("manual"), repo:repositorySlug }), z.object({mode:z.literal("off")}),
 ]);
 export const pullReason = z.enum(["ready","draft","conflict","checks-failed","checks-pending","changes-requested","blocked","unknown","auto-merge"]);
+export const commitSha = z.string().regex(/^[a-f0-9]{40}$/);
+// What the coordinator decided about one PR head. GitHub readiness alone is not a merge decision.
+export const pullVerdict = z.enum(["ready", "needs-changes", "in-progress", "blocked"]);
+export type PullVerdict = z.infer<typeof pullVerdict>;
+// Why a GitHub-ready PR is or is not a merge card: github (setting off or no coordinator),
+// ledger (a coordinator ledger merge card), judged (ready verdict on this head), awaiting
+// (no verdict), stale (verdict on an older head), or the coordinator's other verdicts.
+export const pullGate = z.enum(["github", "ledger", "judged", "awaiting", "stale", "needs-changes", "in-progress", "blocked"]);
+export type PullGate = z.infer<typeof pullGate>;
 const pull = z.object({
   repo:repositorySlug, number:z.number().int().positive(), title:z.string(), url:z.string().url(),
-  headRepo:repositorySlug.optional(), headBranch:z.string().optional(),
+  headRepo:repositorySlug.optional(), headBranch:z.string().optional(), headSha:commitSha.optional(),
   projectIds:z.array(z.string()), lane:z.enum(["review","progress"]), reason:pullReason, updatedAt:z.string(),
+  gate:pullGate.optional(),
+  judgment:z.object({ verdict:pullVerdict, reason:z.string(), at:z.string(), ownerSessionId:z.string().optional() }).optional(),
 });
 export const pullRequestViewSchema = z.object({
   items:z.array(pull),
@@ -73,7 +84,16 @@ const mergeResult = z.object({
   reason: mergeReason, mergeSha: z.string().nullable(), notification: mergeNotification.optional(),
 });
 export type MergeResult = z.infer<typeof mergeResult>;
-export const previewPullRequestMerge = defineRpc({ name: "board.preview-pull-request-merge", input: mergeTarget, output: mergePreview });
+// expectedHeadSha is the head the board showed. A newer head was never judged, so the preview stops.
+export const previewPullRequestMerge = defineRpc({
+  name: "board.preview-pull-request-merge", input: mergeTarget.extend({ expectedHeadSha: commitSha.optional() }), output: mergePreview,
+});
+export const mergeJudgmentSettings = defineRpc({
+  name: "board.merge-judgment-settings", input: z.strictObject({}), output: z.object({ enabled: z.boolean() }),
+});
+export const setMergeJudgment = defineRpc({
+  name: "board.set-merge-judgment", input: z.strictObject({ enabled: z.boolean() }), output: z.object({ ok: z.literal(true) }),
+});
 export const confirmPullRequestMerge = defineRpc({
   name: "board.confirm-pull-request-merge",
   input: mergeTarget.extend({ token: z.string().uuid(), method: mergeMethod }), output: mergeResult,

@@ -9,6 +9,7 @@ import { routePolicySchema, workerModeProvider } from "../shared/dispatch";
 import { pullMergeActivity, repositoryOverride } from "../shared/prs";
 import { replyDetails } from "../shared/reply-history";
 import { factSchema } from "../shared/board-facts";
+import { pullJudgmentSchema } from "../shared/pull-judgments";
 
 export const judgment = z.object({
   content: decisionFields.optional(),
@@ -24,6 +25,9 @@ const schema = z.object({
   projectRepositories: z.record(z.string(), repositoryOverride).default({}),
   autoPinCoordinatorWorkspace: z.boolean().default(true),
   autoReplyToBoardFacts: z.boolean().default(true),
+  // Merge cards need a coordinator verdict on the PR head unless the person turns this off.
+  judgedMergeCards: z.boolean().default(true),
+  pullJudgments: z.record(z.string(), pullJudgmentSchema).default({}),
   lastDigest: z.object({ at: z.iso.datetime(), coordinator: z.string(), turnId: z.string() }).optional(),
   factHistory: z.record(z.string(), factSchema).default({}),
   workRequestIds: z.record(z.string(), z.string().uuid()).default({}),

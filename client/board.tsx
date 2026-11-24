@@ -13,6 +13,7 @@ import { InlineDecisionReceipt } from "./inline-receipt";
 import { latestMergeNotification } from "./merge-notification";
 import { decisionSummary } from "./decision-summary";
 import { matchesWorkspace } from "../shared/workspace-pull";
+import { ownerRunning } from "../shared/pull-judgments";
 import type { PullRequestItem } from "../shared/prs";
 import { getPaseoClient, type PluginScreenProps } from "@getpaseo/plugin/client";
 import { remoteScope, readRemoteHistorySession } from "./remote-sessions";
@@ -234,11 +235,18 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     for (const s of snapshot?.sessions ?? []) {
       if (!inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !actions.onOpen || !matchesWorkspace(pr,s.workspacePull)) continue;
       const state = s.status === "closed" ? t("대화 종료","Closed") : s.lane === "running" ? t("진행 중","Running") : s.status === "idle" ? t("대기","Idle") : t("상태 확인 필요","Check status");
-      workSessions.push({key:JSON.stringify([hostId,s.id]),label:[s.title,hostLabel,state].join(" · "),open:()=>actions.onOpen!(s.id)});
+      workSessions.push({key:JSON.stringify([hostId,s.id]),label:[s.title,hostLabel,state].join(" · "),open:()=>actions.onOpen!(s.id),running:s.lane === "running"});
     }
     if (onOpenHostSession) for (const {host,rows} of peers) for (const s of rows) {
       if (!inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !matchesWorkspace(pr,s.workspacePull)) continue;
-      workSessions.push({key:JSON.stringify([host.serverId,s.sessionId]),label:[s.title || t("작업 세션","Work session"),host.label,t("진행 중","Running")].join(" · "),open:()=>onOpenHostSession(host.serverId,s.sessionId)});
+      workSessions.push({key:JSON.stringify([host.serverId,s.sessionId]),label:[s.title || t("작업 세션","Work session"),host.label,t("진행 중","Running")].join(" · "),open:()=>onOpenHostSession(host.serverId,s.sessionId),running:true});
+    }
+    // The coordinator can name the work session that owns the PR when no workspace matches it.
+    const owner = pr.judgment?.ownerSessionId && snapshot?.sessions.find(s => s.id === pr.judgment?.ownerSessionId);
+    if (owner && actions.onOpen && !workSessions.some(link => link.key === JSON.stringify([hostId,owner.id]))) {
+      const running = ownerRunning(pr, [owner]);
+      workSessions.push({key:JSON.stringify([hostId,owner.id]),label:[owner.title,hostLabel,running ? t("진행 중","Running") : t("담당 세션","Owner session")].join(" · "),
+        open:()=>actions.onOpen!(owner.id),running});
     }
     return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions}
       clarification={decision && !embedded && questionFor({kind:"pull",projectId,repo:pr.repo,number:pr.number,updatedAt:pr.updatedAt},pr.repo + " #" + pr.number)}
