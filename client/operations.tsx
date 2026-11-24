@@ -168,7 +168,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   function connect() {
     if (!model || !mode || !configured) return;
     void act(
-      () => setup({ expectedCoordinator: coordinator, replace: !!coordinator, expectedRoute: model, expectedModeId: mode.id }),
+      () => setup({ expectedCoordinator: coordinator, replace: !!coordinator, expectedRoute: model, expectedModeId: mode.id, language }),
       t("운영 세션을 연결했습니다.", "Coordinator session connected."),
     ).then((result) => {
       if (result && live.current) {

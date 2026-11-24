@@ -16,7 +16,7 @@ type Props = {
 
 // Replace the coordinator, optionally with a model picked right here: pick, choose a model, confirm.
 export function CoordinatorReplace({ theme, coordinator, data, loading, disabled = false, reload, onReplaced, onClose, extraAction, footer }: Props) {
-  const { t } = useBoardLanguage();
+  const { t, language } = useBoardLanguage();
   const setup = useRpc(setupCoordinator);
   const [picking, setPicking] = useState(false);
   const [query, setQuery] = useState("");
@@ -45,7 +45,7 @@ export function CoordinatorReplace({ theme, coordinator, data, loading, disabled
     pending.current = true;
     setBusy(true); setError(""); setNotice("");
     try {
-      const result = await setup({ expectedCoordinator: coordinator, replace: true, expectedRoute: plan.route, expectedModeId: mode.id,
+      const result = await setup({ expectedCoordinator: coordinator, replace: true, expectedRoute: plan.route, expectedModeId: mode.id, language,
         ...(plan.selection ? { selection: plan.selection } : {}) });
       if (!live.current) return;
       setConfirm(false); setPicked(null); setPicking(false); setRemember(true);
