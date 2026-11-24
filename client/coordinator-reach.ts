@@ -17,6 +17,12 @@ export function chipPlan(known: CoordinatorReach | undefined, canCheck: boolean)
   return canCheck ? "check" : "open";
 }
 
+// What a chip explains right now. "known" follows the state the board holds, and stops once that state can be opened.
+export function explanationFor(explained: CoordinatorReach | "known" | null, known: CoordinatorReach | undefined): CoordinatorReach | null {
+  if (explained !== "known") return explained;
+  return known && chipOutcome(known) === "explain" ? known : null;
+}
+
 function subject(role: ReachRole, t: Translate) {
   if (role === "owner") return t("이 원장을 맡은 운영 세션", "The session that owns this ledger");
   if (role === "source") return t("이 작업 세션", "This work session");

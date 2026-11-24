@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import {
   classifyReach, coordinatorReachSchema, coordinatorReachStates, listedSessionReach, opensSession, readSessionReach, receivesBoardInput,
 } from "../shared/coordinator-reach";
-import { chipOutcome, chipPlan, reachNotice } from "../client/coordinator-reach";
+import { chipOutcome, chipPlan, explanationFor, reachNotice } from "../client/coordinator-reach";
 
 const id = "coordinator-fixture";
 const folder = "/synthetic/operate";
@@ -174,4 +174,15 @@ test("a state the board already holds explains at once, and an unknown one is lo
   expect(chipPlan({ state: "closed" }, false)).toBe("open");
   expect(chipPlan(undefined, true)).toBe("check");
   expect(chipPlan(undefined, false)).toBe("open");
+});
+
+test("an explanation of a state the board holds disappears once the session can be opened again", () => {
+  const archived = { state: "workspace-archived" as const };
+  expect(explanationFor("known", archived)).toEqual(archived);
+  expect(explanationFor("known", { state: "ok" })).toBeNull();
+  expect(explanationFor("known", { state: "closed" })).toBeNull();
+  expect(explanationFor("known", undefined)).toBeNull();
+  // A state found by looking the session up stays until the chip is pressed again.
+  expect(explanationFor(archived, { state: "ok" })).toEqual(archived);
+  expect(explanationFor(null, archived)).toBeNull();
 });

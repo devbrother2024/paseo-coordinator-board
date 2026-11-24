@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import type { CoordinatorReach } from "../shared/coordinator-reach";
 import { SessionChip, type SessionChipProps, type Theme } from "./controls";
-import { chipOutcome, chipPlan, type ReachRole } from "./coordinator-reach";
+import { chipOutcome, chipPlan, explanationFor, type ReachRole } from "./coordinator-reach";
 import { useBoardLanguage } from "./language";
 import { ReachExplanation } from "./reach-explanation";
 
@@ -12,26 +12,28 @@ export type SessionGate = { known?: CoordinatorReach; check?: () => Promise<Coor
 export function VerifiedSessionChip({ verify, gate, ...props }: SessionChipProps & { verify?: () => Promise<boolean>; gate?: SessionGate }) {
   const { t } = useBoardLanguage();
   const [state, setState] = useState<"ready" | "checking" | "failed">("ready");
-  const [blocked, setBlocked] = useState<CoordinatorReach | null>(null);
+  // A looked-up state is kept as found. A state the board already holds is read fresh, so the explanation leaves once it recovers.
+  const [explained, setExplained] = useState<CoordinatorReach | "known" | null>(null);
   const active = useRef(true);
   const pending = useRef(false);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   if (!verify && !gate) return <SessionChip {...props} />;
+  const blocked = explanationFor(explained, gate?.known);
   async function visit() {
     if (pending.current) return;
     const plan = chipPlan(gate?.known, !!gate?.check || !!verify);
-    if (plan === "explain") return setBlocked(blocked ? null : gate!.known!);
+    if (plan === "explain") return setExplained(blocked ? null : "known");
     if (plan === "open") return props.onPress();
     pending.current = true;
     setState("checking");
-    setBlocked(null);
+    setExplained(null);
     try {
       const reach: CoordinatorReach = gate?.check ? await gate.check() : { state: await verify!() ? "ok" : "unknown" };
       if (!active.current) return;
       const outcome = chipOutcome(reach);
       setState(outcome === "unverified" ? "failed" : "ready");
       if (outcome === "open") props.onPress();
-      if (outcome === "explain") setBlocked(reach);
+      if (outcome === "explain") setExplained(reach);
     } catch {
       if (active.current) setState("failed");
     } finally { pending.current = false; }

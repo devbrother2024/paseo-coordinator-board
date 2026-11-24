@@ -142,11 +142,17 @@ export function createOperations(store: PreferenceStore, workspaceDir: string, f
         config: { ...configForRoute(input.expectedRoute), modeId: mode.id }, verifyRoute,
       });
       if (input.selection !== "default") return result;
-      // Remembered only after the replacement succeeded. Earlier candidates stay as fallbacks.
+      // Remembered only once the coordinator in place really runs the picked model.
       try {
-        const route = input.expectedRoute, first = store.read().routing.M?.[0];
-        if (!first || !sameRoute(first, route)) store.change(scope => {
-          scope.routing.M = [route, ...(scope.routing.M ?? []).filter(saved => !sameRoute(saved, route))].slice(0, 12);
+        const route = input.expectedRoute, config = configForRoute(route);
+        const { createdCoordinator: created, routing } = store.read();
+        if (created?.id !== result.sessionId || created.config.provider !== config.provider || created.config.thinkingOptionId !== config.thinkingOptionId)
+          return { ...result, defaultSaved: false };
+        if (!routing.M?.[0] || !sameRoute(routing.M[0], route)) store.change(scope => {
+          // Earlier candidates stay as fallbacks. With none saved, the board's own choice until now becomes the fallback.
+          const recommended = resolveRoute("M", {}, includedCatalog(catalog, scope.excludedProviders));
+          const earlier = scope.routing.M ?? (recommended ? [recommended] : []);
+          scope.routing.M = [route, ...earlier.filter(saved => !sameRoute(saved, route))].slice(0, 12);
           scope.routingRevision++;
         });
         return { ...result, defaultSaved: true };
