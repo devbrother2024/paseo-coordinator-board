@@ -6,6 +6,7 @@ import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin
 import { discoverBoardSessions } from "../server/board-sessions";
 import { ConversationReader } from "../server/conversation";
 import { DecisionSender, decorateDecision } from "../server/decisions";
+import { creationUuid } from "../server/dispatch";
 import { NoteStore } from "../server/notes";
 import { createOperations } from "../server/operations";
 import { PreferenceStore } from "../server/preferences";
@@ -45,7 +46,8 @@ function daemon(projectId: string, path: string, remoteUrl: string) {
   const sends: { id: string; text: string; options: Send }[] = [];
   const timelines = new Map<string, TimelineItem[]>();
   const state = { loseNextSendAck: false, permissionsOnCreate: false, disposals: 0,
-    failLoad: false, failRef: false, workingReads: 0, mostReads: 0, readIds: [] as string[] };
+    failLoad: false, failRef: false, workingReads: 0, mostReads: 0, readIds: [] as string[],
+    pauseReads: new Map<string, Promise<void>>() };
   function add(id: string, status = "idle", more: Partial<Agent> = {}) {
     const agent = { id, workspaceId: workspace.id, title: id, status, pendingPermissions: [], updatedAt: "2026-01-01T00:00:00Z", ...more };
     agents.set(id, agent);
@@ -80,6 +82,7 @@ function daemon(projectId: string, path: string, remoteUrl: string) {
           state.mostReads = Math.max(state.workingReads, state.mostReads);
           try {
             await new Promise(resolve => setTimeout(resolve, 0));
+            await state.pauseReads.get(id);
             if (state.failRef) throw Error("Agent lookup unavailable");
             return agents.has(id) ? { agent: agents.get(id), project: agentProject } : null;
           } finally { state.workingReads--; }
@@ -299,7 +302,34 @@ test("discovery drops completed missing or archived receipts and preserves uncer
   expect(s.win.state.readIds).toEqual([pending]);
 });
 
-test("discovery prunes by project, age and count before remote lookups and limits concurrent requests", async () => {
+test("a retry after receipt cleanup cannot create a second worker on a less busy host", async () => {
+  const s = scenario();
+  // Workspace IDs can coincide across independent hosts.
+  s.win.workspace.id = s.mac.workspace.id;
+  const job = { ...s.job, workspaceId: s.mac.workspace.id, expectedHostId: undefined };
+  const receipt = await s.assign(job);
+  expect(receipt.location.serverId).toBe(remote.serverId);
+  s.win.agents.get(receipt.sessionId)!.archivedAt = new Date().toISOString();
+  await discoverBoardSessions(s.sdk, s.store);
+  expect(s.store.read().dispatchReceipts[receipt.sessionId]).toBeUndefined();
+  for (const id of ["win-one", "win-two", "win-three"]) s.win.add(id, "running");
+  expect((await s.plan()).location.serverId).toBe(local.serverId);
+  await expect(s.assign(job)).rejects.toThrow(/different task/);
+  expect(s.mac.creates.size).toBe(0);
+  expect(s.win.creates.size).toBe(1);
+  expect(s.win.sends).toHaveLength(1);
+});
+
+test("an online host with an unknown request history blocks an unverified creation", async () => {
+  const s = scenario();
+  s.win.state.failRef = true;
+  await expect(s.assign({ ...s.job, workspaceId: s.mac.workspace.id, expectedHostId: local.serverId })).rejects.toThrow(/Check the host connections/);
+  expect(s.mac.creates.size + s.win.creates.size).toBe(0);
+  s.win.state.failRef = false;
+  expect((await s.assign({ ...s.job, workspaceId: s.mac.workspace.id, expectedHostId: local.serverId })).location.serverId).toBe(local.serverId);
+});
+
+test("discovery prunes by project and age before remote lookups and limits concurrent requests", async () => {
   const s = scenario();
   const { sessionId } = await s.assign(s.job);
   const excluded = "00000000-0000-8000-8000-000000000001";
@@ -308,7 +338,7 @@ test("discovery prunes by project, age and count before remote lookups and limit
     const entry = scope.dispatchReceipts[sessionId];
     scope.dispatchReceipts[excluded] = { ...entry, projectId: "unmanaged" };
     scope.dispatchReceipts[expired] = { ...entry, createdAt: "2020-01-01T00:00:00Z" };
-    for (let i = 3; i < 265; i++) {
+    for (let i = 3; i <= 257; i++) {
       const id = `00000000-0000-8000-8000-${String(i).padStart(12, "0")}`;
       scope.dispatchReceipts[id] = { ...entry, delivered: false };
     }
@@ -322,6 +352,67 @@ test("discovery prunes by project, age and count before remote lookups and limit
   expect(s.win.state.mostReads).toBeGreaterThan(1);
   expect(s.win.state.mostReads).toBeLessThanOrEqual(4);
   expect(Object.keys(s.store.read().dispatchReceipts)).toHaveLength(256);
-  await expect(s.assign({ ...s.job, requestKey: "example-at-receipt-limit" })).rejects.toThrow(/limit for tracked/);
+  s.win.agents.get(sessionId)!.status = "running";
+  await expect(s.assign({ ...s.job, requestKey: "example-at-receipt-limit" })).rejects.toThrow(/세션을 보관.*Archive a completed session/);
   expect(s.win.creates.size).toBe(1);
+});
+
+test("a full receipt store frees ended sessions first, then the oldest delivered idle session", async () => {
+  const s = scenario();
+  const [running, oldest, newer, archived, deleted] = await Promise.all([
+    s.job,
+    { ...s.job, requestKey: "oldest-idle-worker" },
+    { ...s.job, requestKey: "newer-idle-worker" },
+    { ...s.job, requestKey: "archived-test-worker" },
+    { ...s.job, requestKey: "deleted-test-worker" },
+  ].map(s.assign)).then(results => results.map(result => result.sessionId));
+  s.win.agents.get(running)!.status = "running";
+  s.win.agents.get(archived)!.archivedAt = new Date().toISOString();
+  s.win.agents.delete(deleted);
+  s.store.change(scope => {
+    for (const [id, days] of [[running, 10], [oldest, 8], [newer, 6]] as const) {
+      scope.dispatchReceipts[id].createdAt = new Date(Date.now() - days * 86_400_000).toISOString();
+    }
+    for (let i = 0; i < 251; i++) {
+      scope.dispatchReceipts[creationUuid("pending-" + i, "agent")] = { ...scope.dispatchReceipts[running], delivered: false };
+    }
+  });
+  const add = async (index: number) => (await s.assign({ ...s.job, requestKey: "new-worker-at-limit-" + index })).sessionId;
+  await add(1);
+  let receipts = s.store.read().dispatchReceipts;
+  expect(receipts[archived]).toBeUndefined();
+  expect(receipts[deleted]).toBeUndefined();
+  expect(receipts[oldest]).toBeDefined();
+  expect(Object.keys(receipts)).toHaveLength(255);
+  await add(2);
+  const added = await add(3);
+  receipts = s.store.read().dispatchReceipts;
+  expect(Object.keys(receipts)).toHaveLength(256);
+  expect(receipts[oldest]).toBeUndefined();
+  for (const id of [running, newer, added, creationUuid("pending-0", "agent")]) expect(receipts[id]).toBeDefined();
+});
+
+test("four stalled remote reads time out and let the next session load", async () => {
+  const s = scenario();
+  const { sessionId } = await s.assign(s.job);
+  let resume!: () => void;
+  const pause = new Promise<void>(resolve => { resume = resolve; });
+  const stalled = Array.from({ length: 4 }, (_, i) => creationUuid("slow-worker-" + i, "agent"));
+  s.store.change(scope => {
+    const receipt = scope.dispatchReceipts[sessionId];
+    scope.dispatchReceipts = Object.fromEntries([...stalled, sessionId].map(id => [id, receipt]));
+  });
+  for (const id of stalled) s.win.state.pauseReads.set(id, pause);
+  const discovery = discoverBoardSessions(s.sdk, s.store, undefined, { timeoutMs: 80 });
+  const watchdog = AbortSignal.timeout(1200);
+  try {
+    const rows = await Promise.race([discovery, new Promise<never>((_, reject) => {
+      watchdog.addEventListener("abort", () => reject(new Error("Remote queue did not advance")), { once: true });
+    })]);
+    expect(rows.some(row => row.id === sessionId)).toBe(true);
+    expect(stalled.every(id => !!s.store.read().dispatchReceipts[id])).toBe(true);
+  } finally {
+    resume();
+    await discovery;
+  }
 });

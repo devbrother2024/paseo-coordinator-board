@@ -84,7 +84,6 @@ const dispatchRetentionMs = 30 * 24 * 60 * 60 * 1000;
 export function pruneDispatchReceipts(scope: Preferences, now = Date.now()) {
   const projects = new Set(scope.projects);
   let changed = false;
-  const retained: [string, DispatchReceipt][] = [];
   for (const [id, receipt] of Object.entries(scope.dispatchReceipts)) {
     if (!projects.has(receipt.projectId) || (receipt.createdAt && Date.parse(receipt.createdAt) <= now - dispatchRetentionMs)) {
       delete scope.dispatchReceipts[id];
@@ -95,15 +94,6 @@ export function pruneDispatchReceipts(scope: Preferences, now = Date.now()) {
       receipt.createdAt = new Date(now).toISOString();
       changed = true;
     }
-    retained.push([id, receipt]);
-  }
-  if (retained.length > maxDispatchReceipts) {
-    // Older stores were unbounded. Preserve uncertain deliveries before trimming
-    // older confirmations. New reservations stop at the limit.
-    retained.sort(([, a], [, b]) => Number(!!a.delivered) - Number(!!b.delivered) ||
-      b.createdAt!.localeCompare(a.createdAt!));
-    for (const [id] of retained.slice(maxDispatchReceipts)) delete scope.dispatchReceipts[id];
-    changed = true;
   }
   return changed;
 }

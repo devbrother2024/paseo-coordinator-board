@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DispatchInput } from "../shared/dispatch";
 import { assignmentHost, assignmentReasons, inferHostPlatform, pairedProject, type TaskPlatform } from "../shared/host-assignment";
+import { discoverBoardSessions, withRemoteReadHost } from "./board-sessions";
 import {
   countActiveSessions, PlacementError, readHostInventory, registeredAssignmentHosts, withAssignmentHost, type HostSdk,
 } from "./host-assignment";
@@ -8,6 +9,7 @@ import { creationUuid, dispatchWorker, sendRemoteAssignment } from "./dispatch";
 import { maxDispatchReceipts, pruneDispatchReceipts, type DispatchReceipt, type Preferences, type PreferenceStore } from "./preferences";
 
 type PlacementRequest = { platform?: TaskPlatform; host?: string; expectedHostId?: string };
+type RegisteredHosts = Awaited<ReturnType<typeof registeredAssignmentHosts>>;
 const projectRequired = "이 호스트에서 관리할 프로젝트를 먼저 선택해 주세요. / Select a project managed by this board first.";
 const keyConflict = "이미 다른 작업에 사용한 요청입니다. 새 작업으로 시작해 주세요. / This request key belongs to a different task. Start a new request.";
 
@@ -20,9 +22,10 @@ function localPolicy(scope: Preferences, id: string | undefined) {
   return id && Object.hasOwn(scope.assignmentHosts, id) ? scope.assignmentHosts[id] : undefined;
 }
 
-export async function planWorkerPlacement(paseo: HostSdk, scope: Preferences, projectId: string, request: PlacementRequest) {
+export async function planWorkerPlacement(paseo: HostSdk, scope: Preferences, projectId: string, request: PlacementRequest,
+  registered?: RegisteredHosts) {
   if (!scope.projects.includes(projectId)) throw new Error(projectRequired);
-  const registered = await registeredAssignmentHosts(paseo, scope);
+  registered ??= await registeredAssignmentHosts(paseo, scope);
   if (!registered.length) {
     const id = localServerId(paseo, scope.coordinator);
     if (request.host || (request.expectedHostId && request.expectedHostId !== id)) throw new PlacementError("host-unknown");
@@ -68,6 +71,16 @@ export async function planWorkerPlacement(paseo: HostSdk, scope: Preferences, pr
 function dispatchScope(scope: Preferences, coordinator: string) {
   return { projects: scope.projects, routing: scope.routing, coordinator, excludedProviders: scope.excludedProviders,
     usageRouting: scope.usageRouting, workerModeOverrides: scope.workerModeOverrides };
+}
+
+async function verifyOtherHosts(paseo: HostSdk, registered: RegisteredHosts, destinationId: string | undefined, sessionId: string) {
+  const peers = registered.filter(host => host.online && (destinationId ? host.id !== destinationId : !host.local));
+  if (!peers.length) return;
+  const results = await Promise.allSettled(peers.map(async host => host.local
+    ? paseo.agents.ref(sessionId).refresh()
+    : withRemoteReadHost(paseo, host.id, (sdk, read) => read(() => sdk.agents.ref(sessionId).refresh()))));
+  if (results.some(result => result.status === "fulfilled" && result.value?.agent)) throw new Error(keyConflict);
+  if (results.some(result => result.status === "rejected")) throw new PlacementError("receipt-check-unavailable");
 }
 
 export class WorkerAssignment {
@@ -116,14 +129,22 @@ export class WorkerAssignment {
         throw new PlacementError("placement-changed");
     };
     if (previous && previous.fingerprint !== fingerprint) throw new Error(keyConflict);
+    const registered = await registeredAssignmentHosts(paseo, initial);
+    const localTarget = {
+      projectId: job.projectId,
+      beforeCreate: async () => {
+        await verifyOtherHosts(paseo, registered, undefined, sessionId);
+        checkScope(ownerScope());
+      },
+    };
 
     let receipt: DispatchReceipt;
     let originServerId: string;
     let limit: number | null;
     let retain = true;
     if (previous) {
-      const [local, ...registered] = await registeredAssignmentHosts(paseo, initial);
-      const destination = previous.remote ? registered.find(host => host.id === previous.location.serverId) : local;
+      const [local, ...remotes] = registered;
+      const destination = previous.remote ? remotes.find(host => host.id === previous.location.serverId) : local;
       if (!local || !destination?.online || !destination.enabled) throw new PlacementError("host-offline");
       const paired = destination.policy.pairs[job.projectId];
       if (!previous.delivered && paired && paired !== previous.sourceProjectId) throw new PlacementError("placement-changed");
@@ -133,11 +154,10 @@ export class WorkerAssignment {
     } else {
       // Keep the original local interface for older callers. Its workspace id
       // belongs to this daemon. Multi-host callers select a project and pin the plan's host.
-      if (!job.expectedHostId && !job.host && !job.platform) return dispatchWorker(paseo, job, scope);
-      const planned = await planWorkerPlacement(paseo, initial, job.projectId, job);
-      if (!planned) return dispatchWorker(paseo, job, scope);
+      if (!job.expectedHostId && !job.host && !job.platform) return dispatchWorker(paseo, job, scope, localTarget);
+      const planned = await planWorkerPlacement(paseo, initial, job.projectId, job, registered);
+      if (!planned) return dispatchWorker(paseo, job, scope, localTarget);
       if (!planned.workspaces.some(workspace => workspace.id === job.workspaceId)) throw new PlacementError("placement-changed");
-      if (planned.serverId && (await paseo.agents.ref(sessionId).refresh())?.agent) throw new Error(keyConflict);
       retain = !planned.localOnly;
       receipt = { fingerprint, projectId: job.projectId, sourceProjectId: planned.sourceProjectId, workspaceId: job.workspaceId,
         remote: !!planned.serverId, location: planned.location, createdAt: new Date().toISOString() };
@@ -160,11 +180,17 @@ export class WorkerAssignment {
             },
           }),
           beforeCreate: async () => {
+            if (!previous) await verifyOtherHosts(paseo, registered, receipt.location.serverId, sessionId);
             if (limit !== null && !(await sdk.agents.ref(sessionId).refresh())?.agent) {
               const running = await countActiveSessions(sdk).catch(() => { throw new PlacementError("load-unavailable"); });
               if (running >= limit) throw new PlacementError("at-capacity");
             }
             if (!retain) { checkScope(ownerScope()); return; }
+            const current = ownerScope();
+            checkScope(current);
+            if (!current.dispatchReceipts[sessionId] && Object.keys(current.dispatchReceipts).length >= maxDispatchReceipts) {
+              await discoverBoardSessions(paseo, this.store, undefined, { reserveSlot: true });
+            }
             this.store.change(current => {
               checkScope(current);
               pruneDispatchReceipts(current);

@@ -20,7 +20,7 @@ export type TaskPlatform = z.output<typeof taskPlatform>;
 export const assignmentReason = z.enum(["explicit-host", "platform", "least-busy", "board-tie", "only-host", "previewed-host"]);
 export const assignmentFailure = z.enum([
   "host-unknown", "host-offline", "platform-offline", "project-unavailable", "at-capacity", "load-unavailable", "placement-changed",
-  "receipt-capacity",
+  "receipt-capacity", "receipt-check-unavailable",
 ]);
 export type AssignmentReason = z.output<typeof assignmentReason>;
 export type AssignmentFailure = z.output<typeof assignmentFailure>;
@@ -39,7 +39,8 @@ export const assignmentFailures: Record<AssignmentFailure, [string, string]> = {
   "at-capacity": ["대상 호스트의 동시 세션 상한에 도달했습니다.", "The eligible hosts have reached their concurrent session limits."],
   "load-unavailable": ["대상 호스트의 진행 중 세션 수를 확인하지 못했습니다.", "Could not check the active session count on the eligible hosts."],
   "placement-changed": ["호스트 또는 워크스페이스 배정이 바뀌었습니다. 미리보기를 다시 확인해 주세요.", "The host or workspace selection changed. Preview the assignment again."],
-  "receipt-capacity": ["보드가 추적할 수 있는 다중 호스트 배정 건수에 도달했습니다.", "The board has reached its limit for tracked multi-host assignments."],
+  "receipt-capacity": ["보드가 추적할 수 있는 다중 호스트 배정 건수에 도달했습니다. 작업을 마친 세션을 보관한 뒤 다시 시도해 주세요.", "The board has reached its limit for tracked multi-host assignments. Archive a completed session and try again."],
+  "receipt-check-unavailable": ["다른 호스트에 같은 요청으로 만든 세션이 있는지 확인하지 못했습니다. 호스트 연결을 확인한 뒤 다시 시도해 주세요.", "Could not check other hosts for a session created by this request. Check the host connections and try again."],
 };
 export const assignmentReasons: Record<AssignmentReason, [string, string]> = {
   "explicit-host": ["지정한 호스트", "Requested host"],
