@@ -20,6 +20,7 @@ import { UsageRouting } from "./usage-routing";
 import { ProviderSettings } from "./providers";
 import { FactReplyControls } from "./fact-reply-controls";
 import { CoordinatorPinControls } from "./coordinator-pin";
+import { CoordinatorReplace } from "./coordinator-replace";
 import { RouteEditor, routeName, wrap } from "./route-editor";
 import { useBoardLanguage } from "./language";
 import { explainEmptyRoute } from "./route-options";
@@ -43,7 +44,6 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
     savePolicy = useRpc(updateRouting);
   const sendWork = useRpc(requestWork),
     sendDigest = useRpc(askDigest);
-  const [confirm, setConfirm] = useState(false);
   const [data, setData] = useState<Operations | null>(null);
   const [busy, setBusy] = useState(false),
     [loading, setLoading] = useState(false);
@@ -97,11 +97,9 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
     if (needsModels) void refresh(true, !settings);
   }, [needsModels, settings, refresh]);
   useEffect(() => {
-    setConfirm(false);
     delivery.current = { work: { payload: "", key: "" }, digest: { payload: "", key: "" } };
   }, [coordinator]);
   useEffect(() => {
-    setConfirm(false);
     setNotice("");
     setError("");
   }, [settings, language]);
@@ -181,7 +179,6 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
       t("운영 세션을 연결했습니다.", "Coordinator session connected."),
     ).then((result) => {
       if (result && live.current) {
-        setConfirm(false);
         if (result.pinFailed) setNotice(t("운영 세션을 연결했습니다. 사이드바 고정은 설정에서 다시 시도해 주세요.", "Coordinator connected. Retry sidebar pinning in Settings."));
       }
     });
@@ -234,19 +231,8 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
       />}
       {feedbackArea === "routing" && feedback}
     </View>
-    {configured && coordinator && <View style={section}>
-      <Text accessibilityRole="header" style={heading}>{t("운영 세션 교체", "Replace coordinator")}</Text>
-      <Text style={{ color: muted }}>{t("새 코디네이터를 만들 때 쓸 모델", "Model for the next coordinator")} · {loading ? t("조회 중…", "Loading\u2026") : routeName(model, t)}</Text>
-      {!loading && model && <Text style={{ color: muted }}>{modeText}</Text>}
-      {!loading && data && !model && <Text style={{ color: muted }}>{explainEmptyRoute(data, "M", t)}</Text>}
-      {confirm && <Text style={{ color }}>{t("새 운영 세션이 준비되면 담당자를 바꿉니다. 진행 중인 작업과 결정 카드는 유지됩니다.", "The new session takes over when ready. Current work and decisions stay on the board.")}</Text>}
-      <View style={wrap}>
-        <Button theme={theme} label={confirm ? t("교체 취소", "Cancel replacement") : t("새 코디네이터로 교체…", "Replace coordinator\u2026")}
-          disabled={busy || (!confirm && (loading || !model || !mode))} onPress={() => setConfirm(!confirm)} />
-        {confirm && <Button theme={theme} label={t("새 세션으로 교체", "Switch to new session")} disabled={busy || loading || !model || !mode} onPress={connect} />}
-      </View>
-      {feedbackArea === "coordinator" && feedback}
-    </View>}
+    {configured && coordinator && <CoordinatorReplace theme={theme} coordinator={coordinator} data={data} loading={loading} disabled={busy}
+      reload={() => void refresh()} onReplaced={refreshBoard} />}
   </View>;
 
   return <View style={section}>

@@ -27,6 +27,9 @@ import { SessionLinks } from "./session-links";
 import { useRemoteRunning, RemoteRunning } from "./remote-running";
 import { BoardHosts } from "./hosts";
 import { OperationsPanel } from "./operations";
+import { ReachExplanation } from "./reach-explanation";
+import { CoordinatorReplaceLoader } from "./coordinator-replace";
+import { blocksReplies, opensSession, readSessionReach } from "../shared/coordinator-reach";
 import { Button, type Theme } from "./controls";
 import { Project } from "./project-kanban";
 import { SessionProgress } from "./session-progress";
@@ -137,7 +140,22 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const pickingProjects = !configured || (!settings && !snapshot?.coordinator);
   const coordinatorId = snapshot ? snapshot.coordinator : readiness?.coordinator;
   const operationsReady = !!snapshot || !!(readiness?.configured && readiness.coordinator && !settings);
-  const openCoordinator = coordinatorId && actions.onOpen ? () => actions.onOpen?.(coordinatorId) : undefined;
+  const reach = snapshot?.coordinatorReach;
+  // Opening a session in an archived workspace shows an empty screen. The banner explains instead.
+  const coordinatorOpens = !reach || opensSession(reach.state);
+  const openCoordinator = coordinatorId && actions.onOpen && coordinatorOpens ? () => actions.onOpen?.(coordinatorId) : undefined;
+  const scroll = useRef<ScrollView>(null);
+  const [replaceOpen, setReplaceOpen] = useState(false);
+  const showBanner = () => scroll.current?.scrollTo({ y: 0, animated: true });
+  function startReplace() {
+    // Settings already ends with the replacement box. On the board it opens under the banner.
+    if (settings) return scroll.current?.scrollToEnd({ animated: true });
+    setReplaceOpen(true);
+    showBanner();
+  }
+  // Cards point to the banner instead of repeating it.
+  const unreachableNote = reach && blocksReplies(reach.state)
+    ? t("코디네이터에 연결할 수 없음 · 위 안내 참고", "Coordinator unreachable · See the notice above") : undefined;
   const [digestLimit, setDigestLimit] = useState(5);
   const [mergeNotice, setMergeNotice] = useState<MergeNotice | null>(null);
 
@@ -192,14 +210,14 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     if (!snapshot) return {};
     const { ownerId, sameSession } = trackedSessionTargets(item, snapshot.coordinator, hostId);
     const open = actions.onOpen;
-    const ownerKnown = ownerId === snapshot.coordinator || snapshot.sessions.some(session => session.id === ownerId);
-    const owner = ownerId && open && (ownerKnown || hostId) ? {
+    const listed = snapshot.sessions.some(session => session.id === ownerId);
+    const owner = ownerId && open && (ownerId === snapshot.coordinator || listed || hostId) ? {
       id: ownerId,
       open: () => open(ownerId),
-      verify: !ownerKnown && hostId ? async () => {
-        const entry = await getPaseoClient(hostId).agents.ref(ownerId).refresh();
-        return entry?.agent.id === ownerId && !entry.agent.internal && !entry.agent.archivedAt;
-      } : undefined,
+      // The coordinator's state comes with the snapshot. A listed session opens as it is. Only an owner
+      // outside the active list is looked up first, so an archived one explains itself.
+      gate: ownerId === snapshot.coordinator ? { known: snapshot.coordinatorReach, onBlocked: showBanner }
+        : !listed && hostId ? { check: () => readSessionReach(getPaseoClient(hostId), ownerId) } : undefined,
     } : undefined;
     return { owner, source: showSource && !(owner && sameSession) ? linkedSession(item) : undefined };
   }
@@ -233,11 +251,15 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             pr.repo === item.mergeTarget?.repo && pr.number === item.mergeTarget.number &&
             (!item.projectId || pr.projectIds.includes(item.projectId)) && (pr.reason !== "ready" || item.matchedPull));
           const route = native && !item.questions.length ? undefined : trackedReplyRoute(item,snapshot!.coordinator,snapshot!.sessions,folders);
+          // A card offers its fallback only when it has no recipient.
+          const reaches = route?.recipientId ?? route?.fallbackId;
           return <TrackedDecisionCard links={recordLinks(item, !native)} key={item.key} item={item} theme={theme} priorityLabel={priority}
             renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined)}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
               : pr && renderPull(pr, pr.projectIds.includes(item.projectId ?? "") ? item.projectId! : pr.projectIds[0], true, mentionsSecurityGate(item), true, rowKey, [item.projectId])}
-            route={route} keepsUnsent={!!rowKey} onResolved={outcome=>{
+            route={route} keepsUnsent={!!rowKey}
+            blockedNote={reaches && reaches === snapshot!.coordinator ? unreachableNote : undefined}
+            onResolved={outcome=>{
               const {status,reason,mode,answer,recipientId}=outcome;
               if (rowKey && mode && (status === "sent" || status === "closed" || status === "already-closed")) {
                 remember({ rowKey, actionKey: recordActionKey({key: item.key, fingerprint: closedRevision(outcome) ?? item.fingerprint}), projectIds: [item.projectId],
@@ -274,7 +296,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   });
   const c = theme.colors;
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: c.surface0 }} contentContainerStyle={{ gap: 20, padding: layout.compact ? 12 : 22 }}>
+    <ScrollView ref={scroll} style={{ flex: 1, backgroundColor: c.surface0 }} contentContainerStyle={{ gap: 20, padding: layout.compact ? 12 : 22 }}>
       <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <View style={{ flex: 1, minWidth: 140, gap: 3 }}>
           <Text style={{ color: c.foreground, fontSize: 22, fontWeight: "700" }} accessibilityRole="header">{settings ? t("코디네이터 보드 설정", "Coordinator board settings") : t("세션별 코디네이터 보드", "Session coordinator board")}</Text>
@@ -288,6 +310,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           setSettings(!settings); setManage(false); setPickSession(false);
         }} />
       </View>
+      {configured && <ReachExplanation banner reach={reach} theme={theme} onReplace={startReplace} />}
+      {replaceOpen && !settings && configured && coordinatorId && <CoordinatorReplaceLoader theme={theme} coordinator={coordinatorId}
+        onReplaced={onRefresh} onClose={() => setReplaceOpen(false)} />}
       {!settings && configured && byProject.size > 0 && <View accessibilityLabel={t("프로젝트 필터","Project filters")}
         style={{flexDirection:"row", flexWrap:"wrap", alignItems:"center", gap:6}}>
         <Button theme={theme} label={t(`전체 ${total}`,`All ${total}`)} selected={!filters.length} onPress={() => setChosenProjects([])} />
@@ -306,6 +331,10 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           {snapshot.projects.map(p => <Button key={p.id} theme={theme} selected={p.selected} disabled={actions.changing}
             label={`${p.selected ? t("관리에서 제외", "Remove") : t("추가", "Add")} · ${p.title}${snapshot.projects.some(x => x.id !== p.id && x.title === p.title) ? " · " + (p.path || p.id) : ""}`}
             onPress={() => onProject(p.id, !p.selected)} />)}
+          {snapshot.projects.filter(p => p.operating).map(p => <Text key={p.id} accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>
+            {t(`‘${p.title}’ 프로젝트는 코디네이터 운영 폴더입니다. Paseo에서 이 프로젝트를 제거하면 워크스페이스와 코디네이터 세션이 함께 보관되어, 코디네이터에게 보내는 요청과 답장이 전달되지 않습니다. Paseo 프로젝트 목록에 그대로 두세요.`,
+              `“${p.title}” is the coordinator's operating folder. Removing this project in Paseo archives its workspace and the coordinator session with it, so requests and replies stop reaching the coordinator. Keep it in your Paseo project list.`)}
+          </Text>)}
         </>}
       </View>}
       {settings && snapshot && configured && <SessionLinks projects={snapshot.projects} theme={theme} onChange={onRefresh} />}
@@ -315,7 +344,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         <BoardHosts current={{ id: hostId, label: hostLabel }} settings={false} theme={theme} open={onOpenHostSession} />
       </>}
       <OperationsPanel settings={operationsReady && settings} theme={theme} coordinator={operationsReady ? coordinatorId ?? null : null} configured={operationsReady && !!configured}
-        refreshBoard={onRefresh} openCoordinator={actions.onOpen} />
+        refreshBoard={onRefresh} openCoordinator={coordinatorOpens ? actions.onOpen : undefined} />
       {settings && snapshot && actions.onCoordinator && <View style={{ gap: 8 }}>
         <Button theme={theme} label={pickSession ? t("기존 세션 목록 닫기", "Close session list") : t("기존 세션에서 코디네이터 지정", "Choose an existing coordinator session")} onPress={() => setPickSession(!pickSession)} />
         {pickSession && <>

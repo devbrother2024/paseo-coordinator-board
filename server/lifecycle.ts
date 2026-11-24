@@ -95,8 +95,10 @@ export class CoordinatorLifecycle {
     verifyRoute?.(scope);
     if (!scope.projects.length) throw new Error("먼저 관리할 프로젝트를 선택해 주세요.");
     const current = scope.coordinator;
+    // A repeated request asks for the same session again. A stale screen asking for another model is refused below.
     const repeated = current !== null && current !== expectedCoordinator
-      && scope.createdCoordinator?.id === current && scope.createdCoordinator.previous === expectedCoordinator;
+      && scope.createdCoordinator?.id === current && scope.createdCoordinator.previous === expectedCoordinator
+      && sameConfig(scope.createdCoordinator.config, config);
     if (current !== expectedCoordinator && !repeated) throw new Error(stale);
     if (current && (!replace || repeated)) {
       const existing = (await paseo.agents.ref(current).refresh())?.agent;

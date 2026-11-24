@@ -29,7 +29,7 @@ export type TrackedOutcome = {
 // `fingerprint` is the revision on screen at the attempt.
 type Outcome = TrackedOutcome & { fingerprint: string };
 type Props = {
-  item: TrackedDecision; theme: Theme; priorityLabel?: string; route?: TrackedReplyRoute; links: TrackedSessionLinks; children?: ReactNode; pull?: ReactNode;
+  item: TrackedDecision; theme: Theme; priorityLabel?: string; route?: TrackedReplyRoute; blockedNote?: string; links: TrackedSessionLinks; children?: ReactNode; pull?: ReactNode;
   renderClarification?: (onDraftChange:(active:boolean) => void) => ReactNode;
   // The digest row keeps an unsent reply as a receipt after the card leaves the list.
   keepsUnsent?: boolean;
@@ -85,7 +85,7 @@ function Lines({ title, lines, theme }: { title: string; lines: readonly string[
 }
 
 // Keyed by card, not revision, so a display-only update keeps the draft, photos and focus.
-export function TrackedDecisionCard({ item, theme, links, route, onResolved, children, pull, renderClarification, priorityLabel, keepsUnsent }: Props) {
+export function TrackedDecisionCard({ item, theme, links, route, blockedNote, onResolved, children, pull, renderClarification, priorityLabel, keepsUnsent }: Props) {
   const { t } = useBoardLanguage();
   const resolve = useRpc(resolveTrackedDecision);
   const cancel = useRpc(cancelQueuedReply);
@@ -168,7 +168,7 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
   useEffect(() => { if (!hasAnswerDraft) setConfirmedBasis(basis); }, [hasAnswerDraft, basis]);
   const basisChanged = hasAnswerDraft && basis !== confirmedBasis;
   const answerDisabled = busy || attachments.blocked || !hasAnswer || outstanding || tooLong || basisChanged || awaitingRevision || orphaned.length > 0;
-  const sendReply = { disabled: !recipientId || !recordActions || answerDisabled || changedOwner, onPress: () => void acknowledge("send") };
+  const sendReply = { disabled: !recipientId || !recordActions || answerDisabled || changedOwner || !!blockedNote, onPress: () => void acknowledge("send") };
   const inputFocus = useDecisionInteraction(!queue && !isClosed && !needsRefresh &&
     (hasDraft || editedReply !== null || Object.values(typed).some(value => value !== undefined) ||
       attachments.blocked || busy || confirming || Object.values(skipped).some(Boolean)));
@@ -261,7 +261,7 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
       return (blocked === "closed" ? t(name + " 세션이 종료되어 보낼 수 없습니다.", name + " session has ended, so the reply cannot be sent.")
         : t(name + " 세션이 오류 상태라 보낼 수 없습니다.", name + " session is in an error state, so the reply cannot be sent.")) + " " + save;
     }
-    const next = fallbackId ? t(fallbackName + "에게 대신 보내거나 보드에만 저장할 수 있습니다.", "You can send it to the " + fallbackName + " instead, or save it on the board.") : save;
+    const next = fallbackId && !blockedNote ? t(fallbackName + "에게 대신 보내거나 보드에만 저장할 수 있습니다.", "You can send it to the " + fallbackName + " instead, or save it on the board.") : save;
     return t(blocks[blocked][0], blocks[blocked][1]) + " " + next;
   }
   function nextStep() {
@@ -382,10 +382,12 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
         {((changedOwner && recipientId) || (fallbackOwnerChanged && !recipientId && fallbackId)) &&
           <Button theme={theme} label={t("변경된 운영 코디네이터 확인", "Confirm new ledger owner")} onPress={() => setConfirmedOwner(item.sourceCoordinatorId)} />}
         {outstanding && <Text style={{ color: c.foregroundMuted }}>{t("각 질문에 답하거나 건너뛰기를 선택하세요.", "Answer or explicitly skip each question.")}</Text>}
+        {blockedNote && (recipientId || fallbackId) && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning, fontSize: 12 }}>{blockedNote}</Text>}
         <View style={wrap}>
           {recipientId && recordActions && <SendButton theme={theme} {...named(sendLabel)} send={sendReply} selected={!sendReply.disabled} />}
           {!recipientId && fallbackId && recordActions && <Button theme={theme} {...named(t(fallbackName + "에게 대신 보내기", "Send to " + fallbackName + " instead"))}
-            selected={!answerDisabled && !fallbackOwnerChanged} disabled={answerDisabled || fallbackOwnerChanged} onPress={() => void acknowledge("fallback")} />}
+            selected={!answerDisabled && !fallbackOwnerChanged && !blockedNote} disabled={answerDisabled || fallbackOwnerChanged || !!blockedNote}
+            onPress={() => void acknowledge("fallback")} />}
           {recordActions && (!recipientId || hasAnswer) && <Button theme={theme} {...named(t("보드에만 저장", "Save on board only"))}
             selected={!recipientId && !fallbackId && !answerDisabled} disabled={answerDisabled} onPress={() => void acknowledge("save")} />}
           {humanCheck && !hasDraft && (Platform.OS === "web" ? <label style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: 5, fontSize: 13, color: c.foregroundMuted }}>
