@@ -88,8 +88,10 @@ export class ProjectRootReader {
     const read = (async () => {
       const { path, identity } = request;
       const entry = identity ? await disk.stat(path) : undefined;
-      const rootKey = entry?.isDirectory() && entry.ino !== 0n ? `${entry.dev}:${entry.ino}` : undefined;
       const canonical = await disk.realpath(path).catch(() => undefined);
+      // The file numbers keep apart two folders whose names differ only in letter case on a case-sensitive disk.
+      // The resolved path keeps folders apart on volumes whose file numbers are not unique, such as Windows ReFS.
+      const rootKey = entry?.isDirectory() && entry.ino !== 0n && canonical ? `${entry.dev}:${entry.ino}:${canonical.toLowerCase()}` : undefined;
       return { rootKey, canonical };
     })().catch((): PathDetails => ({})).then(value => {
       this.running.delete(id);
