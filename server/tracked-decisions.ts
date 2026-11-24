@@ -38,6 +38,9 @@ type Receipt = z.output<typeof receipt>;
 type PendingDelivery = { ready:boolean; send:(answer:string,messageId:string,images?:WorkImage[])=>Promise<void>; accepted:(messageId:string,matches:(text:string)=>boolean)=>Promise<boolean>; stillCurrent:()=>boolean; redirectable?:()=>boolean };
 export type BlockedDelivery = { blocked:TrackedReplyReason };
 type Prepared = PendingDelivery | BlockedDelivery | null;
+// Looks for a reply the board already sent in the conversation of the session that took it. It never sends.
+type SentCheck = (recipientId:string,messageId:string,matches:(text:string)=>boolean)=>Promise<boolean>;
+const notChecked:SentCheck = async () => false;
 type Attempt = z.output<typeof resolveTrackedDecision.output> & {queueId?:string};
 const changed = (reason?:TrackedReplyReason):Attempt => ({status:"changed", ...(reason ? {reason} : {})});
 type AdditionalSources = unknown[] | {items:unknown[];partial:boolean};
@@ -57,8 +60,12 @@ function sameAnswer(recorded:string|undefined,answer:string|undefined,item:Track
   return (recorded ?? "")===(answer ?? "") || (recorded ?? "")===legacyTrackedAnswer(item,answer ?? "");
 }
 
+function sameContent(receipt:Receipt,input:TrackedResolution,photos:readonly PhotoReference[],item:TrackedDecisionInput) {
+  return sameAnswer(receipt.answer,input.answer,item) && JSON.stringify(receipt.photos ?? [])===JSON.stringify(photos);
+}
+
 function sameReply(receipt:Receipt,input:TrackedResolution,photos:readonly PhotoReference[],item:TrackedDecisionInput) {
-  return receipt.recipientId===input.recipientId && sameAnswer(receipt.answer,input.answer,item) && JSON.stringify(receipt.photos ?? [])===JSON.stringify(photos);
+  return receipt.recipientId===input.recipientId && sameContent(receipt,input,photos,item);
 }
 
 // The recorded message is matched by its hash, which still holds after the card has changed.
@@ -283,7 +290,7 @@ export class TrackedDecisionStore {
     return true;
   }
 
-  async deliver(input:TrackedResolution, getScope:()=>Set<string>, prepare:(row:RoutedTrackedDecision)=>Promise<Prepared>, queuedId?:string):Promise<Attempt> {
+  async deliver(input:TrackedResolution, getScope:()=>Set<string>, prepare:(row:RoutedTrackedDecision)=>Promise<Prepared>, queuedId?:string, check=notChecked):Promise<Attempt> {
     const selected=getScope();
     if (!selected.size || (input.projectId && !selected.has(input.projectId))) return {status:"out-of-scope"};
     const key=trackedKey(input), version=receiptKey(key,input.fingerprint);
@@ -296,7 +303,7 @@ export class TrackedDecisionStore {
     const {row,unavailable}=current();
     if (unavailable) return {status:"unavailable"};
     if (!row) return changed("removed");
-    if (row.fingerprint!==input.fingerprint) return this.confirmEarlier(input,version,row.item,prepare);
+    if (row.fingerprint!==input.fingerprint) return this.confirmEarlier(input,version,row.item,check);
     if (!validQuestions(row.item,input)) return changed("revised");
     if ((!input.answer?.trim() && !input.images?.length) || !input.recipientId) return changed();
     const fallback=input.route==="coordinator";
@@ -319,9 +326,16 @@ export class TrackedDecisionStore {
     if (queuedId && (!previous?.queue || previous.queue.stopped || previous.messageId!==queuedId)) return changed("queue-stopped");
     if (previous?.queue && previous.queue.owner!==row.item.sourceCoordinatorId) return changed("owner-changed");
     const photos=describePhotos(input.images);
-    // Nothing new goes out while a reply to another revision of this card is still unconfirmed.
+    // Nothing new goes out while a reply to another revision of this card is still unconfirmed. That reply is looked for
+    // with the session that took it, even after the card moved to another session.
     const waiting=previous ? undefined : [...records].find(([,record])=>record.key===key && record.fingerprint!==input.fingerprint && record.pending && !record.queue);
-    if (waiting) return sameReply(waiting[1],input,photos,row.item) ? this.confirm(waiting[0],waiting[1],target) : changed("conflict");
+    if (waiting) {
+      const [earlierVersion,earlier]=waiting;
+      const checked=await this.confirm(earlierVersion,earlier,check);
+      if (checked.status!=="sent") return sameReply(earlier,input,photos,row.item) ? checked : changed("conflict");
+      // Once it arrived, the same reply closes only its own revision. A different reply answers the card as it is now.
+      return sameContent(earlier,input,photos,row.item) ? checked : this.deliver(input,getScope,prepare,queuedId,check);
+    }
     if (previous && !sameReply(previous,input,photos,row.item)) return changed("conflict");
     // A retry repeats the recorded reply as it was written then.
     const text=trackedReplyMessage(row.item,previous ? {...input,answer:previous.answer} : input);
@@ -367,17 +381,18 @@ export class TrackedDecisionStore {
   }
 
   // Retrying an unconfirmed reply after its card changed only checks that reply. It is never sent again.
-  private async confirmEarlier(input:TrackedResolution, version:string, item:RoutedTrackedDecision, prepare:(row:RoutedTrackedDecision)=>Promise<Prepared>):Promise<Attempt> {
+  private async confirmEarlier(input:TrackedResolution, version:string, item:RoutedTrackedDecision, check:SentCheck):Promise<Attempt> {
     const earlier=this.recorded()?.get(version);
     if (!input.recipientId || !earlier || earlier.queue || !sameReply(earlier,input,describePhotos(input.images),item)) return changed("revised");
-    return earlier.pending ? this.confirm(version,earlier,await prepare(item)) : {status:"sent",revision:earlier.fingerprint};
+    return earlier.pending ? this.confirm(version,earlier,check) : {status:"sent",revision:earlier.fingerprint};
   }
 
-  // Confirms a reply sent for an earlier revision of the card. Only that revision closes.
-  private async confirm(version:string, receipt:Receipt, target:Prepared):Promise<Attempt> {
-    const {messageId}=receipt;
-    if (!messageId || !target || "blocked" in target) return {status:"unconfirmed"};
-    try { if (!(await target.accepted(messageId,sentAs(receipt)))) return {status:"unconfirmed"}; }
+  // Confirms a reply sent for an earlier revision of the card with the session that took it, wherever the card goes now.
+  // Only that revision closes.
+  private async confirm(version:string, receipt:Receipt, check:SentCheck):Promise<Attempt> {
+    const {messageId,recipientId}=receipt;
+    if (!messageId || !recipientId) return {status:"unconfirmed"};
+    try { if (!(await check(recipientId,messageId,sentAs(receipt)))) return {status:"unconfirmed"}; }
     catch { return {status:"unconfirmed"}; }
     const latest=this.recorded(), recorded=latest?.get(version);
     if (!latest || !recorded || recorded.messageId!==messageId) return {status:"unconfirmed"};
@@ -471,7 +486,8 @@ export class TrackedDecisionStore {
   }
 
   register(server:PluginServerContext,getScope:()=>Set<string>,onChange?:()=>void,
-    prepare?: (row:RoutedTrackedDecision, target:string, ctx:import("@getpaseo/plugin/server").PluginHandlerContext, route?:TrackedResolution["route"])=>Promise<Prepared>) {
+    prepare?: (row:RoutedTrackedDecision, target:string, ctx:import("@getpaseo/plugin/server").PluginHandlerContext, route?:TrackedResolution["route"])=>Promise<Prepared>,
+    sentTo?: (ctx:import("@getpaseo/plugin/server").PluginHandlerContext)=>SentCheck) {
     server.handle(cancelQueuedReply,input=>{
       const canceled=this.cancelQueued(input,getScope());
       if (canceled) onChange?.();
@@ -480,7 +496,7 @@ export class TrackedDecisionStore {
     server.handle(readReplyPhoto,({key,index})=>({image:this.readPhoto(key,index,getScope())}));
     server.handle(resolveTrackedDecision,async (input,ctx)=>{
       const result=input.recipientId && prepare
-        ? await this.deliver(input,getScope,row=>prepare(row,input.recipientId!,ctx,input.route))
+        ? await this.deliver(input,getScope,row=>prepare(row,input.recipientId!,ctx,input.route),undefined,sentTo?.(ctx))
         : this.resolve(input,getScope);
       // Close the window where the ready event fired after the live check but
       // before the queue was persisted. Re-read the receipt using its same ID.

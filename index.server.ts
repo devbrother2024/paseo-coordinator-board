@@ -247,6 +247,12 @@ export default function contribute(server: PluginServerContext) {
       return {};
     }
   }
+  // Looks for a reply the board sent in the recent conversation of the session that took it.
+  async function arrived(handle: ReturnType<PluginHandlerContext["paseo"]["agents"]["ref"]>, messageId: string, matches: (text: string) => boolean) {
+    const page=await handle.timeline.refetch({direction:"tail",projection:"projected",limit:128});
+    return !page.error && !page.gap && !page.staleCursor && page.entries.some(({item:m})=>m.type==="user_message" &&
+      (m.messageId===messageId || m.clientMessageId===messageId) && matches(m.text));
+  }
   const resumeReplies = tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, async (item,targetId,{paseo},route) => {
     let rows = await discoverSessions(paseo);
     // Only a card's own local session may sit in another project on the same folder.
@@ -283,14 +289,10 @@ export default function contribute(server: PluginServerContext) {
       send:async (answer,messageId,images)=>{
         await handle.send(answer,{messageId,activeTurnBehavior:"steer",...(images?.length ? {images} : {})});
       },
-      accepted:async (messageId,matches)=>{
-        const page=await handle.timeline.refetch({direction:"tail",projection:"projected",limit:128});
-        return !page.error && !page.gap && !page.staleCursor && page.entries.some(({item:m})=>m.type==="user_message" &&
-          (m.messageId===messageId || m.clientMessageId===messageId) && matches(m.text));
-      },
+      accepted:(messageId,matches)=>arrived(handle,messageId,matches),
       ready:canReceiveBoardInput(agent,owned || fallback || targetId===prefs.read().coordinator),
     };
-  });
+  }, ({paseo}) => (recipientId,messageId,matches) => arrived(paseo.agents.ref(recipientId),messageId,matches));
   server.handle(boardSnapshot, (input, { paseo }) => reads.read(() => buildSnapshot(paseo), input.fresh));
   server.handle(boardDecisionCount, async (_input, { paseo }) => ({
     count: await reads.count(() => buildSnapshot(paseo)),

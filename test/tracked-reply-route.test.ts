@@ -154,6 +154,38 @@ test("a reply recorded in the older form is still confirmed by the same answers,
   expect(f.sent[0].text.endsWith("\n\n" + older)).toBe(true);
 });
 
+test("a reply left unconfirmed is checked with the session that took it after the card moves to another session", async () => {
+  const ids = ["same", "stale", "other"];
+  const f = await fixture(ids.map(id => card(id, {where: "session", agentId: "worker-a"})));
+  for (const id of ["worker-a", "worker-b"]) f.agents.set(id, {project: "studio", status: "idle"});
+  const before = {};
+  for (const id of ids) before[id] = (await f.find(id)).item;
+  f.lost.add("worker-a");
+  for (const id of ids) expect(await f.reply(before[id], {recipientId: "worker-a"})).toEqual({status: "unconfirmed"});
+  // The ledger hands the cards to another session, and the first one leaves the board.
+  for (const item of f.ledgerItems.items) item.agentId = "worker-b";
+  f.writeLedger();
+  f.hidden.add("worker-a");
+  const after = {};
+  for (const id of ids) after[id] = await f.find(id);
+  expect(after["same"].route.recipientId).toBe("worker-b");
+  expect(after["same"].item.fingerprint).not.toBe(before["same"].fingerprint);
+  // Until the first reply is found, nothing new goes out to either session.
+  expect(await f.reply(after["same"].item, {recipientId: "worker-b"})).toEqual({status: "changed", reason: "conflict"});
+  expect(await f.reply(before["stale"], {recipientId: "worker-a"})).toEqual({status: "unconfirmed"});
+  expect(f.sent).toHaveLength(3);
+  f.history.visible = true;
+  // The same reply closes only the revision it answered, and the card stays open for the new session.
+  expect(await f.reply(after["same"].item, {recipientId: "worker-b"})).toEqual({status: "sent", revision: before["same"].fingerprint});
+  expect((await f.find("same")).item?.fingerprint).toBe(after["same"].item.fingerprint);
+  // A screen that still shows the first session confirms it the same way.
+  expect(await f.reply(before["stale"], {recipientId: "worker-a"})).toEqual({status: "sent", revision: before["stale"].fingerprint});
+  expect(f.sent).toHaveLength(3);
+  // Once the first reply is found, a different reply answers the card as it is now.
+  expect(await f.reply(after["other"].item, {recipientId: "worker-b", answer: "Keep it"})).toEqual({status: "sent"});
+  expect(f.sent.slice(3).map(m => [m.id, m.text.endsWith("\n\nKeep it")])).toEqual([["worker-b", true]]);
+});
+
 test("an edit between listing and sending says revised, and the same draft sends once the board refreshes", async () => {
   const f = await fixture([card("icon", {where: "manager", recommend: ["Red"], why: ["First check"]})], "general");
   f.createdBy("general");
