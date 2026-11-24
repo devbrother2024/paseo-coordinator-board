@@ -1,10 +1,58 @@
 import type { TrackedDecision } from "../shared/tracked-decisions";
+import { matchesProject } from "./history-sessions";
 
-export function trackedSessionTargets(item: TrackedDecision, coordinator: string | null, hostId?: string) {
+export function trackedSessionOwner(item: TrackedDecision, coordinator: string | null) {
   // Older board-owned records predate the explicit ledger owner.
-  const ownerId = item.sourceCoordinatorId === undefined && (item.where === "manager" || item.where === "human")
+  return item.sourceCoordinatorId === undefined && (item.where === "manager" || item.where === "human")
     ? coordinator : item.sourceCoordinatorId;
-  const sourceId = item.matchedSessionId || item.sessionId;
-  const sameSession = !!ownerId && ownerId === sourceId && (!item.sessionHost || item.sessionHost === hostId);
-  return { ownerId, sameSession };
+}
+
+export type WorkSessionHost = { serverId: string; label: string; registeredLabel: string };
+export type RemoteWorkSession = { kind: "remote"; id: string; hosts: readonly WorkSessionHost[] };
+export type WorkSessionTarget = RemoteWorkSession | { kind: "local"; id: string } | { kind: "unavailable" };
+type WorkSessionDirectory = {
+  hostId?: string; hostLabel: string; sessions: readonly { id: string; projectId: string }[];
+  hosts: readonly WorkSessionHost[]; repos: ReadonlyMap<string, string>;
+};
+
+export function trackedWorkSession(item: TrackedDecision, directory: WorkSessionDirectory): WorkSessionTarget | undefined {
+  const id = item.matchedSessionId || item.sessionId;
+  if (!id) return;
+  const { hostId, hostLabel, sessions, hosts, repos } = directory;
+  const hint = item.sessionHost;
+  const exact = hosts.find(host => host.serverId === hint);
+  const localHint = !hint || hint === hostId || (!exact && hint.toLowerCase() === hostLabel.toLowerCase());
+  if (localHint && sessions.some(row => row.id === id &&
+    (item.projectId === null || row.id === item.matchedSessionId || matchesProject(row.projectId, item.projectId, repos)))) {
+    return { kind: "local", id };
+  }
+  const candidates = exact ? [exact]
+    : localHint ? hosts : hosts.filter(host => host.registeredLabel.toLowerCase() === hint?.toLowerCase());
+  return candidates.length ? { kind: "remote", id, hosts: candidates } : { kind: "unavailable" };
+}
+
+export type WorkSessionLookup = (host: string, id: string) => Promise<boolean>;
+type WorkSessionReader = { agents: { ref(id: string): {
+  refresh(): Promise<{ agent: { id: string; internal?: boolean | null; archivedAt?: string | null } } | null>;
+} } };
+
+export function createRemoteWorkSessionLookup(client: (host: string) => WorkSessionReader): WorkSessionLookup {
+  const cache = new Map<string, Promise<boolean>>();
+  return (host, id) => {
+    const key = JSON.stringify([host, id]);
+    const existing = cache.get(key);
+    if (existing) return existing;
+    const next = Promise.resolve().then(async () => {
+      const result = await client(host).agents.ref(id).refresh();
+      return !!result && result.agent.id === id && !result.agent.internal && !result.agent.archivedAt;
+    }).catch(() => false);
+    cache.set(key, next);
+    return next;
+  };
+}
+
+export async function findRemoteWorkSession(source: RemoteWorkSession, lookup: WorkSessionLookup) {
+  const found = await Promise.all(source.hosts.map(host => lookup(host.serverId, source.id)));
+  const matches = source.hosts.filter((_, index) => found[index]);
+  return matches.length === 1 ? matches[0] : undefined;
 }

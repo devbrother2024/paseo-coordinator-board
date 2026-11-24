@@ -47,6 +47,7 @@ export const setupCoordinator = defineRpc({
     expectedCoordinator: z.string().nullable(),
     expectedRoute: routeChoiceSchema,
     expectedModeId: z.string().min(1).optional(),
+    language: z.enum(["ko", "en"]).optional(),
     // Present when the person picked expectedRoute themselves: for this replacement only, or also as the next default.
     selection: z.enum(["once", "default"]).optional(),
   }),
