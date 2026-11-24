@@ -24,6 +24,8 @@ import { RouteEditor, routeName, wrap } from "./route-editor";
 import { useBoardLanguage } from "./language";
 import { explainEmptyRoute } from "./route-options";
 import { DigestFeedback, type CoordinatorAction, type DigestRequest } from "./digest-request";
+import { WorkPlacement } from "./dispatch-hosts";
+import type { TaskPlatform } from "../shared/host-assignment";
 
 type Props = {
   theme: Theme;
@@ -50,6 +52,8 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   const [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [text, setText] = useState("");
+  const [platform, setPlatform] = useState<TaskPlatform>();
+  const [host, setHost] = useState<string>();
   const [editorExpanded, setEditorExpanded] = useState(false);
   const { height: windowHeight } = useWindowDimensions();
   const photoDraft = usePhotoDraft();
@@ -97,6 +101,8 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   }, [needsModels, settings, refresh]);
   useEffect(() => {
     delivery.current = { payload: "", key: "" };
+    setPlatform(undefined);
+    setHost(undefined);
   }, [coordinator]);
   useEffect(() => {
     setNotice("");
@@ -129,14 +135,14 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
     const images = photoDraft.latest.current;
     const message = text.trim();
     if (!message && !images.length) return;
-    const payload = JSON.stringify([coordinator, message, images.map(photo => photo.id)]);
+    const payload = JSON.stringify([coordinator, message, images.map(photo => photo.id), platform, host]);
     if (delivery.current.payload !== payload) delivery.current = {
       payload,
       key: "board-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2),
     };
     const receipt = await act(
       async () => {
-        const result = await sendWork({ coordinator, requestKey: delivery.current.key, text: message,
+        const result = await sendWork({ coordinator, requestKey: delivery.current.key, text: message, platform, host,
           ...(images.length > 0 && { images: images.map(photo => photo.image) }) });
         if (!result.ok) throw Error(t("전송을 확인하지 못했습니다. 다시 시도해 주세요.", "Delivery was not confirmed. Please retry."));
         return result;
@@ -148,6 +154,8 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
     if (receipt && live.current) {
       delivery.current = { payload: "", key: "" };
       setText("");
+      setPlatform(undefined);
+      setHost(undefined);
       setEditorExpanded(false);
       photoDraft.clear();
     }
@@ -253,6 +261,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
           onFocus={() => setInputFocused(true)} onBlur={() => setInputFocused(false)}
           editable={!busy} multiline maxLength={24000} onChangeText={setText} />
       </PhotoComposer>
+      <WorkPlacement theme={theme} platform={platform} host={host} setPlatform={setPlatform} setHost={setHost} disabled={busy} />
       <View style={wrap}>
         <SendButton theme={theme} label={t("코디네이터에 요청 보내기", "Send to coordinator")} send={sendRequest} selected={!sendRequest.disabled} />
       </View>

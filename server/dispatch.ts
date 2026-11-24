@@ -6,7 +6,8 @@ import {
   type CatalogModel, type DispatchInput, type ProviderEntry, type RouteChoice, type RoutePolicy, type WorkspaceChoice,
 } from "../shared/dispatch";
 import { readAccountUsage } from "./usage-routing";
-import { readPages } from "./discovery";
+import { canReceiveBoardInput, readPages } from "./discovery";
+import { workspacePathIsAbsolute } from "../shared/host-assignment";
 
 export { resolveRoute, validateCandidates } from "../shared/dispatch";
 
@@ -138,7 +139,7 @@ export async function readManagedWorkspaces(paseo: Pick<Sdk, "workspaces">, proj
 }
 
 // A caller-chosen UUID keeps old hosts from silently falling back to unkeyed create-and-prompt.
-function creationUuid(key: string, kind: "agent" | "prompt") {
+export function creationUuid(key: string, kind: "agent" | "prompt") {
   const bytes = createHash("sha256").update("coordinator-board/dispatch/" + kind + "/" + key).digest();
   bytes[6] = (bytes[6] & 15) | 128;
   bytes[8] = (bytes[8] & 63) | 128;
@@ -149,8 +150,18 @@ function creationUuid(key: string, kind: "agent" | "prompt") {
 const fingerprintKey = "coordinator-board/dispatch-intent";
 const parentKey = "coordinator-board/dispatch-parent";
 const modeKey = "coordinator-board/dispatch-mode";
+export const assignmentReceiptKey = "coordinator-board/assignment-receipt";
 
-export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | "providers">, request: DispatchInput, getScope: () => DispatchScope) {
+type WorkerTarget = {
+  projectId: string;
+  parentServerId?: string;
+  receiptFingerprint?: string;
+  beforeCreate: () => Promise<void>;
+  deliver?: (worker: Awaited<ReturnType<Sdk["agents"]["create"]>>, parent: string, messageId: string, text: string) => Promise<void>;
+};
+
+export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | "providers">, request: DispatchInput,
+  getScope: () => DispatchScope, placement?: WorkerTarget) {
   const input = dispatchInputSchema.parse(request);
   const scopeForProject = () => {
     const state = getScope();
@@ -166,7 +177,8 @@ export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | 
   ])).digest("hex");
   const workspace = paseo.workspaces.ref(input.workspaceId);
   const [target, receipt] = await Promise.all([workspace.refresh(), paseo.agents.ref(sessionId).refresh()]);
-  if (!target || target.id !== input.workspaceId || target.projectId !== input.projectId || !usable(target)) {
+  if (!target || target.id !== input.workspaceId || target.projectId !== (placement?.projectId ?? input.projectId) || !usable(target) ||
+      (placement?.parentServerId && !workspacePathIsAbsolute(target.workspaceDirectory!))) {
     throw new Error("선택한 프로젝트에서 작업 가능한 워크스페이스를 다시 골라 주세요.");
   }
   let parent: string;
@@ -174,7 +186,9 @@ export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | 
   const route = input.expectedRoute;
   if (receipt) {
     scopeForProject();
-    if (receipt.agent.id !== sessionId || receipt.agent.workspaceId !== target.id || receipt.agent.metadata?.[fingerprintKey] !== fingerprint) {
+    if (receipt.agent.id !== sessionId || receipt.agent.workspaceId !== target.id || receipt.agent.archivedAt ||
+        receipt.agent.internal || receipt.agent.metadata?.[fingerprintKey] !== fingerprint ||
+        (placement?.receiptFingerprint && receipt.agent.metadata?.[assignmentReceiptKey] !== placement.receiptFingerprint)) {
       throw new Error("이미 다른 작업에 사용한 요청입니다. 새 작업으로 시작해 주세요.");
     }
     const previousParent = receipt.agent.metadata[parentKey];
@@ -207,14 +221,18 @@ export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | 
   }
   if (input.expectedModeId !== undefined && input.expectedModeId !== modeId)
     throw new Error("작업 권한이 배정 미리보기와 다릅니다. 호스트 설정을 다시 확인해 주세요.");
+  await placement?.beforeCreate();
+  const messageId = creationUuid(input.requestKey, "prompt");
   const worker = await workspace.agents.create({
     agentId: sessionId, idempotencyKey: "coordinator-board/worker/" + input.requestKey,
-    clientMessageId: creationUuid(input.requestKey, "prompt"),
-    parent,
-    config: { ...configForRoute(route), ...(modeId && { modeId }) }, title: input.title, prompt: input.prompt,
+    ...(!placement?.deliver && { clientMessageId: messageId, prompt: input.prompt }),
+    parent: placement?.parentServerId ? { serverId: placement.parentServerId, agentId: parent } : parent,
+    config: { ...configForRoute(route), ...(modeId && { modeId }) }, title: input.title,
     metadata: {
-      [reportingKey]: true, [fingerprintKey]: fingerprint, "coordinator-board/grade": input.grade,
+      ...(!placement?.parentServerId && { [reportingKey]: true }),
+      [fingerprintKey]: fingerprint, "coordinator-board/grade": input.grade,
       [parentKey]: parent, ...(modeId && { [modeKey]: modeId }),
+      ...(placement?.receiptFingerprint && { [assignmentReceiptKey]: placement.receiptFingerprint }),
     },
   });
   if (worker.id !== sessionId || worker.workspaceId !== target.id) throw new Error("생성된 세션과 대상 워크스페이스가 일치하는지 확인해 주세요.");
@@ -223,5 +241,23 @@ export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | 
     if (agent?.currentModeId !== modeId)
       throw new Error(`작업 세션 ${sessionId}을 만들었지만 요청한 권한 '${modeId}'를 확인할 수 없습니다. 기존 세션에서 권한을 확인하세요.`);
   }
+  if (placement?.deliver) await placement.deliver(worker, parent, messageId, input.prompt);
   return { sessionId, route, ...(modeId && { modeId }) };
+}
+
+export async function sendRemoteAssignment(paseo: Pick<Sdk, "agents">, sessionId: string, sourceAgentId: string,
+  sourceAgentServerId: string, messageId: string, text: string, checkScope: () => void) {
+  const worker = paseo.agents.ref(sessionId);
+  const timeline = await worker.timeline.refetch({ direction: "tail", projection: "projected", limit: 48 });
+  if (timeline.error || timeline.gap || timeline.staleCursor)
+    throw new Error("원격 작업 지시의 전송 여부를 확인하지 못했습니다. / Could not confirm delivery of the remote work request.");
+  if (timeline.entries.some(({ item }) => item.type === "tool_call" &&
+    item.callId === "paseo-agent-message:" + messageId && item.agentMessage?.event === "message" &&
+    item.agentMessage.sender.id === sourceAgentId && item.agentMessage.text === text)) return;
+  const agent = (await worker.refresh())?.agent;
+  if (!agent || agent.id !== sessionId || agent.archivedAt || agent.internal || !canReceiveBoardInput(agent, false)) {
+    throw new Error("원격 세션이 작업 지시를 받을 수 있는 상태인지 확인해 주세요. / Check whether the remote session is ready for a work request.");
+  }
+  checkScope();
+  await worker.send(text, { sourceAgentId, sourceAgentServerId, messageId, activeTurnBehavior: "steer" });
 }

@@ -30,6 +30,8 @@ import { BoardFacts } from "./server/board-facts";
 import { ProjectRootReader } from "./server/project-root";
 import { recordDigestCompletion } from "./server/digest";
 import { coordinatorReach, operatingProjects } from "./server/coordinator-reach";
+import { discoverBoardSessions } from "./server/board-sessions";
+import { withAssignmentHost } from "./server/host-assignment";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(hostVisibility);
@@ -43,7 +45,7 @@ export default function contribute(server: PluginServerContext) {
   const facts = new BoardFacts(prefs, notes, reader);
   facts.register(server);
   const operatingFolder = join(home, "plugin-workspaces", "coordinator-board");
-  const operations = createOperations(prefs, operatingFolder, facts);
+  const operations = createOperations(prefs, operatingFolder, facts, () => invalidateCount());
   operations.register(server);
   registerSessionLinks(server, prefs);
   const decisions = new DecisionSender(prefs, notes, reader);
@@ -72,7 +74,7 @@ export default function contribute(server: PluginServerContext) {
     const catalogRead = paseo.projects.list();
     const [sessionView, fetched] = await Promise.all([
       (async () => {
-        const [catalog, rows] = await Promise.all([catalogRead, discoverSessions(paseo)]);
+        const [catalog, rows] = await Promise.all([catalogRead, discoverBoardSessions(paseo, prefs.read())]);
         return buildSessionView(paseo, catalog, rows);
       })(),
       catalogRead.then(({ projects }) => prs.read(paseo, { projects, refresh:refreshPulls })),
@@ -136,7 +138,9 @@ export default function contribute(server: PluginServerContext) {
     const missingProjects = latest.projects.filter(id => !selected.has(id)).map(id => ({
       id, title: id, path: "", selected: true, missing: true as const, temporary: false,
     }));
+    const notice = latest.assignmentNotice;
     return { sessions: visible, notes: visibleNotes, pullRequests, trackedDecisions, replyHistory, ...(clarifications.length ? { clarifications } : {}),
+      ...(notice && selected.has(notice.projectId) && { assignmentNotice: notice }),
       projects: [...knownProjects, ...missingProjects], coordinator: latest.coordinator, lastDigestAt: latest.lastDigest?.at, ...(reach ? { coordinatorReach: reach } : {}) };
   }
   async function buildSessionView(paseo: PluginHandlerContext["paseo"],
@@ -146,7 +150,7 @@ export default function contribute(server: PluginServerContext) {
       id: p.projectId, title: p.projectCustomName || p.projectDisplayName || p.projectId, path: p.projectRootPath || "",
     }]));
     for (const row of rows) {
-      if (!known.has(row.projectId)) known.set(row.projectId, { id: row.projectId, title: row.projectTitle, path: "" });
+      if (!row.serverId && !known.has(row.projectId)) known.set(row.projectId, { id: row.projectId, title: row.projectTitle, path: "" });
     }
     const saved = prefs.read();
     const scope = { ...saved, projects: saved.projects.filter(id => known.has(id)) };
@@ -158,7 +162,7 @@ export default function contribute(server: PluginServerContext) {
       projectRoots.describe(projects, new Set(scope.projects)),
     ]);
     const choices = new Map(projects.map((project, i) => [project.id, { ...project, ...roots[i] }]));
-    const coordinatorRow = rows.find(row => row.id === scope.coordinator);
+    const coordinatorRow = rows.find(row => row.id === scope.coordinator && !row.serverId);
     if (coordinatorRow && !sessions.some(row => row.id === coordinatorRow.id)) {
       const observed = await reader.read(paseo, coordinatorRow).catch(() => null);
       if (observed) evidence.set(coordinatorRow.id, observed);
@@ -178,7 +182,8 @@ export default function contribute(server: PluginServerContext) {
     for (const row of recipients) {
       if (!clarifying.has(row.id) || evidence.has(row.id) || row.nativePending || row.status === "closed") continue;
       try {
-        const page = await paseo.agents.ref(row.id).timeline.refetch({ direction: "tail", projection: "projected", limit: 48 });
+        const page = await withAssignmentHost(paseo, row.serverId, client =>
+          client.agents.ref(row.id).timeline.refetch({ direction: "tail", projection: "projected", limit: 48 }));
         evidence.set(row.id, excerpt(page));
       } catch {
         // Fall back to Paseo's current state when the timeline is unavailable.
@@ -281,6 +286,7 @@ export default function contribute(server: PluginServerContext) {
         scope.projects = scope.projects.filter(id => id !== change.projectId);
         if (change.enabled) scope.projects.push(change.projectId);
         else {
+          if (scope.assignmentNotice?.projectId === change.projectId) delete scope.assignmentNotice;
           for (const link of Object.values(scope.sessionLinks)) {
             if (link.targetProjectId === change.projectId) delete scope.sessionLinks[link.sessionId];
           }
@@ -299,7 +305,7 @@ export default function contribute(server: PluginServerContext) {
     return { ok: true };
   });
   server.handle(saveNote, async (input, { paseo }) => {
-    const sessions = await discoverSessions(paseo);
+    const sessions = await discoverBoardSessions(paseo, prefs.read());
     if (!managedSessions(sessions, prefs.read()).some(session => session.id === input.sessionId)) {
       throw new Error("이 호스트에서 해당 세션을 찾지 못했습니다. 보드를 새로 고쳐 주세요.");
     }

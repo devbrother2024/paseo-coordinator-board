@@ -9,6 +9,7 @@ import { clarificationEntry } from "./clarifications";
 import { replyEntry } from "./reply-history";
 import { workspacePullSchema } from "./workspace-pull";
 import { coordinatorReachSchema } from "./coordinator-reach";
+import { assignmentLocation, assignmentNotice } from "./dispatch-hosts";
 
 const sessionId = z.string().min(1).max(256);
 const noteKind = z.enum(["question", "review", "done", "clear"]);
@@ -20,6 +21,8 @@ const session = z.object({
   projectTitle: z.string(),
   workspaceTitle: z.string(),
   workspacePull: workspacePullSchema.optional(),
+  serverId: z.string().optional(),
+  assignment: assignmentLocation.optional(),
   sourceProjectId: z.string().optional(),
   sourceProjectTitle: z.string().optional(),
   model: z.string().nullable(),
@@ -62,7 +65,8 @@ export const boardSnapshot = defineRpc({
   output: z.object({ sessions: z.array(session), notes: z.record(z.string(), noteSchema),
     projects: z.array(z.object({ id: z.string(), title: z.string(), path: z.string(), selected: z.boolean(),
       rootKey: z.string().optional(), temporary: z.boolean().optional(), operating: z.boolean().optional(), missing: z.literal(true).optional() })),
-    coordinator: sessionId.nullable(), coordinatorReach: coordinatorReachSchema.optional(), lastDigestAt: z.iso.datetime().optional(), clarifications:z.array(clarificationEntry).optional(), replyHistory: z.array(replyEntry).optional(), trackedDecisions: trackedDecisionViewSchema.optional(), pullRequests: pullRequestViewSchema.optional() }),
+    coordinator: sessionId.nullable(), coordinatorReach: coordinatorReachSchema.optional(), lastDigestAt: z.iso.datetime().optional(), clarifications:z.array(clarificationEntry).optional(), replyHistory: z.array(replyEntry).optional(), trackedDecisions: trackedDecisionViewSchema.optional(), pullRequests: pullRequestViewSchema.optional(),
+    assignmentNotice: assignmentNotice.optional() }),
 });
 export const boardDecisionCount = defineRpc({
   name: "board.decision-count", input: z.strictObject({}),

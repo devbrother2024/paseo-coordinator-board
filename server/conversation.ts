@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import type { SessionRow } from "../shared/contract";
 import type { Preferences } from "./preferences";
+import { withAssignmentHost } from "./host-assignment";
 
 type Sdk = PluginHandlerContext["paseo"];
 type Page = Awaited<ReturnType<ReturnType<Sdk["agents"]["ref"]>["timeline"]["refetch"]>>;
@@ -122,21 +123,23 @@ export function classify(e: Evidence, row: SessionRow, decision?: Preferences["j
 }
 
 export class ConversationReader {
-  private readonly cache = new Map<string, { stamp: string; at: number; page: Promise<Evidence> }>();
+  private readonly cache = new Map<string, { serverId?: string; stamp: string; at: number; page: Promise<Evidence> }>();
 
   retain(ids: Set<string>) {
     for (const id of this.cache.keys()) if (!ids.has(id)) this.cache.delete(id);
   }
 
   async read(paseo: Sdk, row: SessionRow, fresh = false): Promise<Evidence | null> {
-    const cached = this.cache.get(row.id);
+    const entry = this.cache.get(row.id);
+    const cached = entry?.serverId === row.serverId ? entry : undefined;
     if (row.status === "closed") {
       return cached?.stamp === row.activityAt ? cached?.page ?? null : null;
     }
     if (row.status !== "idle" && row.status !== "error") return null;
     if (!fresh && cached && cached.stamp === row.activityAt && Date.now() - cached.at < 60_000) return cached.page;
-    const page = paseo.agents.ref(row.id).timeline.refetch({ direction: "tail", projection: "projected", limit: 48 }).then(excerpt);
-    this.cache.set(row.id, { stamp: row.activityAt ?? "", at: Date.now(), page });
+    const page = withAssignmentHost(paseo, row.serverId, client =>
+      client.agents.ref(row.id).timeline.refetch({ direction: "tail", projection: "projected", limit: 48 })).then(excerpt);
+    this.cache.set(row.id, { serverId: row.serverId, stamp: row.activityAt ?? "", at: Date.now(), page });
     try { return await page; }
     catch (error) {
       if (this.cache.get(row.id)?.page === page) this.cache.delete(row.id);

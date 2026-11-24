@@ -2,14 +2,15 @@ import { defineAgentTool, type AgentToolDefinition, type PluginHandlerContext, t
 import { z } from "zod";
 import { ConversationReader } from "./conversation";
 import { managedSessions, isCurrentMembership } from "./session-links";
-import { discoverSessions } from "./discovery";
+import { discoverBoardSessions } from "./board-sessions";
 import { isManagedCoordinator, judgment, PreferenceStore } from "./preferences";
 
 export async function managedRowsForCoordinator(paseo: PluginHandlerContext["paseo"], prefs: PreferenceStore, caller: string) {
-  const rows = await discoverSessions(paseo);
+  const rows = await discoverBoardSessions(paseo, prefs.read());
   const scope = prefs.read();
   const managed = managedSessions(rows, scope);
-  if (scope.coordinator !== caller || !(managed.some(r => r.id === caller) || (isManagedCoordinator(scope, caller) && rows.some(r => r.id === caller)))) {
+  if (scope.coordinator !== caller || !(managed.some(r => r.id === caller && !r.serverId) ||
+    (isManagedCoordinator(scope, caller) && rows.some(r => r.id === caller && !r.serverId)))) {
     throw new Error("코디네이터 지정이 해제되었습니다.");
   }
   return managed;

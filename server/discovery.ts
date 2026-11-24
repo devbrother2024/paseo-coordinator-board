@@ -50,6 +50,26 @@ function observedState(agent: Entry["agent"]): Pick<SessionRow, "lane" | "detail
   return { lane: "unknown", detail: "세션 상태 미확인" };
 }
 
+export function sessionRow(agent: Entry["agent"], project: Entry["project"] | null, workspace?: Workspace): SessionRow {
+  const work = workspace && !workspace.internal ? workspacePull(workspace) : undefined;
+  const permission = permissionVersion(agent);
+  return {
+    ...(work ? { workspacePull: work } : {}),
+    id: agent.id,
+    title: agent.title?.trim() || `세션 ${agent.id.slice(0, 8)}`,
+    projectId: workspace?.projectId || project?.projectKey || "unassigned",
+    projectTitle: workspace?.projectCustomName?.trim() || workspace?.projectDisplayName || project?.projectName || "프로젝트 미확인",
+    workspaceTitle: workspace?.title?.trim() || workspace?.name || project?.workspaceName || "워크스페이스 미확인",
+    provider: agent.provider?.trim() || null,
+    model: agent.model?.trim() || null,
+    ...(agent.metadata?.[reportingKey] === true ? { reporting: true } : {}),
+    status: agent.status, activityAt: agent.updatedAt,
+    ...observedState(agent),
+    ...(agent.attentionReason === "permission" && agent.attentionTimestamp ? {decisionRequestedAt:agent.attentionTimestamp} : {}),
+    ...(permission ? { permissionVersion: permission } : {}),
+  };
+}
+
 export async function discoverSessions(paseo: Pick<Sdk, "agents" | "workspaces">): Promise<SessionRow[]> {
   const [entries, workspaces] = await Promise.all([
     readPages<Entry>((page) => paseo.agents.list({
@@ -68,23 +88,7 @@ export async function discoverSessions(paseo: Pick<Sdk, "agents" | "workspaces">
       rows.delete(agent.id);
       continue;
     }
-    const work = workspace && !workspace.internal ? workspacePull(workspace) : undefined;
-    const permission = permissionVersion(agent);
-    rows.set(agent.id, {
-      ...(work ? { workspacePull: work } : {}),
-      id: agent.id,
-      title: agent.title?.trim() || `세션 ${agent.id.slice(0, 8)}`,
-      projectId: workspace?.projectId || project.projectKey || "unassigned",
-      projectTitle: workspace?.projectCustomName?.trim() || workspace?.projectDisplayName || project.projectName || "프로젝트 미확인",
-      workspaceTitle: workspace?.title?.trim() || workspace?.name || project.workspaceName || "워크스페이스 미확인",
-      provider: agent.provider?.trim() || null,
-      model: agent.model?.trim() || null,
-      ...(agent.metadata?.[reportingKey] === true ? { reporting: true } : {}),
-      status: agent.status, activityAt: agent.updatedAt,
-      ...observedState(agent),
-      ...(agent.attentionReason === "permission" && agent.attentionTimestamp ? {decisionRequestedAt:agent.attentionTimestamp} : {}),
-      ...(permission ? { permissionVersion: permission } : {}),
-    });
+    rows.set(agent.id, sessionRow(agent, project, workspace));
   }
   return [...rows.values()];
 }

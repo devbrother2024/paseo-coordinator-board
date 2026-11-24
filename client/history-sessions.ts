@@ -7,7 +7,7 @@ export type HistorySession = {
   role: "source" | "received" | "target";
   id: string; host?: string; hostLabel?: string; title?: string; state?: State; available: boolean; verify?: () => Promise<boolean>;
 };
-type Local = Pick<SessionRow, "id" | "title" | "projectId" | "lane" | "status">;
+type Local = Pick<SessionRow, "id" | "title" | "projectId" | "lane" | "status" | "serverId" | "assignment">;
 export type HistoryDirectory = {
   hostId?: string; sessions: readonly Local[]; repos: ReadonlyMap<string,string>;
   verifyRemote?: (host:string,id:string,project:string) => Promise<boolean>;
@@ -35,7 +35,8 @@ export function historySessionLinks(entry:ReplyEntry, directory:HistoryDirectory
     const received = (notification?.status ?? entry.status) === "sent";
     const row = sessions.find(s=>s.id===recipientId);
     links.push({role:received ? "received" : "target", id:recipientId, available:!!entry.canOpen || !!row,
-      title:entry.recipientTitle ?? row?.title, state:entry.recipientState ?? (row && localState(row))});
+      title:entry.recipientTitle ?? row?.title, state:entry.recipientState ?? (row && localState(row)),
+      ...(row?.serverId && { host: row.serverId, hostLabel: row.assignment?.label })});
   }
 
   const origin = entry.origin;
@@ -44,10 +45,12 @@ export function historySessionLinks(entry:ReplyEntry, directory:HistoryDirectory
   const host = origin.sessionHost;
   const project = origin.sessionProjectId ?? entry.projectId;
   if (host && host !== hostId) {
+    const known = sessions.find(s => s.serverId === host && s.id === id && matchesProject(s.projectId, project, repos));
     const peer = peers.find(p=>p.host.serverId === host);
     const row = peer?.rows.find(s=>s.sessionId === id && matchesProject(s.projectId,project,repos));
-    links.push({role:"source", id, host, hostLabel:peer?.host.label, title:row?.title || undefined, available:!!row,
-      ...(!row && peer && project && directory.verifyRemote ? {verify:() => directory.verifyRemote!(host,id,project)} : {})});
+    links.push({role:"source", id, host, hostLabel:known?.assignment?.label ?? peer?.host.label, title:known?.title || row?.title || undefined,
+      available:!!(known || row), ...(known && {state:localState(known)}),
+      ...(!known && !row && peer && project && directory.verifyRemote ? {verify:() => directory.verifyRemote!(host,id,project)} : {})});
   } else if (id !== recipientId) {
     const row = sessions.find(s=>s.id === id && matchesProject(s.projectId,project,repos));
     links.push(row ? {role:"source", id, title:row.title, state:localState(row), available:true} : {role:"source", id, available:false});

@@ -83,13 +83,13 @@ export function usesSourceCoordinator(item:RoutedTrackedDecision) {
 export function sourceCoordinatorRecipient(item:RoutedTrackedDecision, coordinator:string|null, sessions:readonly SessionRow[]) {
   const owner = item.sourceCoordinatorId;
   if (owner === undefined) return coordinator;
-  return owner && (owner === coordinator || sessions.some(s => s.id === owner)) ? owner : null;
+  return owner && (owner === coordinator || sessions.some(s => s.id === owner && !s.serverId)) ? owner : null;
 }
 
 export function trackedRecipient(item:RoutedTrackedDecision, coordinator:string|null, sessions:readonly SessionRow[]) {
   if (item.where === "manager" || item.where === "human") return sourceCoordinatorRecipient(item,coordinator,sessions);
   if (item.where !== "session" || item.sessionHost || !item.sessionId) return null;
-  const session = sessions.find(s => s.id === item.sessionId && s.projectId === item.projectId);
+  const session = sessions.find(s => s.id === item.sessionId && s.projectId === item.projectId && !s.serverId);
   return session ? session.id : null;
 }
 

@@ -18,6 +18,8 @@ import type { Evidence } from "./conversation";
 import { isCurrentMembership, managedSessions } from "./session-links";
 import { canReceiveBoardInput, discoverSessions, permissionVersion } from "./discovery";
 import { isManagedCoordinator } from "./preferences";
+import { discoverBoardSessions } from "./board-sessions";
+import { withAssignmentHost } from "./host-assignment";
 
 type Sdk = PluginHandlerContext["paseo"];
 type Stored = Preferences["clarifications"][string];
@@ -178,18 +180,31 @@ export class ClarificationSender {
     if (!inScope(scope, input.card)) throw Error(changed);
     id = photoReceiptId(id, !!input.images?.length, scope.clarifications);
     const previous = scope.clarifications[id];
-    const handle = sdk.agents.ref(input.recipientId);
     const receipt = { ok: true as const, messageId: id, recipientId: input.recipientId };
+    if (previous?.status === "sent") {
+      if (previous.fingerprint !== fingerprint) throw Error("같은 요청 키로 다른 질문을 보낼 수 없습니다.");
+      return receipt;
+    }
+    const placement = scope.dispatchReceipts[input.recipientId];
+    const serverId = placement?.remote ? placement.location.serverId : undefined;
+    return withAssignmentHost(sdk, serverId, recipientSdk =>
+      this.deliverTo(sdk, recipientSdk, serverId, input, scope, key, receipt, fingerprint, previous));
+  }
+
+  private async deliverTo(sdk: Sdk, recipientSdk: Sdk, serverId: string | undefined, input: ClarificationInput,
+    scope: Preferences, key: string, receipt: { ok: true; messageId: string; recipientId: string }, fingerprint: string, previous?: Stored,
+  ) {
+    const id = receipt.messageId;
+    const handle = recipientSdk.agents.ref(input.recipientId);
     if (previous) {
       if (previous.fingerprint !== fingerprint) throw Error("같은 요청 키로 다른 질문을 보낼 수 없습니다.");
-      if (previous.status === "sent") return receipt;
-      const all = await discoverSessions(sdk);
+      const all = await discoverBoardSessions(sdk, this.store.read());
       const scopeNow = this.store.read();
       if (
         !inScope(scopeNow, input.card) ||
         !(
-          managedSessions(all, scopeNow).some((r) => r.id === input.recipientId) ||
-          (isManagedCoordinator(scopeNow, input.recipientId) && all.some((r) => r.id === input.recipientId))
+          managedSessions(all, scopeNow).some(r => r.id === input.recipientId && r.serverId === serverId) ||
+          (!serverId && isManagedCoordinator(scopeNow, input.recipientId) && all.some(r => r.id === input.recipientId && !r.serverId))
         )
       )
         throw Error(changed);
@@ -228,9 +243,12 @@ export class ClarificationSender {
         s.id === target.sourceSessionId && s.projectId === (original?.projectId ?? input.card.projectId)
       );
       const recipient = view.sessions.find((s) => s.id === input.recipientId);
+      if (recipient?.serverId !== serverId) throw Error(changed);
       const ids = new Set([input.recipientId, ...(original ? [original.sessionId] : [])]);
       for (const sessionId of ids) {
-        const live = (await sdk.agents.ref(sessionId).refresh())?.agent;
+        const refresh = (client: Sdk) => client.agents.ref(sessionId).refresh();
+        const live = (await (sessionId === input.recipientId || source?.serverId === serverId
+          ? refresh(recipientSdk) : withAssignmentHost(sdk, source?.serverId, refresh)))?.agent;
         if (!live || live.id !== sessionId || live.archivedAt || live.internal) throw Error(changed);
         if (
           sessionId === input.recipientId &&

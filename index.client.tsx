@@ -89,7 +89,9 @@ function HostBoard({ host, theme, layout, navigation }: PluginScreenProps) {
       changing={changing} coordinator={snapshot?.coordinator}
       onProject={(projectId, enabled) => void updateScope({kind: "project", projectId, enabled})}
       onCoordinator={sessionId => void updateScope({kind: "coordinator", sessionId})}
-      onRefresh={() => void refresh()} onOpen={navigation ? (id) => navigation.openAgent({ agentId: id, serverId: host.id }) : undefined} onEdit={setEditing} />
+      onRefresh={() => void refresh()} onOpen={navigation ? id => navigation.openAgent({
+        agentId: id, serverId: snapshot?.sessions.find(row => row.id === id)?.serverId ?? host.id,
+      }) : undefined} onEdit={setEditing} />
     {session && <NoteEditor key={session.id} session={session} note={snapshot?.notes[session.id]} theme={theme}
       onClose={() => setEditing(null)} onSave={onSave}
       onSetReporting={async (enabled) => { const result = await changeReporting({ sessionId: session.id, enabled }); await refresh(); return result.ok; }} />}

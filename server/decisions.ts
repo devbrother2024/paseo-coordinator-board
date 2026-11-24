@@ -9,7 +9,9 @@ import type { Decision, DecisionInput } from "../shared/decision-actions";
 import type { Note, SessionRow } from "../shared/contract";
 import { classify, ConversationReader, lastConversationQuestion, type Evidence } from "./conversation";
 import { isCurrentMembership, managedSessions } from "./session-links";
-import { canReceiveBoardInput, discoverSessions } from "./discovery";
+import { canReceiveBoardInput } from "./discovery";
+import { discoverBoardSessions } from "./board-sessions";
+import { withAssignmentHost } from "./host-assignment";
 import type { NoteStore } from "./notes";
 import { verifiedBoardFact } from "./board-facts";
 import { isManagedCoordinator, type Preferences, type PreferenceStore } from "./preferences";
@@ -112,13 +114,22 @@ export class DecisionSender {
     }
     messageId = earlier?.messageId ?? messageId;
     const receipt: Receipt = { ok: true, recipientId: input.recipientId, messageId };
-    const recipient = paseo.agents.ref(input.recipientId);
-    const rows = await discoverSessions(paseo);
+    const rows = await discoverBoardSessions(paseo, scope);
     const managed = managedSessions(rows, this.store.read());
     const row = managed.find(r => r.id === input.sessionId && r.projectId === input.projectId);
     const destination = managed.find(r => r.id === input.recipientId) ??
       (isManagedCoordinator(scope, input.recipientId) ? rows.find(r => r.id === input.recipientId) : undefined);
     if (!row || !destination) throw Error(changed);
+    return withAssignmentHost(paseo, destination.serverId, sdk =>
+      this.deliverTo(paseo, sdk, row, destination, scope, input, receipt, requestId, fingerprint, earlier));
+  }
+
+  private async deliverTo(paseo: Sdk, sdk: Sdk, row: SessionRow, destination: SessionRow, scope: Preferences,
+    input: DecisionInput, receipt: Receipt, requestId: string, fingerprint: string,
+    earlier?: Preferences["decisionReceipts"][string],
+  ): Promise<Receipt> {
+    const { messageId } = receipt;
+    const recipient = sdk.agents.ref(input.recipientId);
     if (earlier) {
       if (earlier.fingerprint !== fingerprint) throw Error("같은 전송 키로 다른 답을 보낼 수 없습니다.");
       if (earlier.status === "sent") {
@@ -144,9 +155,11 @@ export class DecisionSender {
     requireScope(this.store.read(), input);
     const evidence = await this.reader.read(paseo, row, true);
     if (!evidence) throw Error(changed);
-    const latest = await Promise.all([...new Set([input.sessionId, input.recipientId])].map(async id => ({
-      id, agent: (await paseo.agents.ref(id).refresh())?.agent,
-    })));
+    const targets = row.id === destination.id ? [destination] : [row, destination];
+    const latest = await Promise.all(targets.map(target => {
+      const refresh = async (client: Sdk) => ({ id: target.id, agent: (await client.agents.ref(target.id).refresh())?.agent });
+      return target.serverId === destination.serverId ? refresh(sdk) : withAssignmentHost(paseo, target.serverId, refresh);
+    }));
     for (const { id, agent } of latest) {
       if (!agent || agent.id !== id || agent.internal || agent.archivedAt || !canReceiveBoardInput(agent,input.action==="coordinate" && id===input.recipientId && id!==input.sessionId)) throw Error(blocked);
       if (id === input.sessionId && row.activityAt !== agent.updatedAt) throw Error(changed);
@@ -167,7 +180,8 @@ export class DecisionSender {
       current.decisionReceipts[messageId] = {
         ...(input.images?.length ? {messageId} : {}),
         messageHash:hash(text),
-        activity: { origin:{sessionId:row.id, cardId:row.id, revision:input.version, questions:[{id:input.version}]},
+        activity: { origin:{sessionId:row.id, sessionHost:row.serverId, sessionProjectId:row.serverId ? row.projectId : undefined,
+          cardId:row.id, revision:input.version, questions:[{id:input.version}]},
           title: row.decision.question || row.title, at: new Date().toISOString(), projectId: input.projectId,
           ...(input.images?.length ? {imageCount:input.images.length} : {}),
           answer: input.text, recipientId: input.recipientId, coordinator: input.action === "coordinate" },

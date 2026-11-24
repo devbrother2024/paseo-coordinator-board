@@ -9,6 +9,8 @@ import { routePolicySchema, workerModeProvider } from "../shared/dispatch";
 import { pullMergeActivity, repositoryOverride } from "../shared/prs";
 import { replyDetails } from "../shared/reply-history";
 import { factSchema } from "../shared/board-facts";
+import { assignmentPolicy, hostIdentity } from "../shared/host-assignment";
+import { assignmentLocation, assignmentNotice } from "../shared/dispatch-hosts";
 
 export const judgment = z.object({
   content: decisionFields.optional(),
@@ -38,6 +40,18 @@ const schema = z.object({
   excludedProviders: z.array(z.string().min(1).max(256)).default([]),
   usageRouting: z.boolean().default(true),
   routingRevision: z.number().int().nonnegative().default(0),
+  assignmentHosts: z.record(hostIdentity, assignmentPolicy).default({}),
+  assignmentRevision: z.number().int().nonnegative().default(0),
+  assignmentNotice: assignmentNotice.optional(),
+  dispatchReceipts: z.record(z.string().uuid(), z.object({
+    fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    projectId: z.string(),
+    sourceProjectId: z.string(),
+    workspaceId: z.string(),
+    location: assignmentLocation,
+    remote: z.boolean(),
+    delivered: z.boolean().optional(),
+  })).default({}),
   answers: z.record(z.string(), z.object({ version: z.string(), noteRevision: z.number().optional() })).default({}),
   clarifications:z.record(z.string(),clarificationEntry.extend({
     card:clarificationCard,fingerprint:z.string(),bodyHash:z.string(),sourceSessionId:z.string().nullable(),

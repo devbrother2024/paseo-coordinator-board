@@ -37,6 +37,7 @@ import { groupProjects, selectedProjectIds, toggleProjectFilter, type ProjectFil
 import { ProjectFilterBar } from "./project-filter-bar";
 import { shouldRefreshDigest } from "./digest-freshness";
 import { DigestFeedback, useDigestRequest } from "./digest-request";
+import { assignmentFailures, platformLabels } from "../shared/host-assignment";
 
 type Actions = { sessionHostLabel?: string; coordinator?: string | null; onCoordinator?: (id: string | null) => void; changing?: boolean; onOpen?: (id: string) => void; onEdit: (id: string) => void };
 
@@ -125,7 +126,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const incomplete = snapshot?.trackedDecisions && ["partial","unavailable","invalid"].includes(snapshot.trackedDecisions.status);
   const [settings, setSettings] = useState(false);
   const {groups: peers, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
-  const visiblePeers = peers.map(group => ({...group, rows: group.rows.filter(row => inFilter(row.projectId))}));
+  const assigned = new Set(snapshot?.sessions.filter(row => row.serverId).map(row => JSON.stringify([row.serverId, row.id])));
+  const visiblePeers = peers.map(group => ({ ...group, rows: group.rows.filter(row =>
+    inFilter(row.projectId) && !assigned.has(JSON.stringify([group.host.serverId, row.sessionId]))) }));
   const historyRepos = useMemo(() => new Map(pullRequests?.projects.flatMap(p =>
     p.repo && p.mode !== "off" ? [[p.projectId,p.repo] as const] : [])), [pullRequests?.projects]);
   const historyScope = useMemo(() => remoteScope(activeProjects,pullRequests?.projects ?? []), [activeProjects,pullRequests?.projects]);
@@ -194,7 +197,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   }
   const renderDecision = (card: Card, embedded = false, rowKey?: string, priority?: string) => <DecisionActions key={JSON.stringify([card.session.projectId, card.session.id, card.session.decision?.version])}
           clarification={!embedded && questionFor(sessionClarificationCard(card.session,card.note),card.session.title)}
-          embedded={embedded} priorityLabel={priority} card={card} hostLabel={hostLabel} theme={theme} coordinator={snapshot!.coordinator} coordinatorTitle={snapshot!.sessions.find(s => s.id === snapshot!.coordinator)?.title}
+          embedded={embedded} priorityLabel={priority} card={card} hostLabel={card.session.assignment?.label ?? hostLabel} theme={theme} coordinator={snapshot!.coordinator} coordinatorTitle={snapshot!.sessions.find(s => s.id === snapshot!.coordinator)?.title}
           open={actions.onOpen} receipt={receipts.find(r => matches(r, card))}
           onSent={result => {
             if (rowKey && result.action === "reply") remember({
@@ -209,7 +212,8 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     if (!id) return;
     if (item.sessionHost && item.sessionHost !== hostId) {
       const peer = peers.find(g => g.host.serverId === item.sessionHost && g.rows.some(s => s.sessionId === id && s.projectId === item.projectId));
-      return peer && onOpenHostSession ? () => onOpenHostSession(peer.host.serverId,id) : undefined;
+      const tracked = snapshot?.sessions.some(row => row.serverId === item.sessionHost && row.id === id && row.projectId === item.projectId);
+      return (peer || tracked) && onOpenHostSession ? () => onOpenHostSession(item.sessionHost!, id) : undefined;
     }
     const local = snapshot?.sessions.find(s => s.id === id && (matchesProject(s.projectId,item.projectId,historyRepos) || s.id === item.matchedSessionId));
     return local && actions.onOpen ? () => actions.onOpen!(local.id) : undefined;
@@ -234,10 +238,10 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     for (const s of snapshot?.sessions ?? []) {
       if (!inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !actions.onOpen || !matchesWorkspace(pr,s.workspacePull)) continue;
       const state = s.status === "closed" ? t("대화 종료","Closed") : s.lane === "running" ? t("진행 중","Running") : s.status === "idle" ? t("대기","Idle") : t("상태 확인 필요","Check status");
-      workSessions.push({key:JSON.stringify([hostId,s.id]),label:[s.title,hostLabel,state].join(" · "),open:()=>actions.onOpen!(s.id)});
+      workSessions.push({key:JSON.stringify([s.serverId ?? hostId,s.id]),label:[s.title,s.assignment?.label ?? hostLabel,state].join(" · "),open:()=>actions.onOpen!(s.id)});
     }
     if (onOpenHostSession) for (const {host,rows} of peers) for (const s of rows) {
-      if (!inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !matchesWorkspace(pr,s.workspacePull)) continue;
+      if (assigned.has(JSON.stringify([host.serverId, s.sessionId])) || !inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !matchesWorkspace(pr,s.workspacePull)) continue;
       workSessions.push({key:JSON.stringify([host.serverId,s.sessionId]),label:[s.title || t("작업 세션","Work session"),host.label,t("진행 중","Running")].join(" · "),open:()=>onOpenHostSession(host.serverId,s.sessionId)});
     }
     return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions}
@@ -297,6 +301,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     activeRows.set(key, <DecisionEditingRow rowKey={key} position={position} onEditing={onEditing}>{content}</DecisionEditingRow>);
   });
   const c = theme.colors;
+  const assignmentNotice = !settings && snapshot?.assignmentNotice;
   return (
     <ScrollView ref={scroll} style={{ flex: 1, backgroundColor: c.surface0 }} contentContainerStyle={{ gap: 20, padding: layout.compact ? 12 : 22 }}>
       <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
@@ -348,11 +353,18 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       </>}
       <OperationsPanel settings={operationsReady && settings} theme={theme} coordinator={operationsReady ? coordinatorId ?? null : null} configured={operationsReady && !!configured}
         refreshBoard={onRefresh} openCoordinator={coordinatorOpens ? actions.onOpen : undefined} action={coordinatorAction} digest={digest} />
+      {assignmentNotice && inFilter(assignmentNotice.projectId) && <View style={{ gap: 4, padding: 10, borderLeftWidth: 3, borderColor: c.statusWarning, backgroundColor: c.surface1 }}>
+        <Text style={{ color: c.foreground, fontWeight: "600" }}>{t("작업 배정 실패", "Assignment failed")} · {projectName(assignmentNotice.projectId)}</Text>
+        <Text accessibilityLiveRegion="polite" style={{ color: c.foreground }}>
+          {[assignmentNotice.host, assignmentNotice.platform !== "any" && t(...platformLabels[assignmentNotice.platform]),
+            t(...assignmentFailures[assignmentNotice.failure])].filter(Boolean).join(" · ")}
+        </Text>
+      </View>}
       {settings && snapshot && actions.onCoordinator && <View style={{ gap: 8 }}>
         <Button theme={theme} label={pickSession ? t("기존 세션 목록 닫기", "Close session list") : t("기존 세션에서 코디네이터 지정", "Choose an existing coordinator session")} onPress={() => setPickSession(!pickSession)} />
         {pickSession && <>
           {snapshot.coordinator && <Button theme={theme} disabled={actions.changing} label={t("현재 코디네이터 지정 해제", "Clear current coordinator")} onPress={() => actions.onCoordinator?.(null)} />}
-          {snapshot.sessions.filter(s => s.id !== snapshot.coordinator).map(s => <Button key={s.id} theme={theme} disabled={actions.changing}
+          {snapshot.sessions.filter(s => !s.serverId && s.id !== snapshot.coordinator).map(s => <Button key={s.id} theme={theme} disabled={actions.changing}
             label={`${s.projectTitle} · ${s.title} · ${t("지정", "Assign")}`} onPress={() => actions.onCoordinator?.(s.id)} />)}
           {!snapshot.sessions.length && <Text style={{ color: c.foregroundMuted }}>{t("관리할 프로젝트를 선택하면 지정할 수 있는 세션이 표시됩니다.", "Select a project to see its available sessions.")}</Text>}
         </>}
