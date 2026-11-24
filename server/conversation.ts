@@ -25,6 +25,7 @@ const optionalOffer = /(?:궁금|필요|원하).{0,12}(?:시면|시다면|면).{
 export function excerpt(page: Page): Evidence {
   if (page.error || page.gap || page.staleCursor) throw new Error("대화 발췌를 확인할 수 없습니다.");
   const turns: Turn[] = [];
+  const full = new Map<Turn, string>();
   const digest = createHash("sha256").update(page.epoch);
   const laterInputs: string[] = [];
   const deliveries: NonNullable<Evidence["deliveries"]> = [];
@@ -64,13 +65,19 @@ export function excerpt(page: Page): Evidence {
     }
     if (!text) continue;
     laterInputs.length = 0;
-    const definitions = role === "assistant" && text.length > 2000 ? labelDefinitions(text) : [];
-    turns.push({ role, text: text.slice(-2000), ...(timestamp ? { at:timestamp } : {}), ...(text.length > 2000 ? { truncated: true } : {}),
-      ...(definitions.length ? { definitions } : {}) });
+    turns.push({ role, text: text.slice(-2000), ...(timestamp ? { at:timestamp } : {}), ...(text.length > 2000 ? { truncated: true } : {}) });
+    full.set(turns.at(-1)!, text);
     digest.update(JSON.stringify([seqEnd, role, text]));
   }
   if (laterInputs.length) digest.update(JSON.stringify(laterInputs));
-  return { id: digest.digest("hex").slice(0, 24), turns: turns.slice(-4),
+  const kept = turns.slice(-4);
+  // Only the turns the excerpt keeps: long ones keep the definitions their cut-off start holds.
+  for (const turn of kept) {
+    const text = full.get(turn);
+    const definitions = turn.role === "assistant" && text && text.length > 2000 ? labelDefinitions(text) : [];
+    if (definitions.length) turn.definitions = definitions;
+  }
+  return { id: digest.digest("hex").slice(0, 24), turns: kept,
     ...(clarification && messageIds.length ? { lastInputIds: messageIds } : {}),
     ...(clarificationMessages.size ? { clarificationMessages } : {}),
     ...(boardMessageHashes.size ? {boardMessageHashes} : {}),

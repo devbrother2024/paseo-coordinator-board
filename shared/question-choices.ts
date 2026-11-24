@@ -3,8 +3,12 @@
 // and the text that came right before the question, so the card can stand on its own.
 
 export type LabelKind = "latin" | "hangul" | "number";
-export type LabelReference = { key: string; kind: LabelKind; paren: boolean };
-export type LabelDefinition = { key: string; markdown: string };
+/** How the text points at a label: "(b)", "B안", "Option B", "B로" or "2번". */
+export type ReferenceForm = "paren" | "plan" | "option" | "bare" | "number";
+/** How a line defines a label: "(b) …", "b) …", "B. …" or "1. …", "B안: …", "Option B: …", "**B**: …". */
+export type DefinitionForm = "paren" | "close" | "dot" | "plan" | "option" | "bold";
+export type LabelReference = { key: string; kind: LabelKind; paren: boolean; form: ReferenceForm };
+export type LabelDefinition = { key: string; markdown: string; form?: DefinitionForm };
 export type Choice = { label: string; markdown: string };
 export type ChoiceGaps = { missingLabels: string[]; deferred: boolean };
 
@@ -23,52 +27,70 @@ function withoutCode(text: string) {
   return text.replace(/^\s*(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^\s*\1[^\n]*$|(?![\s\S]))/gm, "").replace(/`[^`\n]*`/g, "");
 }
 
-const referencePatterns: { pattern: RegExp; paren?: boolean }[] = [
-  { pattern: /\(([A-Ha-h가나다라마바사아])\)/g, paren: true },
+// A particle written right after the label, as in "B로", "B안이" or "**B**를". A space breaks it: "B 요청을" is not a label.
+const particle = String.raw`(?:으로|로|를|을|가|와|과|는|은|쪽|이요|요(?=[?？.!\s]|$)|이(?=\s))`;
+// "B안" is a plan only when 안 ends the word or takes a particle. "B안전", "A안에서" are other words.
+const planEnd = String.raw`(?=$|[^가-힣]|(?:으로|은|는|이|을|를|과|와|대로|도|쪽|이요|요)(?![가-힣]))`;
+const referencePatterns: { pattern: RegExp; form: ReferenceForm }[] = [
+  // "(c) 2026" is a copyright mark.
+  { pattern: /\(([A-Ha-h가나다라마바사아])\)(?!\s*(?:19|20)\d\d)/g, form: "paren" },
   // "(1)" is often plain numbering inside a sentence. It points at an option only with a particle, as in "(2)로".
-  { pattern: /\(([1-9])\)(?=\s?(?:로|으로|를|을|가|안|쪽|와|과|는|은))/g, paren: true },
-  { pattern: /(?<![A-Za-z0-9])([A-H1-9])안(?![가-힣]*\s*(?:에서|에|으로써))/g },
-  { pattern: /(?:옵션|선택지)\s*([A-Ha-h1-9가나다라마바사아])(?![A-Za-z0-9가-힣])/g },
-  { pattern: /\b(?:[Oo]ption|[Cc]hoice|[Pp]lan)\s+([A-H1-9])(?![A-Za-z0-9])/g },
-  { pattern: /(?<![A-Za-z0-9_./#-])([A-H])(?=\s?(?:로|으로|를|을|가|와|과|는|은|쪽|이요|요)(?![A-Za-z]))/g },
-  { pattern: /(?<![A-Za-z0-9])([1-9])\s?번\s?(?:안|으로|을|를|쪽)/g },
-  { pattern: /\b(?:with|choose|pick|prefer|go for|take)\s+([A-H])(?=\s*(?:[?.!,)]|$|or\b|and\b|instead\b))/g },
+  { pattern: new RegExp(String.raw`\(([1-9])\)(?=\s?${particle})`, "g"), form: "paren" },
+  { pattern: new RegExp(String.raw`(?<![A-Za-z0-9가-힣])([A-H1-9가나다라])안${planEnd}`, "g"), form: "plan" },
+  { pattern: /(?:옵션|선택지)\s*([A-H1-9])(?![A-Za-z0-9])/g, form: "option" },
+  { pattern: /\b(?:[Oo]ption|[Cc]hoice|[Pp]lan)\s+([A-H1-9])(?![A-Za-z0-9])/g, form: "option" },
+  // "C로 작성" names the C language.
+  { pattern: new RegExp(String.raw`(?<![A-Za-z0-9_./#-])(?<![A-Za-z0-9*]\*\*)(?<!\*[A-Za-z0-9])(?!C(?:\*\*|__)?(?:으로|로)\s*(?:작성|구현|짜|만들|컴파일|포팅))([A-H])(?=(?:\*\*|__)?${particle})`, "g"), form: "bare" },
+  { pattern: /(?<![A-Za-z0-9])([1-9])\s?번\s?(?:안|으로|을|를|쪽)/g, form: "number" },
+  { pattern: /\b(?:with|choose|pick|prefer|go for|take)\s+([A-H])(?=\s*(?:[?.!,)]|$|or\b|and\b|instead\b))/g, form: "bare" },
 ];
 
 /** Labels in the order the text mentions them, without duplicates. */
 export function referencedLabels(text: string): LabelReference[] {
   const plain = withoutCode(text);
   const found: (LabelReference & { at: number })[] = [];
-  for (const { pattern, paren } of referencePatterns) {
+  for (const { pattern, form } of referencePatterns) {
     for (const match of plain.matchAll(pattern)) {
       const key = normalize(match[1]);
       const at = match.index ?? 0;
+      const paren = form === "paren";
       const prior = found.find(item => item.key === key);
-      if (!prior) found.push({ key, kind: kindOf(key), paren: !!paren, at });
-      else if (at < prior.at) Object.assign(prior, { at, paren: !!paren });
+      if (!prior) found.push({ key, kind: kindOf(key), paren, form, at });
+      else if (at < prior.at) Object.assign(prior, { at, paren, form });
     }
   }
   return found.sort((a, b) => a.at - b.at).slice(0, MAX_LABELS).map(({ at: _at, ...item }) => item);
 }
 
-const marker = new RegExp([
-  "\\(([A-Ha-h가나다라마바사아1-9])\\)",
-  "([A-Ha-h가나다라마바사아1-9])\\)",
-  "([A-H1-9가나다라마바사아])[.:：](?=\\s)",
-  "([A-H1-9])\\s?안(?:은|는)?",
-  "(?:옵션|선택지|option|choice|plan)\\s*([A-Ha-h1-9가나다라마바사아])",
-].map(part => "(?:" + part + ")").join("|"), "i");
+// Case-sensitive: "Plan a release" and "a. …" do not define a label. Korean labels only as "(가)", "가)", "가." or "가안".
+const markers: { pattern: RegExp; form: DefinitionForm }[] = [
+  { pattern: /^\(([A-Ha-h가나다라마바사아1-9])\)/, form: "paren" },
+  { pattern: /^([A-Ha-h가나다라마바사아1-9])\)/, form: "close" },
+  { pattern: /^([A-H1-9가나다라마바사아])[.:：](?=\s|\*\*|__)/, form: "dot" },
+  { pattern: /^([A-H1-9가나다라])\s?안(?:은|는)?/, form: "plan" },
+  { pattern: /^(?:옵션|선택지|[Oo]ption|[Cc]hoice|[Pp]lan)\s*([A-H1-9])(?![A-Za-z0-9])/, form: "option" },
+];
 
-/** The label a line defines, when the line starts with one, such as "(a) …", "B안: …" or "- **Option C** …". */
+/** The label a line defines and how, when the line starts with one, such as "(a) …", "B안: …" or "- **Option C** …". */
+export function definitionMarker(line: string): { key: string; form: DefinitionForm } | null {
+  const trimmed = line.trim().replace(/^>\s*/, "").replace(/^#{1,6}\s+/, "").replace(/^[-*+]\s+/, "");
+  const bold = /^(?:\*\*|__)/.test(trimmed);
+  const head = trimmed.replace(/^(?:\*\*|__)/, "");
+  for (const { pattern, form } of markers) {
+    const match = pattern.exec(head);
+    if (match) return separated(head.slice(match[0].length)) ? { key: normalize(match[1]), form } : null;
+  }
+  // "**A**: …" or "**A** …" names the label in bold by itself.
+  const alone = bold ? /^([A-H1-9])(?=\*\*|__)/.exec(head) : null;
+  return alone && separated(head.slice(1)) ? { key: normalize(alone[1]), form: "bold" } : null;
+}
+
+// "(b)로 진행할까요?" points at a label. A definition is followed by a separator, not a particle.
+const separated = (rest: string) => !rest || /^(?:\*\*|__)?(?:\s|[:：.)\-–—]|$)/.test(rest);
+
+/** The label a line defines, when the line starts with one. */
 export function definedLabel(line: string): string | null {
-  const head = line.trim().replace(/^>\s*/, "").replace(/^#{1,6}\s+/, "").replace(/^[-*+]\s+/, "").replace(/^(?:\*\*|__)/, "");
-  const match = marker.exec(head);
-  if (!match || match.index !== 0) return null;
-  const rest = head.slice(match[0].length);
-  // "(b)로 진행할까요?" points at a label. A definition is followed by a separator, not a particle.
-  if (rest && !/^(?:\*\*|__)?(?:\s|[:：.)\-–—]|$)/.test(rest)) return null;
-  const raw = match.slice(1).find(Boolean)!;
-  return normalize(raw);
+  return definitionMarker(line)?.key ?? null;
 }
 
 function clip(text: string, limit: number) {
@@ -78,6 +100,8 @@ function clip(text: string, limit: number) {
 function isHeading(line: string) {
   return /^\s*#{1,6}\s/.test(line);
 }
+
+const asks = (line: string) => /[?？](?:\*\*|__)?\s*$/.test(line.trim());
 
 /** Every label defined in a text with its Markdown, in the order the text defines them. */
 export function labelDefinitions(text: string): LabelDefinition[] {
@@ -91,23 +115,50 @@ export function labelDefinitions(text: string): LabelDefinition[] {
     fenced.push(false);
   }
   const definitions: LabelDefinition[] = [];
-  for (let i = 0; i < lines.length && definitions.length < MAX_LABELS * 2; i++) {
-    const key = !fenced[i] ? definedLabel(lines[i]) : null;
-    if (!key || definitions.some(item => item.key === key)) continue;
+  for (let i = 0; i < lines.length && definitions.length < MAX_LABELS * 3; i++) {
+    const found = !fenced[i] ? definitionMarker(lines[i]) : null;
+    if (!found || definitions.some(item => item.key === found.key && item.form === found.form)) continue;
+    const { key, form } = found;
     const block = [lines[i].trim()];
     let j = i + 1;
-    const stop = (index: number) => index >= lines.length || (!fenced[index] && (definedLabel(lines[index]) !== null || isHeading(lines[index])));
+    // A definition stops at the next definition, a heading, a question, or a line about another label.
+    const stop = (index: number) => index >= lines.length || (!fenced[index] && (definitionMarker(lines[index]) !== null ||
+      isHeading(lines[index]) || asks(lines[index]) || referencedLabels(lines[index]).some(item => item.key !== key)));
     while (!stop(j) && lines[j].trim()) block.push(lines[j++].trimEnd());
     // A short title line such as "**(b) Register the host once**" carries its explanation in the next paragraph.
     if (block.length === 1 && block[0].length <= 100 && !/[.。!?？]$/.test(block[0].replace(/\*+$/, ""))) {
       let k = j;
       while (k < lines.length && !lines[k].trim()) k++;
-      if (!stop(k)) { block.push(""); j = k; }
+      if (!stop(k) && !referencedLabels(lines[k]).length) { block.push(""); j = k; }
       while (!stop(j) && lines[j].trim()) block.push(lines[j++].trimEnd());
     }
-    definitions.push({ key, markdown: clip(block.join("\n").trim(), MAX_DEFINITION) });
+    definitions.push({ key, form, markdown: clip(block.join("\n").trim(), MAX_DEFINITION) });
   }
   return definitions;
+}
+
+// Which definitions answer a reference, best first. "1안" is not item 1 of a numbered list.
+const preferred: Record<ReferenceForm, DefinitionForm[]> = {
+  paren: ["paren", "close", "plan", "option", "bold", "dot"],
+  plan: ["plan", "option", "paren", "close", "bold", "dot"],
+  option: ["option", "plan", "paren", "close", "bold", "dot"],
+  bare: ["paren", "close", "plan", "option", "bold", "dot"],
+  number: ["dot", "close", "paren", "plan", "option", "bold"],
+};
+function rank(key: string, reference: ReferenceForm, form: DefinitionForm = "paren") {
+  if (form === "dot" && kindOf(key) === "number" && (reference === "plan" || reference === "option")) return -1;
+  return preferred[reference].indexOf(form);
+}
+
+/** The best definition of `key` for the way the question points at it. */
+export function bestDefinition(definitions: readonly LabelDefinition[], key: string, reference: ReferenceForm) {
+  let best: LabelDefinition | undefined;
+  for (const item of definitions) {
+    if (item.key !== key) continue;
+    const score = rank(key, reference, item.form);
+    if (score >= 0 && (!best || score < rank(key, reference, best.form))) best = item;
+  }
+  return best;
 }
 
 /** Up to about `limit` characters of whole paragraphs right before the question. Code blocks are kept whole or left out. */
@@ -148,9 +199,8 @@ export function contextBefore(lines: readonly string[], limit = CONTEXT_LIMIT) {
 
 export type ChoiceSource = { text: string; definitions?: readonly LabelDefinition[] };
 
-function definitionIn(source: ChoiceSource, key: string) {
-  return source.definitions?.find(item => item.key === key)?.markdown
-    ?? labelDefinitions(source.text).find(item => item.key === key)?.markdown;
+function definitionIn(source: ChoiceSource, key: string, reference: ReferenceForm) {
+  return (bestDefinition(source.definitions ?? [], key, reference) ?? bestDefinition(labelDefinitions(source.text), key, reference))?.markdown;
 }
 
 function labelsIn(source: ChoiceSource, kind: LabelKind) {
@@ -173,6 +223,7 @@ export function questionChoices(input: { question: string; context: string; mess
   const references = referencedLabels(input.question);
   if (!references.length) return { choices: [] as Choice[], missingLabels: [] as string[] };
   const style = references[0].paren;
+  const forms = new Map(references.map(item => [item.key, item.form]));
   const wanted = references.map(item => item.key);
   // "Shall I go with (b)?" asks the person to pick one, so the other options of the same kind belong on the card.
   const pickOne = references.length === 1;
@@ -188,7 +239,7 @@ export function questionChoices(input: { question: string; context: string; mess
   for (const key of keys) {
     let markdown: string | undefined;
     for (const source of [input.message, ...input.earlier]) {
-      markdown = definitionIn(source, key);
+      markdown = definitionIn(source, key, forms.get(key) ?? references[0].form);
       if (markdown) break;
     }
     if (markdown) choices.push({ label: displayLabel(key, style), markdown });
@@ -198,7 +249,17 @@ export function questionChoices(input: { question: string; context: string; mess
   return { choices, missingLabels };
 }
 
-const deferral = /세션\s*(?:화면|기록|대화)(?:을|를|에서|에)?\s*(?:참고|참조|확인|보세요|봐|있)|(?:직전|이전|앞|위)\s*(?:의\s*)?(?:글|메시지|답변|대화)(?:에|을|를)?\s*(?:있|참고|참조|설명)|자세한\s*(?:건|것은|내용은)\s*(?:세션|원래|담당)|\b(?:see|check|refer to)\s+(?:the\s+)?(?:session|previous message|earlier message|last message)\b|\bdetails? (?:are|is) in the session\b/i;
+// Only words that send the reader elsewhere: "세션 화면 참고", "직전 글에 있음", "자세한 건 세션에서". Evidence such as
+// "세션 기록에서 확인한 결과" or "앞 글에 설명한 대로" does not.
+const deferral = new RegExp([
+  String.raw`(?:세션|작업\s*세션|원래\s*세션)\s*(?:화면|기록|대화)(?:을|를)?\s*(?:참고|참조|보세요|봐\s*주세요)`,
+  String.raw`(?:직전|이전|앞|위)\s*(?:의\s*)?(?:글|메시지|답변|대화)(?:을|를)?\s*(?:참고|참조|보세요|봐\s*주세요)`,
+  String.raw`(?:직전|이전|앞|위)\s*(?:의\s*)?(?:글|메시지|답변|대화)에\s*(?:있음|있습니다)(?=[.\s]|$)`,
+  String.raw`자세한\s*(?:건|것은|내용은)\s*(?:담당\s*|작업\s*|원래\s*)?세션`,
+  String.raw`자세한\s*(?:건|것은|내용은)[^.\n]{0,30}(?:에\s*(?:있음|있습니다)(?=[.\s]|$)|참고|참조|보세요)`,
+  String.raw`\b(?:see|refer to)\s+(?:the\s+)?(?:session|previous message|earlier message|last message)\b`,
+  String.raw`\bdetails? (?:are|is) in the (?:session|previous message)\b`,
+].join("|"), "i");
 
 /** True when a card sends the reader back to the session for the explanation. */
 export const defersToSession = (text: string) => deferral.test(text);
@@ -218,12 +279,11 @@ export function cardChoiceGaps(texts: readonly (string | undefined | null)[], op
   const references = referencedLabels(written.join("\n"));
   const known = new Set<string>();
   for (const option of options) for (const key of keysOfOption(option)) known.add(key);
-  for (const text of [...written, ...definitionTexts.filter((text): text is string => !!text)]) {
-    for (const item of labelDefinitions(text)) known.add(item.key);
-  }
+  const definitions = [...written, ...definitionTexts.filter((text): text is string => !!text)].flatMap(labelDefinitions);
   const style = references[0]?.paren ?? false;
   return {
-    missingLabels: references.filter(item => !known.has(item.key)).map(item => displayLabel(item.key, style)),
+    missingLabels: references.filter(item => !known.has(item.key) && !bestDefinition(definitions, item.key, item.form))
+      .map(item => displayLabel(item.key, style)),
     deferred: written.some(defersToSession),
   };
 }

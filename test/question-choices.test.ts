@@ -185,3 +185,72 @@ test("버튼은 받는 곳에 맞는 문장을 채운다", async () => {
   expect(choiceRequest(coordinator, true)?.text[0]).toContain("questions[].options");
   expect(decisionChoiceNotice({ source: "permission", question: "Bash", version: "v" })).toBeNull();
 });
+
+const keys = (text: string) => referencedLabels(text).map(({ key }) => key);
+const texts = (decision: { choices?: { markdown: string }[] }) => decision.choices?.map(({ markdown }) => markdown);
+
+test("리뷰 1: 선택지가·선택지나·옵션 다는 한글 이름표가 아니다", () => {
+  expect(referencedLabels("다른 선택지가 없으니 그대로 병합할까요?")).toEqual([]);
+  expect(referencedLabels("선택지나 옵션 다 괜찮습니다.")).toEqual([]);
+  expect(definedLabel("선택지가 두 가지 있습니다.")).toBeNull();
+  const decision = card(["assistant_message", "선택지가 두 가지 있습니다.\n\n다른 선택지가 없으니 그대로 병합할까요?"]);
+  expect(decision.choices).toBeUndefined();
+  expect(decision.missingLabels).toBeUndefined();
+  // 괄호, "가.", "가안" 꼴은 그대로 받는다.
+  expect(keys("(나)로 할까요? 가안이 낫습니다.")).toEqual(["나", "가"]);
+  expect(definedLabel("가. 지금 고친다")).toBe("가");
+});
+
+test("리뷰 2: 근거 문장은 설명을 세션으로 미루는 말이 아니다", () => {
+  for (const evidence of ["세션 기록에서 확인한 결과 테스트가 통과했습니다.", "세션 기록에 있는 근거로 병합을 추천합니다.",
+    "이전 대화에 있던 기준대로 진행합니다.", "앞 글에 설명한 대로 B안이 낫습니다.", "Check the session log first."]) {
+    expect(cardChoiceGaps([evidence], ["B"]).deferred).toBe(false);
+  }
+  for (const deferring of ["자세한 건 세션 화면 참고", "직전 글에 있음", "세션 화면을 참고하세요.", "자세한 내용은 작업 세션에서 보세요.",
+    "자세한 건 위 메시지에 있습니다.", "See the session for details."]) {
+    expect(cardChoiceGaps([deferring], []).deferred).toBe(true);
+  }
+});
+
+test("리뷰 3: 굵게 쓴 이름표를 알아본다", () => {
+  expect(definedLabel("**A.** 지금 배포")).toBe("a");
+  expect(definedLabel("**A**: 지금 배포")).toBe("a");
+  expect(definedLabel("**B** 내일 배포")).toBe("b");
+  expect(definedLabel("**B**로 진행할까요?")).toBeNull();
+  expect(keys("**B**로 진행할까요?")).toEqual(["b"]);
+  const decision = card(["assistant_message", "**A**: 지금 배포합니다.\n**B**: 내일 배포합니다.\n\n**B**로 진행할까요?"]);
+  expect(texts(decision)).toEqual(["**A**: 지금 배포합니다.", "**B**: 내일 배포합니다."]);
+});
+
+test("리뷰 4: 번호 목록이 1안 정의를 가로채지 않는다", () => {
+  const text = ["진행 순서입니다.", "", "1. 테스트를 돌립니다.", "2. 결과를 봅니다.", "", "1안: 지금 배포합니다.", "2안: 다음 주에 배포합니다.", "", "2안으로 진행할까요?"].join("\n");
+  expect(texts(card(["assistant_message", text]))).toEqual(["1안: 지금 배포합니다.", "2안: 다음 주에 배포합니다."]);
+  // "2번으로" 꼴은 번호 목록을 가리킨다.
+  const list = card(["assistant_message", "1. 테스트를 돌립니다.\n2. 결과를 봅니다.\n\n2번으로 진행할까요?"]);
+  expect(texts(list)).toEqual(["1. 테스트를 돌립니다.", "2. 결과를 봅니다."]);
+  // 번호 목록만 있으면 1안 정의가 아니다.
+  expect(cardChoiceGaps(["1안으로 진행"], [], ["1. 테스트를 돌립니다."]).missingLabels).toEqual(["1"]);
+});
+
+test("리뷰 5: 마지막 선택지 설명에 질문 줄이나 다른 이름표 줄이 붙지 않는다", () => {
+  expect(texts(card(["assistant_message", "(가) 오늘 배포\n\n(나) 내일 배포\n\n(나)로 할까요?"]))).toEqual(["(가) 오늘 배포", "(나) 내일 배포"]);
+  const other = card(["assistant_message", "(a) 지금 고침\n(b)보다 빠릅니다.\n\n(b) 다음 주 고침\n\n(b)로 할까요?"]);
+  expect(texts(other)?.[0]).toBe("(a) 지금 고침");
+});
+
+test("리뷰 6·7: 대소문자와 띄어쓰기 오탐을 막는다", () => {
+  expect(definedLabel("Plan a release for Friday.")).toBeNull();
+  expect(definedLabel("a. 소문자 목록")).toBeNull();
+  expect(definedLabel("Plan B: wait a week")).toBe("b");
+  for (const text of ["B 요청을 보낼까요?", "A 로그를 볼까요?", "(c) 2026 예시 회사", "B안전 점검을 할까요?", "C로 작성할까요?", "A안에서 고칠까요?"]) {
+    expect(referencedLabels(text)).toEqual([]);
+  }
+  expect(keys("B안이 낫습니다. C로 진행할까요?")).toEqual(["b", "c"]);
+});
+
+test("리뷰 8: 정의는 발췌에 남는 4턴에서만 계산한다", () => {
+  const long = (label: string) => `(${label}) 정의\n` + "x".repeat(2100);
+  const evidence = excerpt(page(["a", "b", "c", "d", "e"].map(label => ["assistant_message", long(label)] as [string, string])) as never);
+  expect(evidence.turns).toHaveLength(4);
+  expect(evidence.turns.map(turn => turn.definitions?.map(({ key }) => key))).toEqual([["b"], ["c"], ["d"], ["e"]]);
+});
