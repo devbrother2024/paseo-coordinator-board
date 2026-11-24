@@ -150,7 +150,10 @@ export function WorkPlacement({ theme, platform, host, disabled, setPlatform, se
 }) {
   const { t } = useBoardLanguage();
   const [expanded, setExpanded] = useState(false);
-  const { data, failed, loading, reload } = useDispatchHosts(expanded);
+  const { data, failed, loading, reload } = useDispatchHosts(true);
+  const hasAssignmentHosts = data?.hosts.some(host => !host.local);
+  // Keep an already selected constraint visible until the person clears it.
+  if (!hasAssignmentHosts && !platform && !host) return null;
   const fields = workPlacementText(platform, host);
   return <View style={{ gap: 7 }}>
     <View style={wrap}>
@@ -166,7 +169,7 @@ export function WorkPlacement({ theme, platform, host, disabled, setPlatform, se
         {taskPlatform.options.map(value => <Button theme={theme} key={value} label={t(...platformLabels[value])} selected={platform === value}
           disabled={disabled} onPress={() => setPlatform(value)} />)}
       </View>
-      {(data?.hosts.length ?? 0) > 1 && <View style={wrap}>
+      {(hasAssignmentHosts || host) && <View style={wrap}>
         <Button theme={theme} label={t("호스트 자동 선택", "Choose host automatically")} selected={!host} disabled={disabled}
           onPress={() => setHost(undefined)} />
         {data?.hosts.filter(choice => choice.resolved).map(choice => <Button theme={theme} key={choice.id} label={choice.label + (choice.online

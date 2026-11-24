@@ -27,7 +27,9 @@ export class PlacementError extends Error {
 
 export async function registeredAssignmentHosts(paseo: HostSdk, scope: Preferences): Promise<Host[]> {
   // Earlier daemons and lightweight SDK callers only expose local operations.
-  const directory = await paseo.hosts?.list().catch(() => null);
+  let directory;
+  try { directory = await paseo.hosts?.list(); }
+  catch { return []; }
   if (!directory?.self) return [];
   const { self } = directory;
   const local = { id: self.serverId, label: self.label, local: true, online: true, metadata: {}, resolved: true };

@@ -6,7 +6,7 @@ export const assignmentLocation = z.object({
   serverId: hostIdentity,
   label: z.string(),
   reason: assignmentReason,
-  running: z.number().int().nonnegative(),
+  running: z.number().int().nonnegative().nullable(),
 });
 
 export const assignmentNotice = z.object({

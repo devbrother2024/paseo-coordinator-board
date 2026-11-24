@@ -1,21 +1,39 @@
 import { createHash } from "node:crypto";
 import type { DispatchInput } from "../shared/dispatch";
-import { assignmentHost, assignmentReasons, pairedProject, type TaskPlatform } from "../shared/host-assignment";
+import { assignmentHost, assignmentReasons, inferHostPlatform, pairedProject, type TaskPlatform } from "../shared/host-assignment";
 import {
   countActiveSessions, PlacementError, readHostInventory, registeredAssignmentHosts, withAssignmentHost, type HostSdk,
 } from "./host-assignment";
 import { creationUuid, dispatchWorker, sendRemoteAssignment } from "./dispatch";
-import type { Preferences, PreferenceStore } from "./preferences";
+import { maxDispatchReceipts, pruneDispatchReceipts, type DispatchReceipt, type Preferences, type PreferenceStore } from "./preferences";
 
 type PlacementRequest = { platform?: TaskPlatform; host?: string; expectedHostId?: string };
-type Receipt = Preferences["dispatchReceipts"][string];
+const projectRequired = "이 호스트에서 관리할 프로젝트를 먼저 선택해 주세요. / Select a project managed by this board first.";
+const keyConflict = "이미 다른 작업에 사용한 요청입니다. 새 작업으로 시작해 주세요. / This request key belongs to a different task. Start a new request.";
+
+function localServerId(paseo: HostSdk, coordinator: string | null) {
+  try { return coordinator ? paseo.agents.ref(coordinator).address.serverId : undefined; }
+  catch { return undefined; }
+}
+
+function localPolicy(scope: Preferences, id: string | undefined) {
+  return id && Object.hasOwn(scope.assignmentHosts, id) ? scope.assignmentHosts[id] : undefined;
+}
 
 export async function planWorkerPlacement(paseo: HostSdk, scope: Preferences, projectId: string, request: PlacementRequest) {
-  if (!scope.projects.includes(projectId)) throw new Error("이 호스트에서 관리할 프로젝트를 먼저 선택해 주세요.");
+  if (!scope.projects.includes(projectId)) throw new Error(projectRequired);
   const registered = await registeredAssignmentHosts(paseo, scope);
   if (!registered.length) {
-    if (request.host || request.expectedHostId) throw new PlacementError("host-unknown");
-    if (request.platform && request.platform !== "any") throw new PlacementError("platform-offline");
+    const id = localServerId(paseo, scope.coordinator);
+    if (request.host || (request.expectedHostId && request.expectedHostId !== id)) throw new PlacementError("host-unknown");
+    const policy = localPolicy(scope, id);
+    if (policy?.enabled === false) throw new PlacementError("host-offline");
+    const platform = policy?.platform ?? inferHostPlatform({ platform: process.platform }, []);
+    if (request.platform && request.platform !== "any" && request.platform !== platform) throw new PlacementError("platform-offline");
+    if (policy?.limit != null) {
+      const load = await countActiveSessions(paseo).catch(() => { throw new PlacementError("load-unavailable"); });
+      if (load >= policy.limit) throw new PlacementError("at-capacity");
+    }
     return null;
   }
   const [local] = registered;
@@ -38,9 +56,10 @@ export async function planWorkerPlacement(paseo: HostSdk, scope: Preferences, pr
   const reason = "host" in byPreference && byPreference.host.id === host.id ? byPreference.reason : "previewed-host";
   return {
     serverId: host.local ? undefined : host.id,
+    localOnly: host.local && registered.length === 1,
     originServerId: local.id,
     sourceProjectId: host.projectId!,
-    location: { serverId: host.id, label: host.label, reason, running: host.running! },
+    location: { serverId: host.id, label: host.label, reason, running: host.running },
     explanation: assignmentReasons[reason].join(" / "),
     workspaces: host.spaces.map(w => ({ id: w.id, projectId, title: w.title?.trim() || w.name })),
   };
@@ -84,8 +103,9 @@ export class WorkerAssignment {
   }
 
   private async create(paseo: HostSdk, job: DispatchInput, coordinator: string, ownerScope: () => Preferences) {
-    const initial = ownerScope();
-    if (!initial.projects.includes(job.projectId)) throw new Error("이 호스트에서 관리할 프로젝트를 먼저 선택해 주세요.");
+    ownerScope();
+    const initial = this.store.readDispatchScope();
+    if (!initial.projects.includes(job.projectId)) throw new Error(projectRequired);
     const sessionId = creationUuid(job.requestKey, "agent");
     const fingerprint = createHash("sha256").update(JSON.stringify({ ...job, platform: job.platform ?? "any" })).digest("hex");
     const previous = initial.dispatchReceipts[sessionId];
@@ -95,11 +115,12 @@ export class WorkerAssignment {
           current.assignmentRevision !== initial.assignmentRevision || current.routingRevision !== initial.routingRevision)
         throw new PlacementError("placement-changed");
     };
-    if (previous && previous.fingerprint !== fingerprint) throw new Error("이미 다른 작업에 사용한 요청입니다. 새 작업으로 시작해 주세요.");
+    if (previous && previous.fingerprint !== fingerprint) throw new Error(keyConflict);
 
-    let receipt: Receipt;
+    let receipt: DispatchReceipt;
     let originServerId: string;
     let limit: number | null;
+    let retain = true;
     if (previous) {
       const [local, ...registered] = await registeredAssignmentHosts(paseo, initial);
       const destination = previous.remote ? registered.find(host => host.id === previous.location.serverId) : local;
@@ -116,11 +137,10 @@ export class WorkerAssignment {
       const planned = await planWorkerPlacement(paseo, initial, job.projectId, job);
       if (!planned) return dispatchWorker(paseo, job, scope);
       if (!planned.workspaces.some(workspace => workspace.id === job.workspaceId)) throw new PlacementError("placement-changed");
-      if (planned.serverId && (await paseo.agents.ref(sessionId).refresh())?.agent) {
-        throw new Error("이미 다른 작업에 사용한 요청입니다. 새 작업으로 시작해 주세요.");
-      }
+      if (planned.serverId && (await paseo.agents.ref(sessionId).refresh())?.agent) throw new Error(keyConflict);
+      retain = !planned.localOnly;
       receipt = { fingerprint, projectId: job.projectId, sourceProjectId: planned.sourceProjectId, workspaceId: job.workspaceId,
-        remote: !!planned.serverId, location: planned.location };
+        remote: !!planned.serverId, location: planned.location, createdAt: new Date().toISOString() };
       originServerId = planned.originServerId;
       limit = initial.assignmentHosts[planned.location.serverId]?.limit ?? null;
     }
@@ -136,22 +156,30 @@ export class WorkerAssignment {
               if (this.store.read().dispatchReceipts[sessionId]?.delivered) return;
               if (parent !== coordinator) throw new PlacementError("placement-changed");
               await sendRemoteAssignment(sdk, sessionId, parent, originServerId, id, text, () => checkScope(ownerScope()));
-              this.store.change(current => { current.dispatchReceipts[sessionId].delivered = true; });
+              this.markDelivered(sessionId, fingerprint);
             },
           }),
           beforeCreate: async () => {
-            const agent = (await sdk.agents.ref(sessionId).refresh())?.agent;
-            if (!agent && limit !== null && await countActiveSessions(sdk) >= limit) throw new PlacementError("at-capacity");
+            if (limit !== null && !(await sdk.agents.ref(sessionId).refresh())?.agent) {
+              const running = await countActiveSessions(sdk).catch(() => { throw new PlacementError("load-unavailable"); });
+              if (running >= limit) throw new PlacementError("at-capacity");
+            }
+            if (!retain) { checkScope(ownerScope()); return; }
             this.store.change(current => {
               checkScope(current);
+              pruneDispatchReceipts(current);
               const reserved = current.dispatchReceipts[sessionId];
               if (reserved && (reserved.fingerprint !== fingerprint || reserved.location.serverId !== receipt.location.serverId))
                 throw new PlacementError("placement-changed");
-              if (!reserved) current.dispatchReceipts[sessionId] = receipt;
+              if (!reserved) {
+                if (Object.keys(current.dispatchReceipts).length >= maxDispatchReceipts) throw new PlacementError("receipt-capacity");
+                current.dispatchReceipts[sessionId] = receipt;
+              }
             });
           },
         });
       });
+      if (retain && !receipt.remote) this.markDelivered(sessionId, fingerprint);
       if (this.store.read().assignmentNotice?.projectId === job.projectId) this.store.change(current => {
         if (current.assignmentNotice?.projectId === job.projectId) delete current.assignmentNotice;
       });
@@ -161,5 +189,11 @@ export class WorkerAssignment {
       if (["host_offline", "host_disabled", "host_unknown"].includes((error as { code?: string }).code ?? "")) throw new PlacementError("host-offline");
       throw error;
     }
+  }
+
+  private markDelivered(sessionId: string, fingerprint: string) {
+    const receipt = this.store.read().dispatchReceipts[sessionId];
+    if (!receipt || receipt.delivered || receipt.fingerprint !== fingerprint) return;
+    this.store.change(scope => { scope.dispatchReceipts[sessionId].delivered = true; });
   }
 }

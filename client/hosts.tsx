@@ -21,6 +21,7 @@ export function BoardHosts({ current, settings, theme, open }: {
   const scope = useSettings(hostVisibility);
   const hosts = boardHosts(current, registered);
   const assignment = useDispatchHosts(settings, true);
+  const hasAssignmentHosts = assignment.data?.hosts.some(host => !host.local) ?? false;
   const [registrationHelp, setRegistrationHelp] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [chosen, setChosen] = useState<string | null>(null);
@@ -62,11 +63,14 @@ export function BoardHosts({ current, settings, theme, open }: {
     </View>
     {settings && <>
       <View style={wrap}>
-        <Button theme={theme} label={t("배정 연결 새로 고침", "Refresh assignment connections")} disabled={assignment.loading} onPress={() => void assignment.reload()} />
-        <Button theme={theme} expanded={registrationHelp} label={t("배정 호스트 등록 안내", "Register an assignment host")} onPress={() => setRegistrationHelp(open => !open)} />
+        <Button theme={theme} expanded={registrationHelp} label={t("배정 호스트 등록 안내", "Register an assignment host")} onPress={() => {
+          if (!registrationHelp && !hasAssignmentHosts) void assignment.reload();
+          setRegistrationHelp(open => !open);
+        }} />
+        {(hasAssignmentHosts || registrationHelp) && <Button theme={theme} label={t("배정 연결 새로 고침", "Refresh assignment connections")} disabled={assignment.loading} onPress={() => void assignment.reload()} />}
       </View>
       {registrationHelp && <AssignmentRegistrationHelp theme={theme} />}
-      {assignment.failed && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>
+      {(hasAssignmentHosts || registrationHelp) && assignment.failed && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>
         {t("이 보드 데몬의 배정 연결을 확인하지 못했습니다.", "Could not check this board daemon’s assignment connections.")}
       </Text>}
     </>}
@@ -78,7 +82,6 @@ export function BoardHosts({ current, settings, theme, open }: {
     {settings && ready && hosts.map(host => {
       const included = !scope.values.hidden.includes(host.serverId);
       const dispatch = assignment.data?.hosts.find(item => item.resolved && item.id === host.serverId);
-      const showDispatch = hosts.length > 1 || (assignment.data?.hosts.length ?? 0) > 1 || registrationHelp;
       return <View key={host.serverId} style={{ gap: 7, borderTopWidth: 1, borderColor: c.border, paddingTop: 7 }}>
         <View style={{ ...wrap, alignItems: "center", justifyContent: "space-between" }}>
           <View style={{ flex: 1, minWidth: 120, gap: 3 }}>
@@ -90,8 +93,9 @@ export function BoardHosts({ current, settings, theme, open }: {
             accessibilityLabel={host.label + (included ? t(" · 기기별 세션에서 숨기기", " · Hide from host sessions") : t(" · 기기별 세션에 표시하기", " · Show in host sessions"))}
             onPress={() => void change(host.serverId, !included)} />
         </View>
-        {showDispatch && dispatch && assignment.data && <DispatchHostEditor host={dispatch} directory={assignment.data} theme={theme} reload={assignment.reload} />}
-        {showDispatch && !dispatch && assignment.data && !assignment.failed && host.serverId !== current.id && <Text style={{ color: c.statusWarning }}>
+        {(hasAssignmentHosts || registrationHelp) && dispatch && assignment.data &&
+          <DispatchHostEditor host={dispatch} directory={assignment.data} theme={theme} reload={assignment.reload} />}
+        {!dispatch && assignment.data && !assignment.failed && host.serverId !== current.id && <Text style={{ color: c.statusWarning }}>
           {t("앱에 연결됨 · 배정에 쓰려면 보드 데몬에 등록", "Added to the app · Register with the board daemon for assignments")}
         </Text>}
       </View>;

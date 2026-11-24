@@ -176,7 +176,7 @@ export class ClarificationSender {
 
   private async deliver(sdk: Sdk, input: ClarificationInput, id: string, fingerprint: string) {
     const key = clarificationKey(input.card);
-    const scope = this.store.read();
+    const scope = this.store.readDispatchScope();
     if (!inScope(scope, input.card)) throw Error(changed);
     id = photoReceiptId(id, !!input.images?.length, scope.clarifications);
     const previous = scope.clarifications[id];
@@ -198,7 +198,7 @@ export class ClarificationSender {
     const handle = recipientSdk.agents.ref(input.recipientId);
     if (previous) {
       if (previous.fingerprint !== fingerprint) throw Error("같은 요청 키로 다른 질문을 보낼 수 없습니다.");
-      const all = await discoverBoardSessions(sdk, this.store.read());
+      const all = await discoverBoardSessions(sdk, this.store, new Set([input.recipientId]));
       const scopeNow = this.store.read();
       if (
         !inScope(scopeNow, input.card) ||

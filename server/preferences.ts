@@ -51,6 +51,7 @@ const schema = z.object({
     location: assignmentLocation,
     remote: z.boolean(),
     delivered: z.boolean().optional(),
+    createdAt: z.iso.datetime().optional(),
   })).default({}),
   answers: z.record(z.string(), z.object({ version: z.string(), noteRevision: z.number().optional() })).default({}),
   clarifications:z.record(z.string(),clarificationEntry.extend({
@@ -75,6 +76,37 @@ const schema = z.object({
   }).optional(),
 });
 export type Preferences = z.infer<typeof schema>;
+export type DispatchReceipt = Preferences["dispatchReceipts"][string];
+
+export const maxDispatchReceipts = 256;
+const dispatchRetentionMs = 30 * 24 * 60 * 60 * 1000;
+
+export function pruneDispatchReceipts(scope: Preferences, now = Date.now()) {
+  const projects = new Set(scope.projects);
+  let changed = false;
+  const retained: [string, DispatchReceipt][] = [];
+  for (const [id, receipt] of Object.entries(scope.dispatchReceipts)) {
+    if (!projects.has(receipt.projectId) || (receipt.createdAt && Date.parse(receipt.createdAt) <= now - dispatchRetentionMs)) {
+      delete scope.dispatchReceipts[id];
+      changed = true;
+      continue;
+    }
+    if (!receipt.createdAt) {
+      receipt.createdAt = new Date(now).toISOString();
+      changed = true;
+    }
+    retained.push([id, receipt]);
+  }
+  if (retained.length > maxDispatchReceipts) {
+    // Older stores were unbounded. Preserve uncertain deliveries before trimming
+    // older confirmations. New reservations stop at the limit.
+    retained.sort(([, a], [, b]) => Number(!!a.delivered) - Number(!!b.delivered) ||
+      b.createdAt!.localeCompare(a.createdAt!));
+    for (const [id] of retained.slice(maxDispatchReceipts)) delete scope.dispatchReceipts[id];
+    changed = true;
+  }
+  return changed;
+}
 
 export function isManagedCoordinator(scope: Preferences, id: string | null) {
   return id !== null && scope.createdCoordinator?.id === id;
@@ -97,6 +129,11 @@ export class PreferenceStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return schema.parse({ projects: [], coordinator: null, judgments: {} });
       throw error;
     }
+  }
+  readDispatchScope() {
+    const scope = this.read();
+    if (pruneDispatchReceipts(scope)) this.change(pruneDispatchReceipts);
+    return scope;
   }
   change(edit: (value: Preferences) => void) {
     const value = this.read();

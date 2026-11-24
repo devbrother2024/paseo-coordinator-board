@@ -20,6 +20,7 @@ export type TaskPlatform = z.output<typeof taskPlatform>;
 export const assignmentReason = z.enum(["explicit-host", "platform", "least-busy", "board-tie", "only-host", "previewed-host"]);
 export const assignmentFailure = z.enum([
   "host-unknown", "host-offline", "platform-offline", "project-unavailable", "at-capacity", "load-unavailable", "placement-changed",
+  "receipt-capacity",
 ]);
 export type AssignmentReason = z.output<typeof assignmentReason>;
 export type AssignmentFailure = z.output<typeof assignmentFailure>;
@@ -38,6 +39,7 @@ export const assignmentFailures: Record<AssignmentFailure, [string, string]> = {
   "at-capacity": ["대상 호스트의 동시 세션 상한에 도달했습니다.", "The eligible hosts have reached their concurrent session limits."],
   "load-unavailable": ["대상 호스트의 진행 중 세션 수를 확인하지 못했습니다.", "Could not check the active session count on the eligible hosts."],
   "placement-changed": ["호스트 또는 워크스페이스 배정이 바뀌었습니다. 미리보기를 다시 확인해 주세요.", "The host or workspace selection changed. Preview the assignment again."],
+  "receipt-capacity": ["보드가 추적할 수 있는 다중 호스트 배정 건수에 도달했습니다.", "The board has reached its limit for tracked multi-host assignments."],
 };
 export const assignmentReasons: Record<AssignmentReason, [string, string]> = {
   "explicit-host": ["지정한 호스트", "Requested host"],
@@ -108,6 +110,10 @@ export function assignmentHost<T extends AssignmentHost>(hosts: T[],
   }
   const available = online.filter(row => row.workspaces.length > 0);
   if (!available.length) return { failure: "project-unavailable" };
+  const [only] = available;
+  if (available.length === 1 && only.local && only.running === null && only.limit === null) {
+    return { host: only, reason: host ? "explicit-host" : platform !== "any" ? "platform" : "only-host" };
+  }
   const measured = available.filter(row => row.running !== null);
   if (!measured.length) return { failure: "load-unavailable" };
   const eligible = measured.filter(row => row.limit === null || row.running! < row.limit);

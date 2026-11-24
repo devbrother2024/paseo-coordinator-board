@@ -27,7 +27,7 @@ const modeId = "auto-review";
 
 type Agent = {
   id: string; workspaceId: string; title: string; status: string; pendingPermissions: { id: string; title: string }[];
-  updatedAt: string; currentModeId?: string; metadata?: Record<string, unknown>;
+  updatedAt: string; currentModeId?: string; metadata?: Record<string, unknown>; archivedAt?: string;
 };
 type Create = { agentId: string; config: { provider: string; modeId?: string }; title: string;
   idempotencyKey: string; parent: unknown; prompt?: string; metadata: Record<string, unknown> };
@@ -44,7 +44,8 @@ function daemon(projectId: string, path: string, remoteUrl: string) {
   const creates = new Map<string, Create>();
   const sends: { id: string; text: string; options: Send }[] = [];
   const timelines = new Map<string, TimelineItem[]>();
-  const state = { loseNextSendAck: false, permissionsOnCreate: false, disposals: 0 };
+  const state = { loseNextSendAck: false, permissionsOnCreate: false, disposals: 0,
+    failLoad: false, failRef: false, workingReads: 0, mostReads: 0, readIds: [] as string[] };
   function add(id: string, status = "idle", more: Partial<Agent> = {}) {
     const agent = { id, workspaceId: workspace.id, title: id, status, pendingPermissions: [], updatedAt: "2026-01-01T00:00:00Z", ...more };
     agents.set(id, agent);
@@ -67,10 +68,22 @@ function daemon(projectId: string, path: string, remoteUrl: string) {
       } } }),
     },
     agents: {
-      list: async ({ filter }: { filter?: { statuses?: string[] } } = {}) => page([...agents.values()]
-        .filter(agent => !filter?.statuses || filter.statuses.includes(agent.status)).map(agent => ({ agent, project: agentProject }))),
+      list: async ({ filter }: { filter?: { statuses?: string[] } } = {}) => {
+        if (state.failLoad && filter?.statuses) throw Error("Load unavailable");
+        return page([...agents.values()].filter(agent => !filter?.statuses || filter.statuses.includes(agent.status))
+          .map(agent => ({ agent, project: agentProject })));
+      },
       ref: (id: string) => ({
-        refresh: async () => agents.has(id) ? { agent: agents.get(id), project: agentProject } : null,
+        refresh: async () => {
+          state.readIds.push(id);
+          state.workingReads++;
+          state.mostReads = Math.max(state.workingReads, state.mostReads);
+          try {
+            await new Promise(resolve => setTimeout(resolve, 0));
+            if (state.failRef) throw Error("Agent lookup unavailable");
+            return agents.has(id) ? { agent: agents.get(id), project: agentProject } : null;
+          } finally { state.workingReads--; }
+        },
         timeline: { refetch: async () => ({
           epoch: "fixture", entries: (timelines.get(id) ?? []).map((item, seqEnd) => ({ item, seqEnd })),
         }) },
@@ -115,8 +128,14 @@ function scenario() {
   mac.add("mac-one", "running");
   mac.add("mac-two", "running");
   const registration = { ...remote };
-  const sdk = { ...mac.sdk, hosts: {
-    list: async () => ({ self: local, hosts: [registration] }),
+  const registry = { single: false, failed: false };
+  const sdk = { ...mac.sdk, agents: { ...mac.sdk.agents, ref: (id: string) => ({
+    ...mac.sdk.agents.ref(id), address: { agentId: id, serverId: local.serverId },
+  }) }, hosts: {
+    list: async () => {
+      if (registry.failed) throw Error("Host directory unavailable");
+      return { self: local, hosts: registry.single ? [] : [registration] };
+    },
     client: async (id: string) => {
       expect(id).toBe(remote.serverId);
       if (registration.status !== "online") throw Object.assign(new Error("Offline"), { code: "host_offline" });
@@ -140,7 +159,7 @@ function scenario() {
   const assign = (job: DispatchInput) => tool("assign_board_worker", { job });
   const job: DispatchInput = { projectId, workspaceId: win.workspace.id, expectedHostId: remote.serverId, expectedRoute,
     expectedModeId: modeId, title: "Check checkout", prompt: "Review the checkout.", grade: "C", requestKey: "example-worker-key", platform: "any" };
-  return { dir, sdk, store, mac, win, registration, call, tool, plan, assign, job };
+  return { dir, sdk, store, mac, win, registration, registry, call, tool, plan, assign, job };
 }
 
 test("tools match projects across path and Git URL formats and expose the reason for the selected host", async () => {
@@ -203,17 +222,18 @@ test("a new remote worker that asks for permission does not receive a work promp
   await expect(s.assign(s.job)).rejects.toThrow(/작업 지시/);
   expect(s.win.creates.size).toBe(1);
   expect(s.win.sends).toHaveLength(0);
-  const rows = await discoverBoardSessions(s.sdk, s.store.read());
+  const rows = await discoverBoardSessions(s.sdk, s.store);
   expect(rows.find(row => row.serverId === remote.serverId)).toMatchObject({ projectId, nativePending: true, lane: "human" });
 });
 
 test("remote session questions join the managed project and the user's reply uses that worker's host", async () => {
   const s = scenario();
   const { sessionId } = await s.assign(s.job);
+  const { sessionId: otherWorker } = await s.assign({ ...s.job, requestKey: "example-unrelated-worker" });
   s.win.timelines.set(sessionId, [{ type: "assistant_message", text: "Which option do you prefer?" }]);
   const scope = s.store.read();
   const reader = new ConversationReader();
-  const rows = await discoverBoardSessions(s.sdk, scope);
+  const rows = await discoverBoardSessions(s.sdk, s.store);
   const remoteRow = rows.find(row => row.id === sessionId)!;
   expect(remoteRow).toMatchObject({ serverId: remote.serverId, projectId, sourceProjectId: winProjectId, assignment: { label: "Windows" } });
   expect(isCurrentMembership(remoteRow, scope)).toBe(true);
@@ -225,11 +245,13 @@ test("remote session questions join the managed project and the user's reply use
   const notes = new NoteStore(join(s.dir, "notes.json"));
   const reply = { projectId, sessionId, recipientId: sessionId, version: remoteRow.decision!.version, action: "reply" as const,
     text: "The second option", requestKey: "example-reply-key" };
+  s.win.state.readIds = [];
   await new DecisionSender(s.store, notes, reader).send(s.sdk, reply);
+  expect(s.win.state.readIds).not.toContain(otherWorker);
   expect(s.win.sends.at(-1)).toMatchObject({ id: sessionId, text: expect.stringContaining("The second option") });
   expect(s.mac.sends).toHaveLength(0);
   s.win.agents.get(sessionId)!.metadata = {};
-  expect((await discoverBoardSessions(s.sdk, scope)).some(row => row.id === sessionId)).toBe(false);
+  expect((await discoverBoardSessions(s.sdk, s.store)).some(row => row.id === sessionId)).toBe(false);
 });
 
 test("selected placement fields enter the same explicit work request and change its retry identity", async () => {
@@ -239,4 +261,67 @@ test("selected placement fields enter the same explicit work request and change 
   expect(s.mac.sends[0]).toMatchObject({ id: coordinator, text: "Check the installer.\n\nplatform: windows\nhost: \"Windows\"" });
   await expect(s.call(requestWork, { ...request, platform: "mac" })).rejects.toThrow(/새 요청/);
   expect(s.mac.sends).toHaveLength(1);
+});
+
+test.each([false, true])("a single board host keeps local dispatch when load is unknown or the registry fails (%s)", async failed => {
+  const s = scenario();
+  s.registry.single = true;
+  s.registry.failed = failed;
+  s.mac.state.failLoad = true;
+  const job = { ...s.job, workspaceId: s.mac.workspace.id, expectedHostId: local.serverId, platform: "mac" as const };
+  expect((await s.plan({ platform: "mac" })).workspaces.map((entry: { id: string }) => entry.id)).toEqual([s.mac.workspace.id]);
+  const receipt = await s.assign(job);
+  expect(await s.assign(job)).toEqual(receipt);
+  expect(s.mac.creates.size).toBe(1);
+  expect(s.win.creates.size).toBe(0);
+  expect(s.store.read().dispatchReceipts).toEqual({});
+  await expect(s.assign({ ...job, expectedHostId: remote.serverId })).rejects.toThrow(/host/i);
+  await expect(s.plan({ platform: "windows" })).rejects.toThrow(/operating system/i);
+});
+
+test("discovery drops completed missing or archived receipts and preserves uncertain or unreachable ones", async () => {
+  const s = scenario();
+  const jobs = await Promise.all([s.job, { ...s.job, requestKey: "example-archived-job" },
+    { ...s.job, requestKey: "example-unconfirmed-job" }].map(s.assign));
+  const [missing, archived, pending] = jobs.map(job => job.sessionId);
+  s.win.agents.delete(missing);
+  s.win.agents.get(archived)!.archivedAt = new Date().toISOString();
+  s.win.agents.delete(pending);
+  s.store.change(scope => { scope.dispatchReceipts[pending].delivered = false; });
+  s.win.state.failRef = true;
+  await discoverBoardSessions(s.sdk, s.store);
+  expect(Object.keys(s.store.read().dispatchReceipts)).toHaveLength(3);
+  s.win.state.failRef = false;
+  await discoverBoardSessions(s.sdk, s.store);
+  expect(Object.keys(s.store.read().dispatchReceipts)).toEqual([pending]);
+  s.win.state.readIds = [];
+  await discoverBoardSessions(s.sdk, s.store);
+  expect(s.win.state.readIds).toEqual([pending]);
+});
+
+test("discovery prunes by project, age and count before remote lookups and limits concurrent requests", async () => {
+  const s = scenario();
+  const { sessionId } = await s.assign(s.job);
+  const excluded = "00000000-0000-8000-8000-000000000001";
+  const expired = "00000000-0000-8000-8000-000000000002";
+  s.store.change(scope => {
+    const entry = scope.dispatchReceipts[sessionId];
+    scope.dispatchReceipts[excluded] = { ...entry, projectId: "unmanaged" };
+    scope.dispatchReceipts[expired] = { ...entry, createdAt: "2020-01-01T00:00:00Z" };
+    for (let i = 3; i < 265; i++) {
+      const id = `00000000-0000-8000-8000-${String(i).padStart(12, "0")}`;
+      scope.dispatchReceipts[id] = { ...entry, delivered: false };
+    }
+  });
+  s.win.state.readIds = [];
+  s.win.state.mostReads = 0;
+  await discoverBoardSessions(s.sdk, s.store);
+  expect(s.win.state.readIds).toHaveLength(256);
+  expect(s.win.state.readIds).not.toContain(excluded);
+  expect(s.win.state.readIds).not.toContain(expired);
+  expect(s.win.state.mostReads).toBeGreaterThan(1);
+  expect(s.win.state.mostReads).toBeLessThanOrEqual(4);
+  expect(Object.keys(s.store.read().dispatchReceipts)).toHaveLength(256);
+  await expect(s.assign({ ...s.job, requestKey: "example-at-receipt-limit" })).rejects.toThrow(/limit for tracked/);
+  expect(s.win.creates.size).toBe(1);
 });

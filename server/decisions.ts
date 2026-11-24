@@ -114,7 +114,7 @@ export class DecisionSender {
     }
     messageId = earlier?.messageId ?? messageId;
     const receipt: Receipt = { ok: true, recipientId: input.recipientId, messageId };
-    const rows = await discoverBoardSessions(paseo, scope);
+    const rows = await discoverBoardSessions(paseo, this.store, new Set([input.sessionId, input.recipientId]));
     const managed = managedSessions(rows, this.store.read());
     const row = managed.find(r => r.id === input.sessionId && r.projectId === input.projectId);
     const destination = managed.find(r => r.id === input.recipientId) ??

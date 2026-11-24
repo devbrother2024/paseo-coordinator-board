@@ -270,7 +270,7 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
     input: z.strictObject({ job: dispatchInputSchema }),
     async execute({ job }, { paseo, agent }) {
       ownerScope(agent.id);
-      await managedRowsForCoordinator(paseo, store, agent.id);
+      await managedRowsForCoordinator(paseo, store, agent.id, new Set());
       return {
         text: JSON.stringify(
           await assignment.assign(paseo, job, agent.id, () => ownerScope(agent.id)),

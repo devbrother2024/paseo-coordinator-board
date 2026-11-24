@@ -14,7 +14,7 @@ import { boardDecisionCount, boardScope, boardSnapshot, reportingKey, saveNote, 
 import { canReceiveBoardInput, discoverSessions } from "./server/discovery";
 import { attachReportTool } from "./server/reporting";
 import { ConversationReader, excerpt } from "./server/conversation";
-import { isManagedCoordinator, setCoordinator, PreferenceStore } from "./server/preferences";
+import { isManagedCoordinator, pruneDispatchReceipts, setCoordinator, PreferenceStore } from "./server/preferences";
 import { trackedReviewTool } from "./server/tracked-review";
 import { attachCoordinatorTools } from "./server/coordinator";
 import { createOperations } from "./server/operations";
@@ -72,7 +72,7 @@ export default function contribute(server: PluginServerContext) {
     const catalogRead = paseo.projects.list();
     const [sessionView, fetched] = await Promise.all([
       (async () => {
-        const [catalog, rows] = await Promise.all([catalogRead, discoverBoardSessions(paseo, prefs.read())]);
+        const [catalog, rows] = await Promise.all([catalogRead, discoverBoardSessions(paseo, prefs)]);
         return buildSessionView(paseo, catalog, rows);
       })(),
       catalogRead.then(({ projects }) => prs.read(paseo, { projects, refresh:refreshPulls })),
@@ -287,6 +287,7 @@ export default function contribute(server: PluginServerContext) {
         scope.projects = scope.projects.filter(id => id !== change.projectId);
         if (change.enabled) scope.projects.push(change.projectId);
         else {
+          pruneDispatchReceipts(scope);
           if (scope.assignmentNotice?.projectId === change.projectId) delete scope.assignmentNotice;
           for (const link of Object.values(scope.sessionLinks)) {
             if (link.targetProjectId === change.projectId) delete scope.sessionLinks[link.sessionId];
@@ -306,7 +307,7 @@ export default function contribute(server: PluginServerContext) {
     return { ok: true };
   });
   server.handle(saveNote, async (input, { paseo }) => {
-    const sessions = await discoverBoardSessions(paseo, prefs.read());
+    const sessions = await discoverBoardSessions(paseo, prefs, new Set([input.sessionId]));
     if (!managedSessions(sessions, prefs.read()).some(session => session.id === input.sessionId)) {
       throw new Error("이 호스트에서 해당 세션을 찾지 못했습니다. 보드를 새로 고쳐 주세요.");
     }
