@@ -12,7 +12,8 @@ import { boardSnapshot, boardScope } from "../shared/contract";
 import { projectFolderMap } from "../shared/project-folders";
 import { linkSession } from "../shared/session-links";
 import {
-  resolveTrackedDecision, trackedAnswerText, trackedDecisionSchema, trackedReplyExample, trackedReplyRoute, trackedSession,
+  legacyTrackedAnswer, resolveTrackedDecision, trackedAnswerLead, trackedAnswerText, trackedDecisionSchema, trackedReplyExample, trackedReplyRoute,
+  trackedSession,
 } from "../shared/tracked-decisions";
 
 const scratch: string[] = [];
@@ -106,6 +107,51 @@ test("coordinator cards owned by the board's own coordinator send with no or ten
   expect(await f.reply(plan, {recipientId: "general", questionIndexes: plan.questions.map((_, index) => index)})).toEqual({status: "sent"});
   expect(f.sent.map(m => m.id)).toEqual(["general", "general"]);
   expect(f.context(1).questions).toHaveLength(10);
+});
+
+const sizes = {questions: [{id: "Q1", text: "Which size?", options: [{key: "A", text: "Small", recommended: true}, {key: "B", text: "Large"}]}]};
+
+test("a reply to a card's questions starts with the card's answer lead, unless the person leaves it out or writes freely", async () => {
+  const f = await fixture([card("lead", {where: "manager", answerLead: "Approve the image spec", ...sizes}), card("plain", {where: "manager", ...sizes})], "general");
+  f.createdBy("general");
+  const {item: led} = await f.find("lead"), {item: plain} = await f.find("plain");
+  const compose = (item, replies: string[], free = "", photos = false, removed = false) =>
+    trackedAnswerText(item, replies, free, removed ? "" : trackedAnswerLead(item, replies, free, photos));
+  expect(compose(led, ["A · Small"])).toBe("Approve the image spec\nQ1 · Which size?: A · Small");
+  expect(compose(plain, ["A · Small"])).toBe("Q1 · Which size?: A · Small");
+  expect(compose(led, [""], "Hold it until Friday")).toBe("Hold it until Friday");
+  expect(compose(led, ["B · Large"], "", false, true)).toBe("Q1 · Which size?: B · Large");
+  expect(compose(led, ["A · Small"], "Ship it today")).toBe("Approve the image spec\nQ1 · Which size?: A · Small\nShip it today");
+  // A photo sent with nothing typed still says what it answers.
+  expect(compose(led, [""], "", true)).toBe("Approve the image spec");
+  expect(compose(led, [""])).toBe("");
+  expect(trackedAnswerLead({answerLead: " Approve\n  the spec "}, ["A · Small"], "")).toBe("Approve the spec");
+  for (const item of [led, plain]) {
+    expect(await f.reply(item, {recipientId: "general", answer: compose(item, ["A · Small"]), questionIndexes: [0]})).toEqual({status: "sent"});
+  }
+  expect(f.sent.map(m => m.text.split("\n\n").slice(1).join("\n\n"))).toEqual([
+    "Approve the image spec\nQ1 · Which size?: A · Small", "Q1 · Which size?: A · Small",
+  ]);
+  expect(f.sent.some(m => m.text.includes("\u2014"))).toBe(false);
+});
+
+test("a reply recorded in the older form is still confirmed by the same answers, and is never sent again", async () => {
+  const f = await fixture([card("lead", {where: "manager", answerLead: "Approve the image spec", ...sizes})], "general");
+  f.createdBy("general");
+  const {item} = await f.find("lead");
+  const older = "Q1 · Which size? \u2014 A · Small";
+  f.lost.add("general");
+  expect(await f.reply(item, {recipientId: "general", answer: older, questionIndexes: [0]})).toEqual({status: "unconfirmed"});
+  const current = trackedAnswerText(item, ["A · Small"], "", trackedAnswerLead(item, ["A · Small"], ""));
+  expect(legacyTrackedAnswer(item, current)).toBe(older);
+  expect(legacyTrackedAnswer(item, "Q1 · Which size?: A · Small")).toBe(older);
+  const other = trackedAnswerText(item, ["B · Large"], "", trackedAnswerLead(item, ["B · Large"], ""));
+  expect(await f.reply(item, {recipientId: "general", answer: other, questionIndexes: [0]})).toEqual({status: "changed", reason: "conflict"});
+  expect(await f.reply(item, {recipientId: "general", answer: current, questionIndexes: [0]})).toEqual({status: "unconfirmed"});
+  f.history.visible = true;
+  expect(await f.reply(item, {recipientId: "general", answer: current, questionIndexes: [0]})).toEqual({status: "sent"});
+  expect(f.sent).toHaveLength(1);
+  expect(f.sent[0].text.endsWith("\n\n" + older)).toBe(true);
 });
 
 test("an edit between listing and sending says revised, and the same draft sends once the board refreshes", async () => {

@@ -65,12 +65,31 @@ export function mentionsSecurityGate(item: TrackedDecisionInput) {
     .some(line => /보안\s*게이트|security[- ]gate/i.test(line));
 }
 
-export function trackedAnswerText(item: TrackedDecisionInput, replies: string[], freeReply: string) {
-  const answers = item.questions.flatMap((question, index) => {
-    const value = replies[index];
-    return value ? [[question.id, question.text].filter(Boolean).join(" · ") + " — " + value] : [];
-  });
-  return [...answers, freeReply.trim()].filter(Boolean).join("\n");
+const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
+const questionLabel = (question: TrackedDecisionInput["questions"][number]) => [question.id, question.text].filter(Boolean).join(" · ");
+
+// The ledger's answer lead opens a reply to the card's questions, so the coordinator can tell what the answers decide.
+// A reply written only in the free field goes out as the person wrote it.
+export function trackedAnswerLead(item: Pick<TrackedDecisionInput, "answerLead">, replies: readonly string[], freeReply: string, photos = false) {
+  const lead = oneLine(item.answerLead ?? "");
+  return lead && (replies.some(Boolean) || (photos && !freeReply.trim())) ? lead : "";
+}
+
+export function trackedAnswerText(item: TrackedDecisionInput, replies: readonly string[], freeReply: string, lead = "") {
+  const answers = item.questions.flatMap((question, index) => replies[index] ? [questionLabel(question) + ": " + replies[index]] : []);
+  return [lead, ...answers, freeReply.trim()].filter(Boolean).join("\n");
+}
+
+// A reply recorded before the answer lead had no lead line and joined each question and its answer with an em dash.
+export function legacyTrackedAnswer(item: TrackedDecisionInput, answer: string) {
+  const lines = answer.split("\n");
+  const lead = oneLine(item.answerLead ?? "");
+  if (lead && lines[0] === lead) lines.shift();
+  const labels = item.questions.map(questionLabel);
+  return lines.map(line => {
+    const label = labels.find(label => line.startsWith(label + ": "));
+    return label ? label + " \u2014 " + line.slice(label.length + 2) : line;
+  }).join("\n");
 }
 
 // The ledger's example answer is guidance only. It may name several choices at once.

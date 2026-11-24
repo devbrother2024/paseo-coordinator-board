@@ -5,7 +5,7 @@ import { useRpc } from "@getpaseo/plugin/client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
 import {
-  cancelQueuedReply, resolveTrackedDecision, mentionsSecurityGate, trackedAnswerText, trackedPullTarget, trackedReplyExample, usesSourceCoordinator,
+  cancelQueuedReply, resolveTrackedDecision, mentionsSecurityGate, trackedAnswerLead, trackedAnswerText, trackedPullTarget, trackedReplyExample, usesSourceCoordinator,
   type TrackedDecision, type TrackedReplyBlock, type TrackedReplyReason, type TrackedReplyRoute,
 } from "../shared/tracked-decisions";
 import { Button, type Theme } from "./controls";
@@ -97,6 +97,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const [editedReply, setEditedReply] = useState<string | null>(null);
   const [typed, setTyped] = useState<Record<number, string | undefined>>({});
   const [selected, setSelected] = useState<Record<number, string[]>>({});
+  const [leadRemoved, setLeadRemoved] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [streak, setStreak] = useState<FailureStreak>(null);
   const result = outcome?.status ?? null;
@@ -140,7 +141,9 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
     return [text, positions.length ? t("첨부 사진 ", "Attached photos ") + positions.join(", ") : ""].filter(Boolean).join(" · ");
   });
   const outstanding = replies.some((value, index) => !value && !skipped[index]);
-  const answer = trackedAnswerText(item, replies, freeReply);
+  const hasPhotos = attachments.photos.length > 0;
+  const lead = trackedAnswerLead(item, replies, freeReply, hasPhotos);
+  const answer = trackedAnswerText(item, replies, freeReply, leadRemoved ? "" : lead);
   const followupOnly = isMerge && item.questions.length > 0;
   const owned = usesSourceCoordinator(item);
   const coordinatorCard = item.where === "manager" || item.where === "human";
@@ -158,7 +161,6 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
     : item.where === "session"
     ? followupOnly ? t("작업 세션에 후속 답장 보내기", "Send follow-up reply to work session") : t("작업 세션에 답장 보내기", "Send reply to work session")
     : followupOnly ? t("코디네이터에 후속 답장 보내기", "Send follow-up reply to coordinator") : t("코디네이터에 답장 보내기", "Send reply to coordinator");
-  const hasPhotos = attachments.photos.length > 0;
   const hasAnswer = Boolean(answer || hasPhotos);
   const tooLong = answer.length > 4000;
   const humanCheck = item.kind === "check" && item.where === "human" && !item.questions.length && !item.matchedSessionId;
@@ -193,7 +195,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
     setTyped(previous => ({ ...previous, [index]: undefined }));
   }
   function clearDraft() {
-    attachments.clear(); setEditedReply(null); setTyped({}); setSelected({}); setSkipped({});
+    attachments.clear(); setEditedReply(null); setTyped({}); setSelected({}); setSkipped({}); setLeadRemoved(false);
   }
   async function refreshRecord() {
     if (pending.current || !outcome) return;
@@ -384,6 +386,13 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
         {((changedOwner && recipientId) || (fallbackOwnerChanged && offersFallback)) &&
           <Button theme={theme} label={t("변경된 운영 코디네이터 확인", "Confirm new ledger owner")} onPress={() => setConfirmedOwner(item.sourceCoordinatorId)} />}
         {outstanding && <Text style={{ color: c.foregroundMuted }}>{t("각 질문에 답하거나 건너뛰기를 선택하세요.", "Answer or explicitly skip each question.")}</Text>}
+        {!!lead && recordActions && <View style={{ ...wrap, alignItems: "center" }}>
+          <Text selectable style={{ color: leadRemoved ? c.foregroundMuted : c.foreground, fontSize: 12, flexShrink: 1 }}>
+            {(leadRemoved ? t("첫 줄 없이 보냄", "Sent without the first line") : t("첫 줄로 함께 보냄", "Sent as the first line")) + " · " + lead}
+          </Text>
+          <Button theme={theme} disabled={busy} {...named(leadRemoved ? t("첫 줄 다시 넣기", "Restore first line") : t("첫 줄 빼기", "Remove first line"))}
+            onPress={() => setLeadRemoved(removed => !removed)} />
+        </View>}
         {blockedNote && (recipientId || fallbackId) && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning, fontSize: 12 }}>{blockedNote}</Text>}
         <View style={wrap}>
           {recipientId && !redirected && recordActions && <SendButton theme={theme} {...named(sendLabel)} send={sendReply} selected={!sendReply.disabled} />}

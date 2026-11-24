@@ -234,7 +234,7 @@ test("merge follow-up choices carry only their own answers, including after the 
   expect(mentionsSecurityGate(item)).toBe(true);
   expect(trackedReplyExample(item)).toBe("");
   expect(trackedReplyExample({...item,questions:[]})).toBe("");
-  expect(trackedAnswerText(item, ["A · 첫 실행"], "")).toBe("Q1 · 글 작성 시점 — A · 첫 실행");
+  expect(trackedAnswerText(item, ["A · 첫 실행"], "")).toBe("Q1 · 글 작성 시점: A · 첫 실행");
   expect(trackedAnswerText(item, [""], "")).toBe("");
   expect(trackedReplyExample({...item,kind:"check",questions:[],howToAnswer:"Reviewed"})).toBe("Reviewed");
   for (const ask of [[url+" "+url+"/extra "+url+"0"],["https://github.com.evil.invalid/demo/repo/pull/42"],

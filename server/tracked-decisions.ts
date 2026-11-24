@@ -14,7 +14,7 @@ import { trackedReplyMessage, trackedReplyOrigin } from "./decision-message";
 import type { Evidence } from "./conversation";
 import type { MergeTarget, PullRequestView } from "../shared/prs";
 import {
-  cancelQueuedReply, resolveTrackedDecision, trackedDecisionInputSchema, trackedPullTarget, trackedKey, trackedMatches, usesSourceCoordinator,
+  cancelQueuedReply, legacyTrackedAnswer, resolveTrackedDecision, trackedDecisionInputSchema, trackedPullTarget, trackedKey, trackedMatches, usesSourceCoordinator,
   type RoutedTrackedDecision, type TrackedDecisionInput, type TrackedDecisionView, type TrackedReplyReason, type TrackedResolution,
 } from "../shared/tracked-decisions";
 
@@ -51,8 +51,13 @@ function receiptKey(key: string, fingerprint: string): string {
   return JSON.stringify([key, fingerprint]);
 }
 
-function sameReply(receipt:Receipt,input:TrackedResolution,photos:readonly PhotoReference[]) {
-  return receipt.recipientId===input.recipientId && (receipt.answer ?? "")===(input.answer ?? "") && JSON.stringify(receipt.photos ?? [])===JSON.stringify(photos);
+// A receipt written before the answer lead holds the same reply in its older form.
+function sameAnswer(recorded:string|undefined,answer:string|undefined,item:TrackedDecisionInput) {
+  return (recorded ?? "")===(answer ?? "") || (recorded ?? "")===legacyTrackedAnswer(item,answer ?? "");
+}
+
+function sameReply(receipt:Receipt,input:TrackedResolution,photos:readonly PhotoReference[],item:TrackedDecisionInput) {
+  return receipt.recipientId===input.recipientId && sameAnswer(receipt.answer,input.answer,item) && JSON.stringify(receipt.photos ?? [])===JSON.stringify(photos);
 }
 
 // The recorded message is matched by its hash, which still holds after the card has changed.
@@ -252,7 +257,7 @@ export class TrackedDecisionStore {
     const photos=describePhotos(input.images);
     const origin=trackedReplyOrigin(row.item,input);
     if(previous) {
-      const differentAnswer=input.answer && input.answer!==previous.answer;
+      const differentAnswer=input.answer && !sameAnswer(previous.answer,input.answer,row.item);
       const samePhotos=JSON.stringify(photos)===JSON.stringify(previous.photos ?? []);
       const differentQuestion=input.questionIndexes && previous.origin && JSON.stringify(previous.origin.questions)!==JSON.stringify(origin.questions);
       return differentAnswer || !samePhotos || differentQuestion ? changed("conflict") : {status:"already-closed"};
@@ -315,10 +320,12 @@ export class TrackedDecisionStore {
     const photos=describePhotos(input.images);
     // Nothing new goes out while a reply to another revision of this card is still unconfirmed.
     const waiting=previous ? undefined : [...records].find(([,record])=>record.key===key && record.fingerprint!==input.fingerprint && record.pending && !record.queue);
-    if (waiting) return sameReply(waiting[1],input,photos) ? this.confirm(waiting[0],waiting[1],target) : changed("conflict");
-    const text=trackedReplyMessage(row.item,input);
+    if (waiting) return sameReply(waiting[1],input,photos,row.item) ? this.confirm(waiting[0],waiting[1],target) : changed("conflict");
+    if (previous && !sameReply(previous,input,photos,row.item)) return changed("conflict");
+    // A retry repeats the recorded reply as it was written then.
+    const text=trackedReplyMessage(row.item,previous ? {...input,answer:previous.answer} : input);
     const messageHash=createHash("sha256").update(text).digest("hex");
-    if (previous && (!sameReply(previous,input,photos) || (previous.messageHash && previous.messageHash!==messageHash))) return changed("conflict");
+    if (previous?.messageHash && previous.messageHash!==messageHash) return changed("conflict");
     if (previous && !previous.pending && !previous.queue) return {status:"sent"};
     if (previous?.queue && !queuedId) return previous.queue.stopped ? changed("queue-stopped") : {status:"queued",queueId:previous.messageId};
     const messageId=previous?.messageId ?? (photos.length ? boardPhotoMessageId(randomUUID()) : randomUUID());
@@ -361,7 +368,7 @@ export class TrackedDecisionStore {
   // Retrying an unconfirmed reply after its card changed only checks that reply. It is never sent again.
   private async confirmEarlier(input:TrackedResolution, version:string, item:RoutedTrackedDecision, prepare:(row:RoutedTrackedDecision)=>Promise<Prepared>):Promise<Attempt> {
     const earlier=this.recorded()?.get(version);
-    if (!input.recipientId || !earlier || earlier.queue || !sameReply(earlier,input,describePhotos(input.images))) return changed("revised");
+    if (!input.recipientId || !earlier || earlier.queue || !sameReply(earlier,input,describePhotos(input.images),item)) return changed("revised");
     return earlier.pending ? this.confirm(version,earlier,await prepare(item)) : {status:"sent",revision:earlier.fingerprint};
   }
 

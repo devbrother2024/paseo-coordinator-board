@@ -5,7 +5,7 @@ export const optionId = (option: { key: string; text: string }) => JSON.stringif
 
 // Evidence, risks, urgency, the example answer, history and labels may change under a draft. The ledger owner
 // has its own confirmation, and the rest is bookkeeping.
-const unaffected = new Set(["why", "risk", "urgency", "howToAnswer", "qa", "replyHistory", "since", "projectTitle", "owner", "answerLead",
+const unaffected = new Set(["why", "risk", "urgency", "howToAnswer", "qa", "replyHistory", "since", "projectTitle", "owner",
   "dueAt", "blocksWork", "sourceCoordinatorId", "key", "fingerprint", "queuedReply", "matchedPull"]);
 
 // Any other edit changes what the reply answers, so the person looks again before sending it.
