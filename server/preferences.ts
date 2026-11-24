@@ -85,6 +85,8 @@ const schema = z.object({
     id: z.string(), previous: z.string().nullable(), workspaceId: z.string(), config: coordinatorConfig,
     language: z.enum(["ko", "en"]).optional(),
   }).optional(),
+  // For each coordinator, the fingerprint of the board tool definitions its current conversation first called.
+  toolStamps: z.record(z.string(), z.object({ session: z.string().min(1).max(256), fingerprint: z.string().max(128), at: z.iso.datetime() })).default({}),
 });
 export type Preferences = z.infer<typeof schema>;
 export type DispatchReceipt = Preferences["dispatchReceipts"][string];

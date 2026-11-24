@@ -33,6 +33,7 @@ import { useRemoteRunning, RemoteRunning } from "./remote-running";
 import { BoardHosts } from "./hosts";
 import { OperationsPanel } from "./operations";
 import { ReachExplanation } from "./reach-explanation";
+import { StaleCoordinatorTools } from "./stale-coordinator-tools";
 import { CoordinatorReplaceLoader } from "./coordinator-replace";
 import { blocksReplies, opensSession, readSessionReach } from "../shared/coordinator-reach";
 import { Button, type Theme } from "./controls";
@@ -355,6 +356,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         }} />
       </View>
       {configured && <ReachExplanation banner reach={reach} theme={theme} onReplace={startReplace} />}
+      {configured && <StaleCoordinatorTools tools={snapshot?.coordinatorTools} theme={theme} onReplace={startReplace} onOpen={openCoordinator} />}
       {replaceOpen && !settings && configured && coordinatorId && <CoordinatorReplaceLoader theme={theme} coordinator={coordinatorId} disabled={busy}
         onReplaced={onRefresh} onClose={() => setReplaceOpen(false)} />}
       {!settings && configured && <ProjectFilterBar theme={theme} groups={filterGroups} selected={filters} total={total}

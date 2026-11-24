@@ -9,6 +9,7 @@ import { clarificationEntry } from "./clarifications";
 import { replyEntry } from "./reply-history";
 import { workspacePullSchema } from "./workspace-pull";
 import { coordinatorReachSchema } from "./coordinator-reach";
+import { coordinatorToolsSchema } from "./coordinator-tools";
 import { assignmentLocation, assignmentNotice } from "./dispatch-hosts";
 
 const sessionId = z.string().min(1).max(256);
@@ -66,7 +67,7 @@ export const boardSnapshot = defineRpc({
     // Selected projects that open the same folder on disk share `rootKey`.
     projects: z.array(z.object({ id: z.string(), title: z.string(), path: z.string(), selected: z.boolean(),
       rootKey: z.string().optional(), temporary: z.boolean().optional(), operating: z.boolean().optional(), operatingActive: z.boolean().optional(), missing: z.literal(true).optional() })),
-    coordinator: sessionId.nullable(), coordinatorReach: coordinatorReachSchema.optional(), lastDigestAt: z.iso.datetime().optional(), clarifications:z.array(clarificationEntry).optional(), replyHistory: z.array(replyEntry).optional(), trackedDecisions: trackedDecisionViewSchema.optional(), pullRequests: pullRequestViewSchema.optional(),
+    coordinator: sessionId.nullable(), coordinatorReach: coordinatorReachSchema.optional(), coordinatorTools: coordinatorToolsSchema.optional(), lastDigestAt: z.iso.datetime().optional(), clarifications:z.array(clarificationEntry).optional(), replyHistory: z.array(replyEntry).optional(), trackedDecisions: trackedDecisionViewSchema.optional(), pullRequests: pullRequestViewSchema.optional(),
     assignmentNotice: assignmentNotice.optional() }),
 });
 export const boardDecisionCount = defineRpc({

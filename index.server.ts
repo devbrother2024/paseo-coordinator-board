@@ -36,6 +36,7 @@ import { withAssignmentHost } from "./server/host-assignment";
 import { judgedMergeCardOptions, judgePullTool, registerMergeJudgmentSettings } from "./server/pull-judgments";
 import { applyPullJudgments } from "./shared/pull-judgments";
 import { operatingDirectories, operatingDirectory } from "./server/operating-folders";
+import { CoordinatorToolStamps, readCoordinatorTools } from "./server/coordinator-tools";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(hostVisibility);
@@ -44,6 +45,7 @@ export default function contribute(server: PluginServerContext) {
   const notes = new NoteStore(join(dataDir, "notes.json"));
 
   const prefs = new PreferenceStore(join(dataDir, "scope.json"));
+  const toolStamps = new CoordinatorToolStamps(prefs);
   const reader = new ConversationReader();
   const projectRoots = new ProjectRootReader();
   const facts = new BoardFacts(prefs, notes, reader);
@@ -139,6 +141,7 @@ export default function contribute(server: PluginServerContext) {
     const listedCoordinator = coordinatorRow?.id === latest.coordinator ? coordinatorRow : undefined;
     const projects = [...choices.values()];
     const reach = await coordinatorReach(paseo, latest, listedCoordinator, operatingRoot, projects, projectRoots);
+    const coordinatorTools = await readCoordinatorTools(paseo, toolStamps, listedCoordinator);
     const inUseFolders = [latest.createdCoordinator?.id === latest.coordinator ? latest.createdCoordinator : undefined, latest.pendingCoordinator]
       .flatMap(record => record ? [operatingDirectory(operatingRoot, record.language)] : []);
     const operating = await operatingProjects(projects, operatingFolders, latest, listedCoordinator, projectRoots, inUseFolders);
@@ -150,7 +153,8 @@ export default function contribute(server: PluginServerContext) {
     const notice = latest.assignmentNotice;
     return { sessions: visible, notes: visibleNotes, pullRequests, trackedDecisions, replyHistory, ...(clarifications.length ? { clarifications } : {}),
       ...(notice && selected.has(notice.projectId) && { assignmentNotice: notice }),
-      projects: [...knownProjects, ...missingProjects], coordinator: latest.coordinator, lastDigestAt: latest.lastDigest?.at, ...(reach ? { coordinatorReach: reach } : {}) };
+      projects: [...knownProjects, ...missingProjects], coordinator: latest.coordinator, lastDigestAt: latest.lastDigest?.at, ...(reach ? { coordinatorReach: reach } : {}),
+      ...(coordinatorTools ? { coordinatorTools } : {}) };
   }
   async function buildSessionView(paseo: PluginHandlerContext["paseo"],
     catalog: Awaited<ReturnType<PluginHandlerContext["paseo"]["projects"]["list"]>>,
@@ -374,6 +378,6 @@ export default function contribute(server: PluginServerContext) {
     return { ok: true };
   });
   const removeReport = attachReportTool(server, notes);
-  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount), judgePullTool(prefs, prs, invalidateCount)]);
+  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount), judgePullTool(prefs, prs, invalidateCount)], toolStamps);
   return () => { removeMergeTurn(); removeMergePermission(); removeReplyClose(); removeReplyArchive(); removeCoordinator(); removeReport(); };
 }
