@@ -19,8 +19,9 @@ function findable(link: HistorySession | undefined) {
   return !!link && (link.available || !!link.verify);
 }
 
-// The recipient is gone when neither this host nor a host that can still be checked lists it.
-export function recipientGone(entry: ReplyEntry, links: readonly HistorySession[]) {
+// The board cannot find the recipient: neither this host's listed sessions nor a host that can still be checked has it.
+// The session may be archived, or only outside the board's current scope (an earlier coordinator, a moved session).
+export function recipientNotFound(entry: ReplyEntry, links: readonly HistorySession[]) {
   if (entry.status !== "sent") return false;
   const link = recipientLink(links);
   return !!link && !findable(link);

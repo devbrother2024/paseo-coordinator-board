@@ -1,5 +1,5 @@
 import {expect, test} from 'bun:test';
-import {FOLLOWUP_WINDOW_MS, KANBAN_ORDER, elapsedLabel, followupKind, hostWideVisible, recipientGone, recipientLink} from '../client/reply-followup';
+import {FOLLOWUP_WINDOW_MS, KANBAN_ORDER, elapsedLabel, followupKind, hostWideVisible, recipientNotFound, recipientLink} from '../client/reply-followup';
 import {historySessionLinks, type HistorySession} from '../client/history-sessions';
 import type {ReplyEntry} from '../shared/reply-history';
 
@@ -28,27 +28,27 @@ test('a reply awaiting delivery confirmation also waits on the board', () => {
   expect(kind({...sent,status:'pending'})).toBe('waiting');
 });
 
-test('a reply whose recipient is gone moves to history only', () => {
-  const gone = {...sent,canOpen:undefined,recipientTitle:undefined};
-  expect(kind(gone)).toBeNull();
-  expect(recipientGone(gone, historySessionLinks(gone, directory))).toBe(true);
-  expect(recipientGone(sent, historySessionLinks(sent, directory))).toBe(false);
-  // A session that is still listed on this host is not gone, even without canOpen.
+test('a reply whose recipient cannot be found on the board moves to history only', () => {
+  const missing = {...sent,canOpen:undefined,recipientTitle:undefined};
+  expect(kind(missing)).toBeNull();
+  expect(recipientNotFound(missing, historySessionLinks(missing, directory))).toBe(true);
+  expect(recipientNotFound(sent, historySessionLinks(sent, directory))).toBe(false);
+  // A session that is still listed on this host is found, even without canOpen.
   const listed = {...directory,sessions:[{id:'worker-1',projectId:'alpha',title:'Draft session',status:'idle' as const,lane:'idle' as const}]};
-  expect(recipientGone(gone, historySessionLinks(gone, listed))).toBe(false);
-  expect(followupKind(gone, historySessionLinks(gone, listed), now)).toBe('waiting');
+  expect(recipientNotFound(missing, historySessionLinks(missing, listed))).toBe(false);
+  expect(followupKind(missing, historySessionLinks(missing, listed), now)).toBe('waiting');
 });
 
-test('a recipient still being checked on another host is not reported as gone', () => {
+test('a recipient still being checked on another host is not reported as missing', () => {
   const checking:HistorySession[] = [{role:'received',id:'worker-1',host:'laptop',available:false,verify:async () => true}];
-  expect(recipientGone(sent, checking)).toBe(false);
+  expect(recipientNotFound(sent, checking)).toBe(false);
   expect(followupKind(sent, checking, now)).toBe('waiting');
-  expect(recipientGone(sent, [{role:'received',id:'worker-1',host:'laptop',available:false}])).toBe(true);
+  expect(recipientNotFound(sent, [{role:'received',id:'worker-1',host:'laptop',available:false}])).toBe(true);
 });
 
-test('the gone notice is only for sent replies with a recipient', () => {
-  expect(recipientGone({...sent,status:'recorded',canOpen:undefined}, [{role:'target',id:'worker-1',available:false}])).toBe(false);
-  expect(recipientGone({...sent,recipientId:undefined}, [{role:'source',id:'worker-1',available:false}])).toBe(false);
+test('the not-found notice is only for sent replies with a recipient', () => {
+  expect(recipientNotFound({...sent,status:'recorded',canOpen:undefined}, [{role:'target',id:'worker-1',available:false}])).toBe(false);
+  expect(recipientNotFound({...sent,recipientId:undefined}, [{role:'source',id:'worker-1',available:false}])).toBe(false);
   expect(recipientLink([{role:'source',id:'a',available:true},{role:'received',id:'b',available:true}])?.id).toBe('b');
 });
 

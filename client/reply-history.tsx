@@ -9,7 +9,7 @@ import { Button, type Theme } from "./controls";
 import type { HistoryLinks, HistorySession } from "./history-sessions";
 import { HistoryMarkdown } from "./history-markdown";
 import { useBoardLanguage } from "./language";
-import { recipientGone } from "./reply-followup";
+import { recipientNotFound } from "./reply-followup";
 
 type Props = { entry: ReplyEntry; theme: Theme; links: HistoryLinks; open?: (id:string) => void; openRemote?: (host:string,id:string) => void };
 
@@ -41,7 +41,7 @@ function LocalPhoto({ entryKey, index, theme }: { entryKey: string; index: numbe
     style={{ height:200, width:"100%", borderRadius:5, backgroundColor:theme.colors.surface1 }} />;
 }
 
-function SessionReference({session,state,gone,open,openRemote,theme}:Pick<Props,"open"|"openRemote"|"theme"> & {session:HistorySession;state?:string;gone?:boolean}) {
+function SessionReference({session,state,notFound,open,openRemote,theme}:Pick<Props,"open"|"openRemote"|"theme"> & {session:HistorySession;state?:string;notFound?:boolean}) {
   const {t} = useBoardLanguage();
   const role = {source:t("원래 세션","Source session"), received:t("받은 세션","Recipient session"), target:t("전송 대상","Intended recipient")}[session.role];
   const title = session.title || session.id;
@@ -49,7 +49,7 @@ function SessionReference({session,state,gone,open,openRemote,theme}:Pick<Props,
   const host = session.host;
   const navigate = host ? openRemote && (() => openRemote(host,session.id)) : open && (() => open(session.id));
   if ((!session.available && !session.verify) || !navigate) return <Text selectable style={{color:theme.colors.foregroundMuted,fontSize:12}}>
-    {label}{!session.available && !gone && " · " + t("연결 미확인","Connection unverified")}</Text>;
+    {label}{!session.available && !notFound && " · " + t("연결 미확인","Connection unverified")}</Text>;
   return <VerifiedSessionChip theme={theme} label={label} accessibilityLabel={t(role+" 열기 · "+title,"Open "+role+" · "+title)}
     onPress={navigate} verify={session.available ? undefined : session.verify} />;
 }
@@ -75,7 +75,7 @@ export function ReplyCard({entry, theme, links, open, openRemote}:Props) {
   const date = new Date(entry.at).toLocaleString(language === "ko" ? "ko-KR" : "en-US",
     {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"});
   const sessions = links(entry);
-  const gone = recipientGone(entry, sessions);
+  const notFound = recipientNotFound(entry, sessions);
   return <View style={{gap:5,padding:9,borderRadius:7,backgroundColor:colors.surface0,borderWidth:1,borderColor:colors.border}}>
     {merge ? <>
       <Text selectable style={{color:colors.foreground,fontWeight:"600"}}>{entry.title}</Text>
@@ -83,7 +83,7 @@ export function ReplyCard({entry, theme, links, open, openRemote}:Props) {
     </> : <HistoryMarkdown theme={theme} source={entry.title} heading />}
     <Text selectable style={{color:colors.foregroundMuted,fontSize:12}}>{[status, mergeNotificationLabel(merge?.notification, t), date, merge?.mergeSha?.slice(0, 12)].filter(Boolean).join(" · ")}</Text>
     {!!sessions.length && <View style={{flexDirection:"row",flexWrap:"wrap",gap:5}}>{sessions.map(session =>
-      <SessionReference key={JSON.stringify([session.role,session.host,session.id])} session={session} state={session.state && states[session.state]} gone={gone && session.role !== "source"}
+      <SessionReference key={JSON.stringify([session.role,session.host,session.id])} session={session} state={session.state && states[session.state]} notFound={notFound && session.role !== "source"}
         open={open} openRemote={openRemote} theme={theme} />)}</View>}
     {!!entry.reviewReason && <HistoryMarkdown theme={theme} source={entry.reviewReason} />}
     {!!entry.answer && <HistoryMarkdown theme={theme} source={entry.answer} preview={long && !full} />}
@@ -97,8 +97,8 @@ export function ReplyCard({entry, theme, links, open, openRemote}:Props) {
         {photoIndex !== null && <LocalPhoto key={entry.key + "/" + photoIndex} entryKey={entry.key} index={photoIndex} theme={theme} />}
       </>}
     </View>}
-    {entry.status === "sent" && (gone
-      ? <Text style={{color:colors.foregroundMuted,fontSize:12}}>{t("받은 세션이 없어져 결과를 확인할 수 없습니다.","The recipient session is gone, so its result can no longer be checked.")}</Text>
+    {entry.status === "sent" && (notFound
+      ? <Text style={{color:colors.foregroundMuted,fontSize:12}}>{t("받은 세션을 지금 보드에서 찾을 수 없어 결과를 확인할 수 없습니다.","The recipient session can't be found on the board right now, so its result can't be checked.")}</Text>
       : entry.response
       ? <View style={{gap:3}}>
           <Text style={{color:colors.foregroundMuted,fontSize:12}}>{t("세션의 후속 응답","Session follow-up")}</Text>
