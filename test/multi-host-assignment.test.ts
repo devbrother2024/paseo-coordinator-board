@@ -9,7 +9,7 @@ import { DecisionSender, decorateDecision } from "../server/decisions";
 import { creationUuid } from "../server/dispatch";
 import { NoteStore } from "../server/notes";
 import { createOperations } from "../server/operations";
-import { PreferenceStore } from "../server/preferences";
+import { maxDispatchTombstones, PreferenceStore } from "../server/preferences";
 import { isCurrentMembership } from "../server/session-links";
 import { dispatchHosts, saveDispatchHost } from "../shared/dispatch-hosts";
 import { requestWork } from "../shared/operations";
@@ -297,6 +297,7 @@ test("discovery drops completed missing or archived receipts and preserves uncer
   s.win.state.failRef = false;
   await discoverBoardSessions(s.sdk, s.store);
   expect(Object.keys(s.store.read().dispatchReceipts)).toEqual([pending]);
+  expect(new Set(Object.keys(s.store.read().dispatchTombstones))).toEqual(new Set([missing, archived]));
   s.win.state.readIds = [];
   await discoverBoardSessions(s.sdk, s.store);
   expect(s.win.state.readIds).toEqual([pending]);
@@ -314,7 +315,7 @@ test("a retry after receipt cleanup cannot create a second worker on a less busy
   expect(s.store.read().dispatchReceipts[receipt.sessionId]).toBeUndefined();
   for (const id of ["win-one", "win-two", "win-three"]) s.win.add(id, "running");
   expect((await s.plan()).location.serverId).toBe(local.serverId);
-  await expect(s.assign(job)).rejects.toThrow(/different task/);
+  await expect(s.assign(job)).rejects.toThrow(/다른 작업/);
   expect(s.mac.creates.size).toBe(0);
   expect(s.win.creates.size).toBe(1);
   expect(s.win.sends).toHaveLength(1);
@@ -352,8 +353,8 @@ test("discovery prunes by project and age before remote lookups and limits concu
   expect(s.win.state.mostReads).toBeGreaterThan(1);
   expect(s.win.state.mostReads).toBeLessThanOrEqual(4);
   expect(Object.keys(s.store.read().dispatchReceipts)).toHaveLength(256);
-  s.win.agents.get(sessionId)!.status = "running";
-  await expect(s.assign({ ...s.job, requestKey: "example-at-receipt-limit" })).rejects.toThrow(/세션을 보관.*Archive a completed session/);
+  s.store.change(scope => { scope.dispatchReceipts[sessionId].delivered = false; });
+  await expect(s.assign({ ...s.job, requestKey: "example-at-receipt-limit" })).rejects.toThrow(/30일.*30 days/);
   expect(s.win.creates.size).toBe(1);
 });
 
@@ -389,7 +390,99 @@ test("a full receipt store frees ended sessions first, then the oldest delivered
   receipts = s.store.read().dispatchReceipts;
   expect(Object.keys(receipts)).toHaveLength(256);
   expect(receipts[oldest]).toBeUndefined();
+  expect(s.store.read().dispatchTombstones[oldest]).toMatchObject({ serverId: remote.serverId, requestKey: "oldest-idle-worker" });
   for (const id of [running, newer, added, creationUuid("pending-0", "agent")]) expect(receipts[id]).toBeDefined();
+});
+
+test("receipt pressure keeps remote conversation questions, question notes and pending replies on the board", async () => {
+  const s = scenario();
+  const [question, note, waiting, idle] = await Promise.all([
+    s.job,
+    { ...s.job, requestKey: "manual-question-note" },
+    { ...s.job, requestKey: "pending-board-reply" },
+    { ...s.job, requestKey: "idle-with-no-question" },
+  ].map(s.assign)).then(results => results.map(result => result.sessionId));
+  s.win.timelines.set(question, [{ type: "assistant_message", text: "Which option do you prefer?" }]);
+  new NoteStore(join(s.dir, "notes.json")).update({
+    sessionId: note, kind: "question", text: "Which branch should we use?", expectedRevision: 0,
+  });
+  s.store.change(scope => {
+    scope.decisionReceipts["pending-reply"] = { sessionId: waiting, version: "fixture", fingerprint: "fixture", status: "pending" };
+    for (const [id, days] of [[question, 10], [note, 9], [waiting, 8], [idle, 7]] as const) {
+      scope.dispatchReceipts[id].createdAt = new Date(Date.now() - days * 86_400_000).toISOString();
+    }
+    for (let i = 0; i < 252; i++) {
+      scope.dispatchReceipts[creationUuid("pending-" + i, "agent")] = { ...scope.dispatchReceipts[idle], delivered: false };
+    }
+  });
+  await s.assign({ ...s.job, requestKey: "new-worker-with-open-questions" });
+  const receipts = s.store.read().dispatchReceipts;
+  expect(receipts[idle]).toBeUndefined();
+  const rows = await discoverBoardSessions(s.sdk, s.store, new Set([question, note, waiting]));
+  for (const id of [question, note, waiting]) {
+    expect(receipts[id]).toBeDefined();
+    expect(rows.find(row => row.id === id)?.serverId).toBe(remote.serverId);
+  }
+  const scope = s.store.read();
+  const evidence = await new ConversationReader().decorate(s.sdk, rows, scope);
+  const notes = new NoteStore(join(s.dir, "notes.json")).visible(new Set([note]));
+  for (const row of rows) decorateDecision(row, notes[row.id], scope, evidence.get(row.id));
+  expect(rows.find(row => row.id === question)?.decision?.source).toBe("conversation");
+  expect(rows.find(row => row.id === note)?.decision?.source).toBe("person-note");
+});
+
+test.each([false, true])("a retired receipt pins an unpinned retry across an outage (legacy receipt: %s)", async legacy => {
+  const s = scenario();
+  s.win.workspace.id = s.mac.workspace.id;
+  const job = { ...s.job, workspaceId: s.mac.workspace.id, expectedHostId: undefined };
+  const receipt = await s.assign(job);
+  expect(receipt.location.serverId).toBe(remote.serverId);
+  s.store.change(scope => {
+    const saved = scope.dispatchReceipts[receipt.sessionId];
+    saved.createdAt = "2020-01-01T00:00:00Z";
+    if (legacy) delete saved.requestKey;
+  });
+  await discoverBoardSessions(s.sdk, s.store);
+  const scope = s.store.read();
+  expect(scope.dispatchReceipts[receipt.sessionId]).toBeUndefined();
+  s.registration.status = "offline";
+  expect((await s.plan()).location.serverId).toBe(local.serverId);
+  await expect(s.assign(job)).rejects.toThrow(/offline or disabled/);
+  expect(s.mac.creates.size).toBe(0);
+  expect(scope.dispatchTombstones[receipt.sessionId]).toEqual({
+    serverId: remote.serverId, ...(legacy ? {} : { requestKey: job.requestKey }), retiredAt: expect.any(String),
+  });
+  s.registration.status = "online";
+  for (const id of ["win-one", "win-two", "win-three"]) s.win.add(id, "running");
+  expect((await s.plan()).location.serverId).toBe(local.serverId);
+  const retry = await s.assign(job);
+  expect(retry.sessionId).toBe(receipt.sessionId);
+  expect(retry.location.serverId).toBe(remote.serverId);
+  expect(s.mac.creates.size).toBe(0);
+  expect(s.win.creates.size).toBe(1);
+  expect(s.win.sends).toHaveLength(1);
+});
+
+test("retired placement records expire and retain the newest entries at the limit", () => {
+  const s = scenario();
+  const expired = creationUuid("expired-placement-key", "agent");
+  const oldest = creationUuid("fixture-placement-0", "agent");
+  const latest = creationUuid("fixture-placement-" + maxDispatchTombstones, "agent");
+  s.store.change(scope => {
+    scope.dispatchTombstones[expired] = { serverId: local.serverId, retiredAt: "2020-01-01T00:00:00Z" };
+    for (let i = 0; i <= maxDispatchTombstones; i++) {
+      const requestKey = "fixture-placement-" + i;
+      scope.dispatchTombstones[creationUuid(requestKey, "agent")] = {
+        serverId: local.serverId, requestKey, retiredAt: new Date(Date.now() - 60_000 + i).toISOString(),
+      };
+    }
+  });
+  s.store.readDispatchScope();
+  const retained = s.store.read().dispatchTombstones;
+  expect(Object.keys(retained)).toHaveLength(maxDispatchTombstones);
+  expect(retained[expired]).toBeUndefined();
+  expect(retained[oldest]).toBeUndefined();
+  expect(retained[latest]?.serverId).toBe(local.serverId);
 });
 
 test("four stalled remote reads time out and let the next session load", async () => {

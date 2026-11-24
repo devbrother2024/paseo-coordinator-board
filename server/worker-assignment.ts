@@ -122,13 +122,16 @@ export class WorkerAssignment {
     const sessionId = creationUuid(job.requestKey, "agent");
     const fingerprint = createHash("sha256").update(JSON.stringify({ ...job, platform: job.platform ?? "any" })).digest("hex");
     const previous = initial.dispatchReceipts[sessionId];
+    const retired = !previous ? initial.dispatchTombstones[sessionId] : undefined;
     const scope = () => dispatchScope(ownerScope(), coordinator);
     const checkScope = (current: Preferences) => {
       if (current.coordinator !== coordinator || !current.projects.includes(job.projectId) ||
           current.assignmentRevision !== initial.assignmentRevision || current.routingRevision !== initial.routingRevision)
         throw new PlacementError("placement-changed");
     };
-    if (previous && previous.fingerprint !== fingerprint) throw new Error(keyConflict);
+    if ((previous && previous.fingerprint !== fingerprint) || (retired &&
+        ((retired.requestKey && retired.requestKey !== job.requestKey) ||
+          (job.expectedHostId && job.expectedHostId !== retired.serverId)))) throw new Error(keyConflict);
     const registered = await registeredAssignmentHosts(paseo, initial);
     const localTarget = {
       projectId: job.projectId,
@@ -154,13 +157,18 @@ export class WorkerAssignment {
     } else {
       // Keep the original local interface for older callers. Its workspace id
       // belongs to this daemon. Multi-host callers select a project and pin the plan's host.
-      if (!job.expectedHostId && !job.host && !job.platform) return dispatchWorker(paseo, job, scope, localTarget);
-      const planned = await planWorkerPlacement(paseo, initial, job.projectId, job, registered);
+      if (!retired && !job.expectedHostId && !job.host && !job.platform) return dispatchWorker(paseo, job, scope, localTarget);
+      if (retired && retired.serverId !== localServerId(paseo, coordinator) &&
+          !registered.some(host => host.id === retired.serverId && host.online && host.enabled)) {
+        throw new PlacementError("host-offline");
+      }
+      const request = retired ? { ...job, expectedHostId: retired.serverId } : job;
+      const planned = await planWorkerPlacement(paseo, initial, job.projectId, request, registered);
       if (!planned) return dispatchWorker(paseo, job, scope, localTarget);
       if (!planned.workspaces.some(workspace => workspace.id === job.workspaceId)) throw new PlacementError("placement-changed");
       retain = !planned.localOnly;
       receipt = { fingerprint, projectId: job.projectId, sourceProjectId: planned.sourceProjectId, workspaceId: job.workspaceId,
-        remote: !!planned.serverId, location: planned.location, createdAt: new Date().toISOString() };
+        remote: !!planned.serverId, location: planned.location, createdAt: new Date().toISOString(), requestKey: job.requestKey };
       originServerId = planned.originServerId;
       limit = initial.assignmentHosts[planned.location.serverId]?.limit ?? null;
     }
@@ -200,6 +208,7 @@ export class WorkerAssignment {
               if (!reserved) {
                 if (Object.keys(current.dispatchReceipts).length >= maxDispatchReceipts) throw new PlacementError("receipt-capacity");
                 current.dispatchReceipts[sessionId] = receipt;
+                delete current.dispatchTombstones[sessionId];
               }
             });
           },

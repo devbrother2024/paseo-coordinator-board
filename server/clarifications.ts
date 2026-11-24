@@ -21,6 +21,8 @@ import { isManagedCoordinator } from "./preferences";
 import { discoverBoardSessions } from "./board-sessions";
 import { withAssignmentHost } from "./host-assignment";
 
+export { restoreClarifiedDecision } from "./session-decisions";
+
 type Sdk = PluginHandlerContext["paseo"];
 type Stored = Preferences["clarifications"][string];
 type Target = NonNullable<ReturnType<typeof clarificationTarget>>;
@@ -57,48 +59,6 @@ function body(input: ClarificationInput, target: Target) {
 
 function inScope(scope: Preferences, card: ClarificationCard) {
   return card.projectId === null ? scope.projects.length > 0 : scope.projects.includes(card.projectId);
-}
-
-// The original answer buttons still refer to the original revision. Keep them
-// only while this exact clarification is the latest input in its source session.
-export function restoreClarifiedDecision(
-  row: SessionRow,
-  note: Note | undefined,
-  prefs: Preferences,
-  evidence?: Evidence,
-) {
-  if (
-    row.nativePending ||
-    row.status === "closed" ||
-    row.status === "error" ||
-    row.decisionAnswered ||
-    !evidence ||
-    evidence.laterInput
-  )
-    return;
-  for (const id of evidence.lastInputIds ?? []) {
-    const record = prefs.clarifications?.[id];
-    const original = record && sourceQuestion(record.card);
-    if (
-      !record?.savedDecision ||
-      !original ||
-      original.projectId !== row.projectId ||
-      original.sessionId !== row.id ||
-      original.version !== record.savedDecision.version ||
-      record.recipientId !== row.id ||
-      prefs.answers[row.id]?.version === original.version ||
-      (note?.revision ?? 0) !== record.noteRevision
-    )
-      continue;
-    // Digest judgments classify the explanation turn. Its original decision stays
-    // open until an answer, a new input, or a note revision supersedes it.
-    row.decision = record.savedDecision;
-    row.decisionRequestedAt = record.sourceRequestedAt;
-    if (record.sourceEvidenceId) row.evidenceId = record.sourceEvidenceId;
-    row.lane = "human";
-    row.detail = record.savedDecision.question;
-    return;
-  }
 }
 
 export function clarificationHistory(

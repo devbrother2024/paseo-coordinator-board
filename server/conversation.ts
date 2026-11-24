@@ -122,6 +122,14 @@ export function classify(e: Evidence, row: SessionRow, decision?: Preferences["j
   return row;
 }
 
+export function applyConversationEvidence(evidence: Evidence, row: SessionRow, prefs: Preferences) {
+  if ((row.lane !== "idle" && row.lane !== "review") || row.detail.includes("오류")) return false;
+  const judgment = prefs.judgments[row.id];
+  Object.assign(row, classify(evidence, row, judgment?.projectId === row.projectId ? judgment : undefined, row.id === prefs.coordinator),
+    { evidenceId: evidence.id });
+  return true;
+}
+
 export class ConversationReader {
   private readonly cache = new Map<string, { serverId?: string; stamp: string; at: number; page: Promise<Evidence> }>();
 
@@ -156,10 +164,8 @@ export class ConversationReader {
         const row = rows[cursor++];
         try {
           const evidence = await this.read(paseo, row);
-          if (evidence && row.lane !== "human" && (row.lane === "idle" || row.lane === "review") && !row.detail.includes("오류")) {
+          if (evidence && applyConversationEvidence(evidence, row, prefs)) {
             observed.set(row.id, evidence);
-            const judgment = prefs.judgments[row.id];
-            Object.assign(row, classify(evidence, row, judgment?.projectId === row.projectId ? judgment : undefined, row.id === prefs.coordinator), { evidenceId: evidence.id });
           }
         } catch {
           row.detail += " · 최근 대화 조회 실패";

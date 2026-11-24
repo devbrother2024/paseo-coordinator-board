@@ -1,13 +1,13 @@
-import { restoreClarifiedDecision } from "./clarifications";
+import { decorateDecision, restoreClarifiedDecision } from "./session-decisions";
 import { join } from "node:path";
 import { SessionPhotoStore } from "./session-photos";
 import { describePhotos, photoReceiptId } from "./reply-photos";
 import { sessionReplyMessage } from "./decision-message";
 import { createHash } from "node:crypto";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
-import type { Decision, DecisionInput } from "../shared/decision-actions";
-import type { Note, SessionRow } from "../shared/contract";
-import { classify, ConversationReader, lastConversationQuestion, type Evidence } from "./conversation";
+import type { DecisionInput } from "../shared/decision-actions";
+import type { SessionRow } from "../shared/contract";
+import { classify, ConversationReader } from "./conversation";
 import { isCurrentMembership, managedSessions } from "./session-links";
 import { canReceiveBoardInput } from "./discovery";
 import { discoverBoardSessions } from "./board-sessions";
@@ -16,47 +16,13 @@ import type { NoteStore } from "./notes";
 import { verifiedBoardFact } from "./board-facts";
 import { isManagedCoordinator, type Preferences, type PreferenceStore } from "./preferences";
 
+export { decorateDecision } from "./session-decisions";
+
 type Sdk = PluginHandlerContext["paseo"];
 type Receipt = { ok: true; recipientId: string; messageId: string };
 const changed = "결정 카드 또는 수신자가 바뀌었습니다. 보드를 새로 고쳐 주세요.";
 const blocked = "이 세션의 현재 상태에서는 보낼 수 없습니다. 원래 세션에서 권한 요청과 작업 상태를 확인하세요.";
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-
-export function decorateDecision(row: SessionRow, note: Note | undefined, prefs: Preferences, evidence?: Evidence) {
-  const answer = prefs.answers[row.id];
-  const noteQuestion = note?.kind === "question";
-  const answeredNote = noteQuestion && answer?.noteRevision === note.revision;
-  const dismissed = row.evidenceId && row.evidenceId === note?.evidenceId && note.origin === "person" && note.kind !== "question";
-  let content: Omit<Decision, "version">;
-  if (row.nativePending) {
-    content = { source: "permission", question: row.detail };
-  } else if (row.status === "idle" && row.evidenceId && !dismissed && row.lane === "human") {
-    const judgment = prefs.judgments[row.id];
-    const structured = judgment?.kind === "question" && judgment.evidenceId === row.evidenceId && judgment.projectId === row.projectId;
-    content = structured
-      ? { ...judgment.content, source: "coordinator", question: judgment.content?.question || judgment.text }
-      : { source: "conversation", question: row.detail.replace(/^세션의 확인 요청 · /, "") };
-  } else if (noteQuestion && !answeredNote && row.status === "idle" && row.evidenceId) {
-    content = { source: note.origin === "agent" ? "agent-note" : "person-note", question: note.text };
-  } else {
-    if (answeredNote && !row.nativePending) row.decisionAnswered = true;
-    return;
-  }
-  const version = hash([row.projectId, row.id, row.nativePending ? row.permissionVersion : row.evidenceId, note?.revision ?? 0, content]);
-  if (content.source !== "permission" && answer?.version === version) {
-    row.decisionAnswered = true;
-    row.lane = "review";
-    row.detail = "답장을 보냈습니다. 담당 세션의 결과를 기다립니다.";
-  } else {
-    row.decision = { ...content, version };
-    if (content.source === "conversation" && evidence) {
-      const excerpt = lastConversationQuestion(evidence, row.id === prefs.coordinator);
-      if (excerpt?.question === content.question && excerpt.markdown !== content.question) {
-        row.decision.questionMarkdown = excerpt.markdown;
-      }
-    }
-  }
-}
 
 function requireScope(scope: Preferences, input: DecisionInput) {
   const recipient = input.action === "coordinate" ? scope.coordinator : input.sessionId;

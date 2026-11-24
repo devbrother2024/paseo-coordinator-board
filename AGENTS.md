@@ -30,7 +30,7 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 - 외부 명령은 `server/prs.ts:64`의 `run`처럼 `shell:false`, 시간 제한, `maxBuffer`, 대화형 프롬프트를 끈 환경 변수(`GH_PROMPT_DISABLED`, `GIT_TERMINAL_PROMPT`)로 실행한다. 인자는 배열로 넘긴다.
 - GitHub에서 읽은 글(PR 제목 등)은 화면에 내기 전에 제어 문자와 양방향 제어 문자를 지우고 길이를 자른다(`server/prs.ts:56`).
 - 병합은 사용자가 확인한 head 커밋에 고정한다. `expectedHeadOid`로 보내고 SHA는 40자 hex로 검증한다(`server/pr-merge.ts:31`, `server/pr-merge.ts:35`).
-- 플러그인 데이터 파일은 임시 파일에 쓴 뒤 `renameSync`로 바꾸고 `mode: 0o600`을 준다(`server/preferences.ts:144`, `server/notes.ts:44`, `server/session-photos.ts:34`).
+- 플러그인 데이터 파일은 임시 파일에 쓴 뒤 `renameSync`로 바꾸고 `mode: 0o600`을 준다(`server/preferences.ts:166`, `server/notes.ts:44`, `server/session-photos.ts:34`).
 - 화면 문구는 `client/language.tsx`의 `t(한국어, 영어)`로 두 언어를 함께 쓴다. 한쪽만 바꾸지 않는다.
 - 브라우저 전용 API(`document`, `navigator`, `FileReader`, DOM 요소)는 `Platform.OS === "web"`과 `typeof` 검사 뒤에서만 쓴다. 같은 클라이언트가 모바일 앱에서도 돈다(`client/photo-composer.tsx:86`, `client/send-input.tsx:9`).
 - 로직은 `client/*.ts`, `shared/*.ts`, `server/*.ts`에 두고 `.tsx`에는 화면만 둔다. 테스트가 `.tsx`를 하나도 불러오지 않는다(테스트 경계). 시험할 판단을 `.tsx` 안에 쓰면 검증 밖으로 빠진다.

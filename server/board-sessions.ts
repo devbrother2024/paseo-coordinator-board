@@ -1,8 +1,13 @@
+import { join } from "node:path";
 import type { SessionRow } from "../shared/contract";
+import { displayLane } from "../shared/decision-count";
+import { applyConversationEvidence, excerpt, type Evidence } from "./conversation";
 import { discoverSessions, sessionRow } from "./discovery";
 import { assignmentReceiptKey } from "./dispatch";
 import { registeredAssignmentHosts, type HostSdk } from "./host-assignment";
-import { maxDispatchReceipts, type DispatchReceipt, type PreferenceStore } from "./preferences";
+import { NoteStore } from "./notes";
+import { maxDispatchReceipts, pruneDispatchTombstones, retireDispatchReceipt, type DispatchReceipt, type PreferenceStore } from "./preferences";
+import { decorateDecision, pendingDecisionSessions, restoreClarifiedDecision } from "./session-decisions";
 
 const maxRemoteReads = 4;
 const remoteTimeoutMs = 5_000;
@@ -45,6 +50,7 @@ export async function withRemoteReadHost<T>(paseo: HostSdk, id: string, run: (sd
 }
 
 type ReceiptEntries = Map<string, DispatchReceipt>;
+type RetirementCandidate = { receipt: DispatchReceipt; remote?: { row: SessionRow; evidence: Evidence } };
 type DiscoveryOptions = { timeoutMs?: number; reserveSlot?: boolean };
 
 export async function discoverBoardSessions(paseo: HostSdk, prefs: PreferenceStore, targets?: ReadonlySet<string>,
@@ -54,14 +60,14 @@ export async function discoverBoardSessions(paseo: HostSdk, prefs: PreferenceSto
   const localById = new Map(locals.map(row => [row.id, row]));
   const receipts = Object.entries(scope.dispatchReceipts);
   const ended: ReceiptEntries = new Map();
-  const inactive: ReceiptEntries = new Map();
   const limit = maxDispatchReceipts - Number(reserveSlot);
+  const inactive = !targets && receipts.length > limit ? new Map<string, RetirementCandidate>() : undefined;
   for (const [id, receipt] of receipts) {
     if (receipt.remote || !receipt.delivered) continue;
     const row = localById.get(id);
     if (!row) ended.set(id, receipt);
     else if (row.projectId === receipt.projectId && (row.status === "idle" || row.status === "closed") &&
-        row.lane !== "running" && !row.nativePending) inactive.set(id, receipt);
+        row.lane !== "running" && !row.nativePending) inactive?.set(id, { receipt });
   }
 
   const selected = receipts.filter(([id, receipt]) => receipt.remote && !localById.has(id) &&
@@ -75,23 +81,34 @@ export async function discoverBoardSessions(paseo: HostSdk, prefs: PreferenceSto
     } catch { return []; }
   }));
   const removed = new Set<string>();
-  if (ended.size || (!targets && receipts.length > limit && inactive.size)) {
+  if (ended.size || inactive?.size) {
     prefs.change(current => {
-      const remove = ([id, observed]: [string, DispatchReceipt]) => {
+      const remove = (id: string, observed: DispatchReceipt) => {
         const saved = current.dispatchReceipts[id];
         if (!saved?.delivered || saved.fingerprint !== observed.fingerprint || saved.createdAt !== observed.createdAt) return false;
-        delete current.dispatchReceipts[id];
+        retireDispatchReceipt(current, id);
         removed.add(id);
         return true;
       };
-      for (const entry of ended) remove(entry);
-      if (targets) return;
+      for (const [id, receipt] of ended) remove(id, receipt);
       let excess = Object.keys(current.dispatchReceipts).length - limit;
-      if (excess <= 0) return;
-      const oldest = [...inactive].sort(([, a], [, b]) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
-      for (const entry of oldest) {
-        if (remove(entry) && --excess === 0) break;
+      if (excess > 0 && inactive?.size) {
+        const oldest = [...inactive].sort(([, a], [, b]) => (a.receipt.createdAt ?? "").localeCompare(b.receipt.createdAt ?? ""));
+        const pending = pendingDecisionSessions(current);
+        const notes = new NoteStore(join(prefs.directory, "notes.json")).visible(new Set(inactive.keys()));
+        for (const [id, { receipt, remote }] of oldest) {
+          if (remote) {
+            const row = { ...remote.row };
+            const note = notes[id];
+            applyConversationEvidence(remote.evidence, row, current);
+            decorateDecision(row, note, current, remote.evidence);
+            restoreClarifiedDecision(row, note, current, remote.evidence);
+            if (pending.has(id) || displayLane(row, note) === "human") continue;
+          }
+          if (remove(id, receipt) && --excess === 0) break;
+        }
       }
+      pruneDispatchTombstones(current);
     });
   }
   for (const row of locals) {
@@ -102,7 +119,7 @@ export async function discoverBoardSessions(paseo: HostSdk, prefs: PreferenceSto
 }
 
 async function readWorkers(sdk: HostSdk, host: { id: string; label: string }, entries: [string, DispatchReceipt][],
-  read: BoundedRead, ended: ReceiptEntries, inactive: ReceiptEntries) {
+  read: BoundedRead, ended: ReceiptEntries, inactive?: Map<string, RetirementCandidate>) {
   const workspaces = new Map<string, ReturnType<ReturnType<HostSdk["workspaces"]["ref"]>["refresh"]>>();
   const rows = await Promise.all(entries.map(async ([id, receipt]) => {
     try {
@@ -111,10 +128,6 @@ async function readWorkers(sdk: HostSdk, host: { id: string; label: string }, en
       if (receipt.delivered && (!result || (agent?.id === id && agent.archivedAt))) ended.set(id, receipt);
       if (!agent || agent.id !== id || agent.internal || agent.archivedAt || agent.workspaceId !== receipt.workspaceId ||
           agent.metadata?.[assignmentReceiptKey] !== receipt.fingerprint) return;
-      if (receipt.delivered && (agent.status === "idle" || agent.status === "closed") && !agent.activeTurn &&
-          !agent.backgroundWork?.count && !agent.pendingPermissions.length && agent.attentionReason !== "permission") {
-        inactive.set(id, receipt);
-      }
       let workspaceRead = workspaces.get(receipt.workspaceId);
       if (!workspaceRead) {
         workspaceRead = read(() => sdk.workspaces.ref(receipt.workspaceId).refresh());
@@ -122,9 +135,18 @@ async function readWorkers(sdk: HostSdk, host: { id: string; label: string }, en
       }
       const workspace = await workspaceRead;
       if (!workspace || workspace.internal || workspace.archivingAt || workspace.projectId !== receipt.sourceProjectId) return;
-      const row = sessionRow(agent, result.project, workspace);
-      return { ...row, sourceProjectId: row.projectId, sourceProjectTitle: row.projectTitle, projectId: receipt.projectId,
+      const source = sessionRow(agent, result.project, workspace);
+      const row = { ...source, sourceProjectId: source.projectId, sourceProjectTitle: source.projectTitle, projectId: receipt.projectId,
         serverId: host.id, assignment: { ...receipt.location, label: host.label } };
+      if (inactive && receipt.delivered && (agent.status === "idle" || agent.status === "closed") && !agent.activeTurn &&
+          !agent.backgroundWork?.count && row.lane !== "human") {
+        // Missing evidence cannot establish that the session has no open question.
+        const evidence = await read(() => sdk.agents.ref(id).timeline.refetch({
+          direction: "tail", projection: "projected", limit: 48,
+        })).then(excerpt).catch(() => null);
+        if (evidence) inactive.set(id, { receipt, remote: { row, evidence } });
+      }
+      return row;
     } catch {
       // A failed lookup cannot establish that a worker was deleted or archived.
       return;
