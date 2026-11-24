@@ -1,6 +1,6 @@
 import { useRpc } from "@getpaseo/plugin/client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Pressable, Switch, Text, TextInput, View } from "react-native";
 import { resolveRoute, type RouteChoice } from "../shared/dispatch";
 import { operationState, setupCoordinator, type Operations } from "../shared/operations";
 import { Button, type Theme } from "./controls";
@@ -28,7 +28,7 @@ export function CoordinatorReplace({ theme, coordinator, data, loading, disabled
   const [error, setError] = useState(""), [notice, setNotice] = useState("");
   const live = useRef(true), pending = useRef(false);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
-  useEffect(() => { setConfirm(false); setPicked(null); setPicking(false); }, [coordinator]);
+  useEffect(() => { setConfirm(false); setPicked(null); setPicking(false); setRemember(true); }, [coordinator]);
 
   const c = theme.colors;
   const usual = data && resolveRoute("M", data.routing, data.catalog, false, data.usageRouting ? data.usage : undefined);
@@ -37,6 +37,7 @@ export function CoordinatorReplace({ theme, coordinator, data, loading, disabled
   const mode = data && target ? replacementMode(data, target.provider) : null;
   const blocked = disabled || busy || loading;
   const list = picking && data ? replacementChoices(data, query, t) : null;
+  const rememberLabel = t("다음 교체에도 이 모델을 기본으로 사용", "Use this model as the default for later replacements");
 
   async function replace() {
     const plan = replacementSelection(choice, usual, remember);
@@ -47,7 +48,7 @@ export function CoordinatorReplace({ theme, coordinator, data, loading, disabled
       const result = await setup({ expectedCoordinator: coordinator, replace: true, expectedRoute: plan.route, expectedModeId: mode.id,
         ...(plan.selection ? { selection: plan.selection } : {}) });
       if (!live.current) return;
-      setConfirm(false); setPicked(null); setPicking(false);
+      setConfirm(false); setPicked(null); setPicking(false); setRemember(true);
       setNotice(result.pinFailed ? t("운영 세션을 연결했습니다. 사이드바 고정은 설정에서 다시 시도해 주세요.", "Coordinator connected. Retry sidebar pinning in Settings.")
         : result.defaultSaved === false ? t("운영 세션을 연결했습니다. 고른 모델을 기본값으로 저장하지는 못했습니다.", "Coordinator connected. The picked model could not be saved as the default.")
           : t("운영 세션을 연결했습니다.", "Coordinator session connected."));
@@ -112,8 +113,11 @@ export function CoordinatorReplace({ theme, coordinator, data, loading, disabled
       {t(`교체할 모델 · ${routeName(target, t)}`, `Replacing with ${routeName(target, t)}`)}{mode ? " · " + t(`도구 권한 · ${mode.label}`, `Tool permissions · ${mode.label}`) : ""}{"\n"}
       {t("새 운영 세션이 준비되면 담당자를 바꿉니다. 진행 중인 작업과 결정 카드는 유지됩니다.", "The new session takes over when ready. Current work and decisions stay on the board.")}
     </Text>}
-    {confirm && choice && <View style={wrap}><Button theme={theme} toggle selected={remember} disabled={blocked}
-      label={t("다음 교체에도 이 모델을 기본으로 사용", "Use this model as the default for later replacements")} onPress={() => setRemember(!remember)} /></View>}
+    {confirm && choice && <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      <Switch accessibilityRole="switch" accessibilityLabel={rememberLabel} value={remember} disabled={blocked} onValueChange={setRemember}
+        trackColor={{ false: c.border, true: c.accent }} thumbColor={remember ? c.accentForeground : c.foregroundMuted} />
+      <Text onPress={blocked ? undefined : () => setRemember(!remember)} style={{ flexShrink: 1, color: c.foreground, fontSize: 13 }}>{rememberLabel}</Text>
+    </View>}
     <View style={wrap}>
       {!confirm && <Button theme={theme} label={t("새 코디네이터로 교체…", "Replace coordinator…")} disabled={blocked || !target || !mode} onPress={() => setConfirm(true)} />}
       {confirm && <Button theme={theme} selected={!blocked && !!target && !!mode} disabled={blocked || !target || !mode}

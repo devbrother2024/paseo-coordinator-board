@@ -692,3 +692,17 @@ test("a failed replacement does not remember the picked model", async () => {
   expect(s.store.read().routing.M).toBeUndefined();
   expect(s.store.read().routingRevision).toBe(0);
 });
+
+test("the fallback kept behind a remembered pick is the model the board recommended, usage included", async () => {
+  const s = replacementScenario();
+  // With more capacity on the other provider, the board itself would have chosen it.
+  s.activity.quotas = {claude:95, codex:5};
+  await s.call(setupCoordinator, {...s.replace, expectedRoute:route, expectedModeId:"auto-review", selection:"default"});
+  expect(s.store.read().routing.M).toEqual([route, s.picked]);
+  const plain = replacementScenario();
+  plain.activity.quotas = {claude:95, codex:5};
+  const state = await plain.call(operationState, {});
+  await plain.call(setUsageRouting, {enabled:false, expectedRevision:state.revision});
+  await plain.call(setupCoordinator, {...plain.replace, expectedRoute:s.picked, expectedModeId:"auto", selection:"default"});
+  expect(plain.store.read().routing.M).toEqual([s.picked, route]);
+});

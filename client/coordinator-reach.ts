@@ -1,31 +1,23 @@
 import type { CoordinatorReach, CoordinatorReachState } from "../shared/coordinator-reach";
 import type { Translate } from "./language";
 
-// The board's coordinator, a ledger owner other than that coordinator, or a card's work session.
-export type ReachRole = "coordinator" | "owner" | "source";
+// The board's coordinator, or a ledger owner other than that coordinator.
+export type ReachRole = "coordinator" | "owner";
 export type ReachNotice = { title: string; effect: string; steps: string[] };
 
-// What pressing a session chip does once its state is known.
-export function chipOutcome(reach: CoordinatorReach): "open" | "explain" | "unverified" {
-  if (reach.state === "unknown") return "unverified";
-  return reach.state === "ok" || reach.state === "closed" || reach.state === "error" ? "open" : "explain";
+// What a chip does once a lookup returned. A lookup that failed still opens: the session may be fine.
+export function chipOutcome(reach: CoordinatorReach): "open" | "explain" {
+  return reach.state === "ok" || reach.state === "closed" || reach.state === "error" || reach.state === "unknown" ? "open" : "explain";
 }
 
-// A state the board already holds can explain without a lookup. Otherwise look first when that is possible.
-export function chipPlan(known: CoordinatorReach | undefined, canCheck: boolean): "explain" | "check" | "open" {
-  if (known && chipOutcome(known) === "explain") return "explain";
+// A state the board already holds decides at once. Only a session it does not list is looked up first.
+export function chipPlan(known: CoordinatorReach | undefined, canCheck: boolean): "blocked" | "check" | "open" {
+  if (known) return chipOutcome(known) === "explain" ? "blocked" : "open";
   return canCheck ? "check" : "open";
-}
-
-// What a chip explains right now. "known" follows the state the board holds, and stops once that state can be opened.
-export function explanationFor(explained: CoordinatorReach | "known" | null, known: CoordinatorReach | undefined): CoordinatorReach | null {
-  if (explained !== "known") return explained;
-  return known && chipOutcome(known) === "explain" ? known : null;
 }
 
 function subject(role: ReachRole, t: Translate) {
   if (role === "owner") return t("이 원장을 맡은 운영 세션", "The session that owns this ledger");
-  if (role === "source") return t("이 작업 세션", "This work session");
   return t("운영 코디네이터 세션", "The coordinator session");
 }
 
@@ -43,7 +35,6 @@ function title(state: Exclude<CoordinatorReachState, "ok">, who: string, t: Tran
 }
 
 function effect(state: Exclude<CoordinatorReachState, "ok">, role: ReachRole, t: Translate) {
-  if (role === "source") return t("세션을 열면 빈 화면이 나올 수 있어 열지 않았습니다.", "Opening it could show an empty screen, so the board did not open it.");
   if (state === "unknown") return t("코디네이터에게 보내는 요청과 원장 카드 답장이 전달되지 않을 수 있습니다.", "Requests to the coordinator and replies to ledger cards may not be delivered.");
   return role === "owner"
     ? t("이 카드의 답장은 그 세션에 전달되지 않습니다. 쓴 답은 보드에만 저장할 수 있습니다.", "Replies to this card do not reach that session. You can still save your answer on the board.")

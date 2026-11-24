@@ -27,7 +27,7 @@ import { BoardHosts } from "./hosts";
 import { OperationsPanel } from "./operations";
 import { ReachExplanation } from "./reach-explanation";
 import { CoordinatorReplaceLoader } from "./coordinator-replace";
-import { opensSession, readSessionReach } from "../shared/coordinator-reach";
+import { blocksReplies, opensSession, readSessionReach } from "../shared/coordinator-reach";
 import { Button, type Theme } from "./controls";
 import { Project } from "./project-kanban";
 import { SessionProgress } from "./session-progress";
@@ -143,12 +143,16 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const openCoordinator = coordinatorId && actions.onOpen && coordinatorOpens ? () => actions.onOpen?.(coordinatorId) : undefined;
   const scroll = useRef<ScrollView>(null);
   const [replaceOpen, setReplaceOpen] = useState(false);
+  const showBanner = () => scroll.current?.scrollTo({ y: 0, animated: true });
   function startReplace() {
     // Settings already ends with the replacement box. On the board it opens under the banner.
     if (settings) return scroll.current?.scrollToEnd({ animated: true });
     setReplaceOpen(true);
-    scroll.current?.scrollTo({ y: 0, animated: true });
+    showBanner();
   }
+  // Cards point to the banner instead of repeating it.
+  const unreachableNote = reach && blocksReplies(reach.state)
+    ? t("코디네이터에 연결할 수 없음 · 위 안내 참고", "Coordinator unreachable · See the notice above") : undefined;
   const [digestLimit, setDigestLimit] = useState(5);
   const [mergeNotice, setMergeNotice] = useState<MergeNotice | null>(null);
 
@@ -202,20 +206,16 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     if (!snapshot) return {};
     const { ownerId, sameSession } = trackedSessionTargets(item, snapshot.coordinator, hostId);
     const open = actions.onOpen;
-    const ownerKnown = ownerId === snapshot.coordinator || snapshot.sessions.some(session => session.id === ownerId);
-    // Look at a session on this host before opening it, so an archived one explains itself.
-    const look = (id: string) => hostId ? () => readSessionReach(getPaseoClient(hostId), id) : undefined;
-    const owner = ownerId && open && (ownerKnown || hostId) ? {
+    const listed = snapshot.sessions.some(session => session.id === ownerId);
+    const owner = ownerId && open && (ownerId === snapshot.coordinator || listed || hostId) ? {
       id: ownerId,
       open: () => open(ownerId),
-      gate: ownerId === snapshot.coordinator
-        ? { role: "coordinator" as const, known: snapshot.coordinatorReach, onReplace: startReplace }
-        : { role: "owner" as const, check: look(ownerId) },
+      // The coordinator's state comes with the snapshot. A listed session opens as it is. Only an owner
+      // outside the active list is looked up first, so an archived one explains itself.
+      gate: ownerId === snapshot.coordinator ? { known: snapshot.coordinatorReach, onBlocked: showBanner }
+        : !listed && hostId ? { check: () => readSessionReach(getPaseoClient(hostId), ownerId) } : undefined,
     } : undefined;
-    const source = showSource && !(owner && sameSession) ? linkedSession(item) : undefined;
-    const sourceId = item.matchedSessionId || item.sessionId;
-    const local = !!sourceId && (!item.sessionHost || item.sessionHost === hostId);
-    return { owner, source, sourceGate: source && local ? { role: "source" as const, check: look(sourceId) } : undefined };
+    return { owner, source: showSource && !(owner && sameSession) ? linkedSession(item) : undefined };
   }
   function renderPull(pr:PullRequestItem, projectId:string, decision=false, securityGate=false, embedded=false, rowKey?: string, scope: (string | null)[] = pr.projectIds, priority?: string) {
     const workSessions:WorkSessionLink[] = [];
@@ -252,7 +252,8 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined)}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
               : pr && renderPull(pr, pr.projectIds.includes(item.projectId ?? "") ? item.projectId! : pr.projectIds[0], true, mentionsSecurityGate(item), true, rowKey, [item.projectId])}
-            recipientId={replyRecipient} onResolved={(status,mode,answer)=>{
+            recipientId={replyRecipient} blockedNote={replyRecipient && replyRecipient === snapshot!.coordinator ? unreachableNote : undefined}
+            onResolved={(status,mode,answer)=>{
               if (rowKey && mode && (status === "sent" || status === "closed" || status === "already-closed")) {
                 remember({ rowKey, actionKey: recordRowKey(item), projectIds: [item.projectId],
                   status: status === "closed" ? (mode === "save" ? "saved" : "reviewed") : status,

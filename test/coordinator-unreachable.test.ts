@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import contribute from "../index.server";
@@ -80,6 +80,13 @@ test("removing the operating project in Paseo is reported with the folder to add
   expect(view.sessions.map((s: any) => s.id)).toEqual(["worker"]);
 });
 
+test("a host that also archives the sessions of a removed project is reported the same way", async () => {
+  const f = await fixture();
+  f.state.projects = f.state.projects.filter(p => p.projectId !== "operate");
+  Object.assign(f.state.agents.get("coordinator"), { status: "closed", archivedAt: "2026-11-24T05:27:00Z" });
+  expect((await f.snapshot()).coordinatorReach).toEqual({ state: "project-missing", directory: f.operatingFolder });
+});
+
 test("an archived operating workspace whose project remains is reported as such", async () => {
   const f = await fixture();
   f.state.workspaces = f.state.workspaces.filter(w => w.id !== "operating-space");
@@ -140,11 +147,15 @@ test("the operating folder is recognised through another spelling of its path", 
   const { sameFolder } = await import("../server/coordinator-reach");
   const root = mkdtempSync(join(tmpdir(), "board-same-folder-")); roots.push(root);
   const folder = join(root, "operate"); mkdirSync(folder);
-  expect(sameFolder(folder, folder + "/")).toBe(true);
-  expect(sameFolder(folder, join(root, "other", "..", "operate"))).toBe(true);
-  expect(sameFolder(folder, root)).toBe(false);
+  expect(await sameFolder(folder, folder + "/")).toBe(true);
+  expect(await sameFolder(folder, join(root, "other", "..", "operate"))).toBe(true);
+  expect(await sameFolder(folder, root)).toBe(false);
+  if (process.platform !== "win32") {
+    symlinkSync(folder, join(root, "link"));
+    expect(await sameFolder(folder, join(root, "link"))).toBe(true);
+  }
   // Folders that no longer exist are compared by their resolved names.
-  expect(sameFolder(join(root, "gone"), join(root, "gone", "."))).toBe(true);
-  expect(sameFolder(join(root, "gone"), join(root, "Gone"))).toBe(process.platform === "win32");
-  expect(sameFolder("", folder)).toBe(false);
+  expect(await sameFolder(join(root, "gone"), join(root, "gone", "."))).toBe(true);
+  expect(await sameFolder(join(root, "gone"), join(root, "Gone"))).toBe(process.platform === "win32");
+  expect(await sameFolder("", folder)).toBe(false);
 });

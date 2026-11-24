@@ -16,7 +16,7 @@ import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session
 type Resolution = ReturnType<typeof resolveTrackedDecision.output.parse>["status"];
 type ResolutionMode = "send" | "save" | "review";
 type Props = {
-  item: TrackedDecision; theme: Theme; priorityLabel?: string; recipientId?:string|null; links: TrackedSessionLinks; children?: ReactNode; pull?: ReactNode;
+  item: TrackedDecision; theme: Theme; priorityLabel?: string; recipientId?:string|null; blockedNote?: string; links: TrackedSessionLinks; children?: ReactNode; pull?: ReactNode;
   renderClarification?: (onDraftChange:(active:boolean) => void) => ReactNode;
   onResolved: (result: Resolution, mode?: ResolutionMode, answer?: string) => Promise<void> | void;
 };
@@ -49,7 +49,7 @@ export function TrackedDecisionCard(props: Props) {
   return <DecisionRecord key={JSON.stringify([props.item.key, props.item.fingerprint])} {...props} />;
 }
 
-function DecisionRecord({ item, theme, links, recipientId, onResolved, children, pull, renderClarification, priorityLabel }: Props) {
+function DecisionRecord({ item, theme, links, recipientId, blockedNote, onResolved, children, pull, renderClarification, priorityLabel }: Props) {
   const { t } = useBoardLanguage();
   const resolve = useRpc(resolveTrackedDecision);
   const cancel = useRpc(cancelQueuedReply);
@@ -115,7 +115,7 @@ function DecisionRecord({ item, theme, links, recipientId, onResolved, children,
   // A suggestion is visible before the person edits. Checking a record sends no reply.
   const hasDraft = hasQuestionDraft || hasPhotos || !!editedReply?.trim() || questionText.some(value => !!value.trim());
   const answerDisabled = busy || attachments.blocked || !hasAnswer || outstanding || tooLong;
-  const sendReply = { disabled: !recipientId || !recordActions || answerDisabled || changedOwner, onPress: () => void acknowledge("send") };
+  const sendReply = { disabled: !recipientId || !recordActions || answerDisabled || changedOwner || !!blockedNote, onPress: () => void acknowledge("send") };
   const inputFocus = useDecisionInteraction(!queue && !isClosed && !needsRefresh &&
     (hasDraft || editedReply !== null || Object.values(typed).some(value => value !== undefined) ||
       attachments.blocked || busy || confirming || Object.values(skipped).some(Boolean)));
@@ -248,6 +248,7 @@ function DecisionRecord({ item, theme, links, recipientId, onResolved, children,
         {changedOwner && recipientId && <Button theme={theme} label={t("변경된 운영 코디네이터 확인", "Confirm new ledger owner")}
           onPress={() => setConfirmedOwner(item.sourceCoordinatorId)} />}
         {outstanding && <Text style={{ color: c.foregroundMuted }}>{t("각 질문에 답하거나 건너뛰기를 선택하세요.", "Answer or explicitly skip each question.")}</Text>}
+        {blockedNote && recipientId && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning, fontSize: 12 }}>{blockedNote}</Text>}
         <View style={wrap}>
           {recipientId && recordActions && <SendButton theme={theme} {...named(sendLabel)} send={sendReply} selected={!sendReply.disabled} />}
           {recordActions && (!recipientId || hasAnswer) && <Button theme={theme} {...named(t("보드에만 저장", "Save on board only"))}

@@ -126,7 +126,7 @@ export default function contribute(server: PluginServerContext) {
     const clarifications = clarificationHistory(prefs, targets, evidence);
     const listedCoordinator = coordinatorRow?.id === latest.coordinator ? coordinatorRow : undefined;
     const reach = await coordinatorReach(paseo, latest, listedCoordinator, operatingFolder);
-    const operating = operatingProjects([...choices.values()], operatingFolder, latest, listedCoordinator);
+    const operating = await operatingProjects([...choices.values()], operatingFolder, latest, listedCoordinator);
     return { sessions: visible, notes: visibleNotes, pullRequests, trackedDecisions, replyHistory, ...(clarifications.length ? { clarifications } : {}),
       projects: [...choices.values()].map(p => ({ ...p, selected: selected.has(p.id), ...(operating.has(p.id) ? { operating: true } : {}) })),
       coordinator: latest.coordinator, ...(reach ? { coordinatorReach: reach } : {}) };

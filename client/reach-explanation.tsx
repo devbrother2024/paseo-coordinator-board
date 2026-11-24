@@ -20,7 +20,8 @@ export function ReachExplanation({ reach, role = "coordinator", theme, onReplace
     <Text selectable style={{ color: banner ? c.statusWarning : c.foreground, fontWeight: "600", fontSize: banner ? 15 : 13 }}>{notice.title}</Text>
     <Text selectable style={{ color: banner ? c.foreground : c.foregroundMuted, fontSize: banner ? 14 : 12 }}>{notice.effect}</Text>
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-      {onReplace && <Button theme={theme} selected={banner} label={t("새 코디네이터로 교체", "Replace coordinator")} onPress={onReplace} />}
+      {/* A check that failed is no reason to nudge someone into replacing a healthy coordinator. */}
+      {onReplace && <Button theme={theme} selected={banner && reach?.state !== "unknown"} label={t("새 코디네이터로 교체", "Replace coordinator")} onPress={onReplace} />}
       <Button theme={theme} expanded={guide} label={guide ? t("복구 방법 닫기", "Hide recovery steps") : t("복구 방법 보기", "Show recovery steps")} onPress={() => setGuide(!guide)} />
     </View>
     {guide && notice.steps.map((step, index) => <Text key={index} selectable style={{ color: c.foreground, fontSize: banner ? 14 : 12 }}>{index + 1}. {step}</Text>)}

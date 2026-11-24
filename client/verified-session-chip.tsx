@@ -1,39 +1,44 @@
 import { useEffect, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import type { CoordinatorReach } from "../shared/coordinator-reach";
-import { SessionChip, type SessionChipProps, type Theme } from "./controls";
-import { chipOutcome, chipPlan, explanationFor, type ReachRole } from "./coordinator-reach";
+import { SessionChip, type SessionChipProps } from "./controls";
+import { chipOutcome, chipPlan } from "./coordinator-reach";
 import { useBoardLanguage } from "./language";
 import { ReachExplanation } from "./reach-explanation";
 
-// What the board knows or can find out about a session before opening it.
-export type SessionGate = { known?: CoordinatorReach; check?: () => Promise<CoordinatorReach>; role: ReachRole; onReplace?: () => void };
+// For a session the board already holds a state for, `known` decides and `onBlocked` points to where that state
+// is explained. For a session outside the active list, `check` looks it up before opening.
+export type SessionGate = { known?: CoordinatorReach; onBlocked?: () => void; check?: () => Promise<CoordinatorReach> };
 
 export function VerifiedSessionChip({ verify, gate, ...props }: SessionChipProps & { verify?: () => Promise<boolean>; gate?: SessionGate }) {
   const { t } = useBoardLanguage();
   const [state, setState] = useState<"ready" | "checking" | "failed">("ready");
-  // A looked-up state is kept as found. A state the board already holds is read fresh, so the explanation leaves once it recovers.
-  const [explained, setExplained] = useState<CoordinatorReach | "known" | null>(null);
+  const [blocked, setBlocked] = useState<CoordinatorReach | null>(null);
   const active = useRef(true);
   const pending = useRef(false);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   if (!verify && !gate) return <SessionChip {...props} />;
-  const blocked = explanationFor(explained, gate?.known);
   async function visit() {
     if (pending.current) return;
     const plan = chipPlan(gate?.known, !!gate?.check || !!verify);
-    if (plan === "explain") return setExplained(blocked ? null : "known");
+    if (plan === "blocked") return gate?.onBlocked?.();
     if (plan === "open") return props.onPress();
     pending.current = true;
     setState("checking");
-    setExplained(null);
+    setBlocked(null);
     try {
-      const reach: CoordinatorReach = gate?.check ? await gate.check() : { state: await verify!() ? "ok" : "unknown" };
-      if (!active.current) return;
-      const outcome = chipOutcome(reach);
-      setState(outcome === "unverified" ? "failed" : "ready");
-      if (outcome === "open") props.onPress();
-      if (outcome === "explain") setExplained(reach);
+      if (gate?.check) {
+        const reach = await gate.check().catch((): CoordinatorReach => ({ state: "unknown" }));
+        if (!active.current) return;
+        setState("ready");
+        if (chipOutcome(reach) === "open") props.onPress();
+        else setBlocked(reach);
+      } else {
+        const available = await verify!();
+        if (!active.current) return;
+        setState(available ? "ready" : "failed");
+        if (available) props.onPress();
+      }
     } catch {
       if (active.current) setState("failed");
     } finally { pending.current = false; }
@@ -43,6 +48,6 @@ export function VerifiedSessionChip({ verify, gate, ...props }: SessionChipProps
     <SessionChip {...props} onPress={() => void visit()} />
     {state !== "ready" && <Text accessibilityLiveRegion="polite" style={{color:props.theme.colors.foregroundMuted,fontSize:12}}>{state === "checking"
       ? t("세션 확인 중…","Checking session…") : t("이 호스트에서 세션 연결을 확인하지 못했습니다.","Could not verify this session on its host.")}</Text>}
-    {blocked && gate && <ReachExplanation reach={blocked} role={gate.role} theme={props.theme as Theme} onReplace={gate.onReplace} />}
+    {blocked && <ReachExplanation reach={blocked} role="owner" theme={props.theme} />}
   </View>;
 }

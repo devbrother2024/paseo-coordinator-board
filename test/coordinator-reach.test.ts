@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import {
-  classifyReach, coordinatorReachSchema, coordinatorReachStates, listedSessionReach, opensSession, readSessionReach, receivesBoardInput,
+  blocksReplies, classifyReach, coordinatorReachSchema, coordinatorReachStates, listedSessionReach, opensSession, readSessionReach, receivesBoardInput,
 } from "../shared/coordinator-reach";
-import { chipOutcome, chipPlan, explanationFor, reachNotice } from "../client/coordinator-reach";
+import { chipOutcome, chipPlan, reachNotice } from "../client/coordinator-reach";
 
 const id = "coordinator-fixture";
 const folder = "/synthetic/operate";
@@ -72,11 +72,28 @@ test("without a project key the board does not claim the project is gone, unless
 test("closed, failed and archived sessions each keep their own reason", async () => {
   expect((await readSessionReach(sdk({ agent: { ...idle, status: "closed" } }), id)).state).toBe("closed");
   expect((await readSessionReach(sdk({ agent: { ...idle, status: "error" } }), id)).state).toBe("error");
-  const archived = sdk({ agent: { ...idle, status: "closed", archivedAt: "2026-11-24T06:18:00Z" }, workspace: null });
-  expect((await readSessionReach(archived, id)).state).toBe("archived");
-  expect(archived.calls).toEqual(["agent:" + id]);
+  // Only the session was archived: its workspace is still active.
+  const archived = sdk({ agent: { ...idle, status: "closed", archivedAt: "2026-11-24T06:18:00Z" } });
+  expect(await readSessionReach(archived, id)).toEqual({ state: "archived" });
+  expect((await readSessionReach(sdk({ agent: { id, status: "closed", archivedAt: "2026-11-24T06:18:00Z" } }), id)).state).toBe("archived");
   // An archived workspace explains more than the closed session inside it.
   expect((await readSessionReach(sdk({ agent: { ...idle, status: "closed" }, projectKey: "operate", workspace: null, projects: [operating] }), id)).state).toBe("workspace-archived");
+});
+
+test("a session archived together with its workspace is explained by the workspace, on either kind of host", async () => {
+  const archivedAt = "2026-11-24T05:27:00Z";
+  // Newer hosts archive the sessions inside a removed project's workspace.
+  const together = sdk({ agent: { ...idle, status: "closed", archivedAt }, projectKey: "operate", workspace: null, projects: [] });
+  expect(await readSessionReach(together, id)).toEqual({ state: "project-missing", directory: folder });
+  const kept = sdk({ agent: { ...idle, status: "closed", archivedAt }, projectKey: "operate", workspace: null, projects: [operating] });
+  expect(await readSessionReach(kept, id)).toEqual({ state: "workspace-archived", directory: folder });
+  // Older hosts leave the session untouched and only drop it from the active list.
+  const untouched = sdk({ agent: idle, projectKey: "operate", workspace: null, projects: [] });
+  expect(await readSessionReach(untouched, id)).toEqual({ state: "project-missing", directory: folder });
+  // An archived session stays archived when its workspace cannot be read.
+  expect((await readSessionReach(sdk({ agent: { ...idle, archivedAt }, workspaceError: true }), id)).state).toBe("archived");
+  expect(classifyReach({ agent: { id, archivedAt }, workspace: null, projectKnown: false })).toBe("project-missing");
+  expect(classifyReach({ agent: { id, archivedAt }, workspace: { archivingAt: null } })).toBe("archived");
 });
 
 test("a session that is absent, internal or answers for another ID is missing", async () => {
@@ -115,6 +132,8 @@ test("only a reachable session takes board input, while closed and failed sessio
   for (const state of coordinatorReachStates) {
     expect(receivesBoardInput(state)).toBe(state === "ok");
     expect(opensSession(state)).toBe(["ok", "closed", "error", "unknown"].includes(state));
+    // A failed check never stops a reply: the session may be fine.
+    expect(blocksReplies(state)).toBe(!["ok", "unknown"].includes(state));
   }
 });
 
@@ -148,12 +167,11 @@ test("the recovery guide for a removed project names the folder to add again", (
   expect(reachNotice({ state: "project-missing" }, en)!.steps.join("\n")).toContain("project again");
 });
 
-test("a ledger owner and a work session are named as themselves", () => {
+test("a ledger owner other than the coordinator is named as itself", () => {
   expect(reachNotice({ state: "archived" }, ko, "owner")!.title).toContain("원장");
-  expect(reachNotice({ state: "archived" }, ko, "source")!.title).toContain("작업 세션");
-  expect(reachNotice({ state: "archived" }, en, "source")!.title).toContain("work session");
+  expect(reachNotice({ state: "archived" }, en, "owner")!.title).toContain("ledger");
   // Replacing the board's coordinator does not bring back another session.
-  expect(reachNotice({ state: "archived" }, ko, "source")!.steps.join("\n")).not.toContain("교체");
+  expect(reachNotice({ state: "archived" }, ko, "owner")!.steps.join("\n")).not.toContain("새 코디네이터로 교체하세요");
 });
 
 test("a chip opens a viewable session and explains one that cannot be opened", () => {
@@ -164,25 +182,16 @@ test("a chip opens a viewable session and explains one that cannot be opened", (
   expect(chipOutcome({ state: "workspace-archived" })).toBe("explain");
   expect(chipOutcome({ state: "project-missing" })).toBe("explain");
   expect(chipOutcome({ state: "missing" })).toBe("explain");
-  expect(chipOutcome({ state: "unknown" })).toBe("unverified");
+  // A check that failed is no reason to keep a healthy session closed.
+  expect(chipOutcome({ state: "unknown" })).toBe("open");
 });
 
-test("a state the board already holds explains at once, and an unknown one is looked up before opening", () => {
-  expect(chipPlan({ state: "project-missing" }, false)).toBe("explain");
-  expect(chipPlan({ state: "workspace-archived" }, true)).toBe("explain");
-  expect(chipPlan({ state: "ok" }, true)).toBe("check");
+test("a state the board already holds needs no lookup, and only an unlisted session is looked up before opening", () => {
+  expect(chipPlan({ state: "project-missing" }, false)).toBe("blocked");
+  expect(chipPlan({ state: "workspace-archived" }, true)).toBe("blocked");
+  expect(chipPlan({ state: "ok" }, false)).toBe("open");
   expect(chipPlan({ state: "closed" }, false)).toBe("open");
+  expect(chipPlan({ state: "unknown" }, false)).toBe("open");
   expect(chipPlan(undefined, true)).toBe("check");
   expect(chipPlan(undefined, false)).toBe("open");
-});
-
-test("an explanation of a state the board holds disappears once the session can be opened again", () => {
-  const archived = { state: "workspace-archived" as const };
-  expect(explanationFor("known", archived)).toEqual(archived);
-  expect(explanationFor("known", { state: "ok" })).toBeNull();
-  expect(explanationFor("known", { state: "closed" })).toBeNull();
-  expect(explanationFor("known", undefined)).toBeNull();
-  // A state found by looking the session up stays until the chip is pressed again.
-  expect(explanationFor(archived, { state: "ok" })).toEqual(archived);
-  expect(explanationFor(null, archived)).toBeNull();
 });

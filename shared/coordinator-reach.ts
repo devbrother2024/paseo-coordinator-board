@@ -23,6 +23,8 @@ export type ReachSdk = {
 export const receivesBoardInput = (state: CoordinatorReachState) => state === "ok";
 // A closed or failed session still shows its conversation. An archived workspace opens an empty screen.
 export const opensSession = (state: CoordinatorReachState) => state === "ok" || state === "closed" || state === "error" || state === "unknown";
+// A check that failed does not stop a reply: the session may be fine.
+export const blocksReplies = (state: CoordinatorReachState) => state !== "ok" && state !== "unknown";
 
 // Sessions in the active list are neither archived nor in an archived workspace.
 export function listedSessionReach(status: string | null | undefined): CoordinatorReachState {
@@ -33,8 +35,10 @@ export function listedSessionReach(status: string | null | undefined): Coordinat
 export function classifyReach(input: { agent: ReachAgent | null; workspace?: ReachWorkspace | null; projectKnown?: boolean | null }): CoordinatorReachState {
   const { agent, workspace } = input;
   if (!agent || agent.internal) return "missing";
-  if (agent.archivedAt) return "archived";
+  // Some hosts archive the sessions of a removed project and others only drop them from the active list.
+  // Either way the archived workspace is the cause, so it comes before the session's own archive mark.
   if (workspace === null || workspace?.archivingAt) return input.projectKnown === false ? "project-missing" : "workspace-archived";
+  if (agent.archivedAt) return "archived";
   return listedSessionReach(agent.status);
 }
 
@@ -46,8 +50,10 @@ async function projectKnown(paseo: ReachSdk, key: string | undefined, cwd: strin
   if (key === undefined && !folders.length) return null;
   try {
     const { projects } = await paseo.projects.list();
-    if (projects.some(p => (key !== undefined && (p.projectId === key || p.projectKey === key)) ||
-      folders.some(folder => sameFolder(folder, p.projectRootPath)))) return true;
+    for (const project of projects) {
+      if (key !== undefined && (project.projectId === key || project.projectKey === key)) return true;
+      for (const folder of folders) if (await sameFolder(folder, project.projectRootPath)) return true;
+    }
     return key !== undefined || operatingFolder !== undefined ? false : null;
   } catch {
     return null;
@@ -55,18 +61,19 @@ async function projectKnown(paseo: ReachSdk, key: string | undefined, cwd: strin
 }
 
 // Paths differ in separators and letter case between hosts. A caller that can ask the file system passes its own comparison.
-export type SameFolder = (a: string, b: string) => boolean;
+export type SameFolder = (a: string, b: string) => boolean | Promise<boolean>;
 
 export async function readSessionReach(paseo: ReachSdk, id: string, known: { workspaceId?: string; directory?: string } = {},
   sameFolder: SameFolder = (a, b) => a === b): Promise<CoordinatorReach> {
   let entry: Awaited<ReturnType<ReturnType<ReachSdk["agents"]["ref"]>["refresh"]>>;
   try { entry = await paseo.agents.ref(id).refresh(); } catch { return { state: "unknown" }; }
   const agent = entry?.agent.id === id && !entry.agent.internal ? entry.agent : null;
-  if (agent?.archivedAt) return { state: "archived" };
   const workspaceId = agent?.workspaceId ?? known.workspaceId;
   if (!workspaceId) return { state: classifyReach({ agent }) };
   let workspace: ReachWorkspace | null;
-  try { workspace = await paseo.workspaces.ref(workspaceId).refresh(); } catch { return { state: "unknown" }; }
+  try { workspace = await paseo.workspaces.ref(workspaceId).refresh(); }
+  // An archived session is known to be archived even when its workspace cannot be read.
+  catch { return { state: agent?.archivedAt ? "archived" : "unknown" }; }
   if (workspace && !workspace.archivingAt) return { state: classifyReach({ agent, workspace }) };
   const directory = agent?.cwd || known.directory;
   const state = classifyReach({

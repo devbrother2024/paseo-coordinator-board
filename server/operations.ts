@@ -122,8 +122,11 @@ export function createOperations(store: PreferenceStore, workspaceDir: string, f
       const initial = store.read();
       // A model the person picked is not second-guessed by the saved order or by account usage.
       const picked = input.selection !== undefined;
-      const checkUsage = !picked && initial.usageRouting && !initial.routing.M;
-      const [catalog,usage] = await Promise.all([readCatalog(paseo, undefined, true),checkUsage ? readAccountUsage(paseo) : []]);
+      const unsaved = initial.usageRouting && !initial.routing.M;
+      const checkUsage = !picked && unsaved;
+      // A remembered pick keeps the board's own recommendation as its fallback, and that recommendation follows usage.
+      const [catalog,usage] = await Promise.all([readCatalog(paseo, undefined, true),
+        checkUsage || (unsaved && input.selection === "default") ? readAccountUsage(paseo) : []]);
       const verifyRoute = (scope: ReturnType<typeof store.read>) => {
         const allowed = includedCatalog(catalog, scope.excludedProviders);
         // It still has to pass the rules for a new M candidate: in the catalog, on a provider with a coordinator mode.
@@ -145,17 +148,21 @@ export function createOperations(store: PreferenceStore, workspaceDir: string, f
       // Remembered only once the coordinator in place really runs the picked model.
       try {
         const route = input.expectedRoute, config = configForRoute(route);
-        const { createdCoordinator: created, routing } = store.read();
-        if (created?.id !== result.sessionId || created.config.provider !== config.provider || created.config.thinkingOptionId !== config.thinkingOptionId)
-          return { ...result, defaultSaved: false };
-        if (!routing.M?.[0] || !sameRoute(routing.M[0], route)) store.change(scope => {
-          // Earlier candidates stay as fallbacks. With none saved, the board's own choice until now becomes the fallback.
-          const recommended = resolveRoute("M", {}, includedCatalog(catalog, scope.excludedProviders));
+        let saved = false;
+        // Checked and written in one step, so a replacement finishing in between cannot be credited with this pick.
+        store.change(scope => {
+          const created = scope.createdCoordinator;
+          if (scope.coordinator !== result.sessionId || created?.id !== result.sessionId ||
+              created.config.provider !== config.provider || created.config.thinkingOptionId !== config.thinkingOptionId) return;
+          saved = true;
+          if (scope.routing.M?.[0] && sameRoute(scope.routing.M[0], route)) return;
+          // Earlier candidates stay as fallbacks. With none saved, the model the board recommended until now becomes the fallback.
+          const recommended = resolveRoute("M", {}, includedCatalog(catalog, scope.excludedProviders), false, scope.usageRouting ? usage : []);
           const earlier = scope.routing.M ?? (recommended ? [recommended] : []);
-          scope.routing.M = [route, ...earlier.filter(saved => !sameRoute(saved, route))].slice(0, 12);
+          scope.routing.M = [route, ...earlier.filter(candidate => !sameRoute(candidate, route))].slice(0, 12);
           scope.routingRevision++;
         });
-        return { ...result, defaultSaved: true };
+        return { ...result, defaultSaved: saved };
       } catch {
         return { ...result, defaultSaved: false };
       }
