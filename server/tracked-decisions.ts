@@ -313,6 +313,12 @@ export class TrackedDecisionStore {
     if (row.fingerprint!==input.fingerprint) return this.confirmEarlier(input,version,row.item,check);
     if (!validQuestions(row.item,input)) return changed("revised");
     if ((!input.answer?.trim() && !input.images?.length) || !input.recipientId) return changed();
+    // A reply this revision already sent is looked for with the session that took it, before the current owner and
+    // route are checked. Looking only reads that conversation, so a rotated owner cannot strand the reply.
+    const sentBefore=this.recorded()?.get(version);
+    if (sentBefore?.pending && !sentBefore.queue && sameContent(sentBefore,input,describePhotos(input.images),row.item)) {
+      if ((await this.confirm(version,sentBefore,check)).status==="sent") return {status:"sent"};
+    }
     const fallback=input.route==="coordinator";
     if (fallback && row.item.where!=="session") return changed("recipient-changed");
     const owned=fallback ? row.item.sourceCoordinatorId!==undefined : usesSourceCoordinator(row.item);

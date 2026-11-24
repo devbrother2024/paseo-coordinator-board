@@ -371,6 +371,26 @@ test("a redirected reply left unconfirmed is still checked after the work sessio
   expect(f.sent).toHaveLength(1);
 });
 
+test("a redirected reply left unconfirmed is checked with the owner that took it after the ledger owner rotates", async () => {
+  const f = await fixture([card("cleanup", {where: "session", agentId: "worker"}), card("archive", {where: "session", agentId: "worker"})]);
+  const {item: cleanup} = await f.find("cleanup"), {item: archive} = await f.find("archive");
+  f.lost.add("operator");
+  for (const item of [cleanup, archive]) expect(await f.reply(item, {recipientId: "operator", route: "coordinator"})).toEqual({status: "unconfirmed"});
+  // A new owner is not a new revision, and the old owner has left the managed sessions.
+  f.setOwner("general");
+  f.hidden.add("operator");
+  const rotated = await f.find("cleanup");
+  expect(rotated.item!.fingerprint).toBe(cleanup.fingerprint);
+  expect(rotated.route?.fallbackId).toBe("general");
+  expect(await f.reply(cleanup, {recipientId: "operator", route: "coordinator"})).toEqual({status: "changed", reason: "owner-changed"});
+  expect(await f.reply(cleanup, {recipientId: "general", route: "coordinator"})).toEqual({status: "changed", reason: "conflict"});
+  f.history.visible = true;
+  expect(await f.reply(cleanup, {recipientId: "general", route: "coordinator"})).toEqual({status: "sent"});
+  expect(await f.reply(archive, {recipientId: "operator", route: "coordinator"})).toEqual({status: "sent"});
+  expect(f.sent.map(m => m.id)).toEqual(["operator", "operator"]);
+  expect((await f.board()).trackedDecisions.items).toBeEmpty();
+});
+
 test("a display-only edit keeps the draft's basis; anything the reply answers needs a new look", async () => {
   const f = await fixture([card("notes", {where: "manager", ask: ["Build 12 to staging?"], recommend: ["Delete"], questions: [
     {id: "Q1", text: "Which branch?", options: [{key: "A", text: "Delete", recommended: true, does: "Removes it from staging"}, {key: "B", text: "Keep"}]},
