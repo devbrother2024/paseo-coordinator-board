@@ -20,6 +20,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { DecisionActions, type DecisionReceipt } from "./decision-actions";
 import { Clarification } from "./clarification";
+import { cardChoiceNotice, choiceRequest, decisionChoiceNotice, type ChoiceNotice } from "./choice-display";
+import { ledgerChoiceGaps } from "../shared/choice-gaps";
 import { clarificationKey, clarificationRecipient, sessionClarificationCard, trackedClarificationCard, type ClarificationCard } from "../shared/clarifications";
 import { SessionLinks } from "./session-links";
 import { useRemoteRunning, RemoteRunning } from "./remote-running";
@@ -185,16 +187,18 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     setInlineReceipts(previous => previous.some(entry => entry.actionKey === action.actionKey && entry.rowKey === action.rowKey)
       ? previous : [...previous, { ...action, order: orderedKeys }]);
   }
-  function questionFor(card: ClarificationCard | null, title: string, prior?: TrackedDecision["qa"], onDraftChange?: (active:boolean) => void, ownerId?: string | null) {
+  function questionFor(card: ClarificationCard | null, title: string, prior?: TrackedDecision["qa"], onDraftChange?: (active:boolean) => void, ownerId?: string | null, notice?: ChoiceNotice | null) {
     if (!snapshot) return null;
     const recipientId = card ? clarificationRecipient(card, snapshot) : null;
     const recipientTitle = ownerId && ownerId === recipientId ? t("운영 코디네이터", "Ledger owner") + " · " + ownerId
       : snapshot.sessions.find(row => row.id === recipientId)?.title;
-    return <Clarification key={card ? clarificationKey(card) : title} title={title} card={card} theme={theme}
+    const toCoordinator = !!recipientId && (recipientId === snapshot.coordinator || recipientId === ownerId);
+    return <Clarification key={card ? clarificationKey(card) : title} title={title} card={card} theme={theme} suggestion={choiceRequest(notice ?? null, toCoordinator)}
       recipientId={recipientId} recipientTitle={recipientTitle} entries={snapshot.clarifications ?? []} prior={prior} onRefresh={onRefresh} onDraftChange={onDraftChange} />;
   }
   const renderDecision = (card: Card, embedded = false, rowKey?: string, priority?: string) => <DecisionActions key={JSON.stringify([card.session.projectId, card.session.id, card.session.decision?.version])}
-          clarification={!embedded && questionFor(sessionClarificationCard(card.session,card.note),card.session.title)}
+          clarification={!embedded && questionFor(sessionClarificationCard(card.session,card.note),card.session.title,undefined,undefined,undefined,
+            card.session.decision?.source === "conversation" ? decisionChoiceNotice(card.session.decision) : null)}
           embedded={embedded} priorityLabel={priority} card={card} hostLabel={hostLabel} theme={theme} coordinator={snapshot!.coordinator} coordinatorTitle={snapshot!.sessions.find(s => s.id === snapshot!.coordinator)?.title}
           open={actions.onOpen} receipt={receipts.find(r => matches(r, card))}
           onSent={result => {
@@ -262,7 +266,8 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           const recipient = trackedRecipient(item,snapshot!.coordinator,snapshot!.sessions);
           const replyRecipient = native && !item.questions.length ? undefined : recipient;
           return <TrackedDecisionCard links={recordLinks(item, !native)} key={item.key} item={item} theme={theme} priorityLabel={priority}
-            renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined)}
+            renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined,
+              item.kind === "merge" ? null : cardChoiceNotice(ledgerChoiceGaps(item)))}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
               : pr && renderPull(pr, pr.projectIds.includes(item.projectId ?? "") ? item.projectId! : pr.projectIds[0], true, mentionsSecurityGate(item), true, rowKey, [item.projectId])}
             recipientId={replyRecipient} blockedNote={replyRecipient && replyRecipient === snapshot!.coordinator ? unreachableNote : undefined}

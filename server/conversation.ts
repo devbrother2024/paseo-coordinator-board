@@ -2,10 +2,12 @@ import { createHash } from "node:crypto";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import type { SessionRow } from "../shared/contract";
 import type { Preferences } from "./preferences";
+import { contextBefore, labelDefinitions, questionChoices, type LabelDefinition } from "../shared/question-choices";
 
 type Sdk = PluginHandlerContext["paseo"];
 type Page = Awaited<ReturnType<ReturnType<Sdk["agents"]["ref"]>["timeline"]["refetch"]>>;
-export type Turn = { role: "user" | "assistant"; text: string; truncated?: boolean; at?: string };
+// `definitions` keeps option definitions such as "(a) …" from the part of a long turn that `text` cuts off.
+export type Turn = { role: "user" | "assistant"; text: string; truncated?: boolean; at?: string; definitions?: LabelDefinition[] };
 type ClarificationObservation = { bodyHash: string; response?: string };
 export type Evidence = {
   id: string; turns: Turn[];
@@ -62,7 +64,9 @@ export function excerpt(page: Page): Evidence {
     }
     if (!text) continue;
     laterInputs.length = 0;
-    turns.push({ role, text: text.slice(-2000), ...(timestamp ? { at:timestamp } : {}), ...(text.length > 2000 ? { truncated: true } : {}) });
+    const definitions = role === "assistant" && text.length > 2000 ? labelDefinitions(text) : [];
+    turns.push({ role, text: text.slice(-2000), ...(timestamp ? { at:timestamp } : {}), ...(text.length > 2000 ? { truncated: true } : {}),
+      ...(definitions.length ? { definitions } : {}) });
     digest.update(JSON.stringify([seqEnd, role, text]));
   }
   if (laterInputs.length) digest.update(JSON.stringify(laterInputs));
@@ -90,6 +94,8 @@ function questionIn(text: string, coordinatorDigest = false) {
       // Existing replies and ledger matches identify this question by its compact text.
       question: lines.slice(i).filter(line => line && included(line)).join(" ").slice(0, 340),
       markdown: original.slice(i).filter((_, index) => included(lines[i + index])).join("\n").trimEnd(),
+      // The explanation the session wrote before asking, for display only.
+      context: contextBefore(original.slice(0, i).filter((_, index) => included(lines[index]))),
     };
   }
   return null;
@@ -98,6 +104,15 @@ function questionIn(text: string, coordinatorDigest = false) {
 export function lastConversationQuestion(evidence: Evidence, coordinatorDigest = false) {
   const last = evidence.turns.at(-1);
   return last?.role === "assistant" ? questionIn(last.text, coordinatorDigest) : null;
+}
+
+/** The last question with the text before it and the options it names, looked up in this and earlier assistant turns. */
+export function conversationQuestionDetails(evidence: Evidence, coordinatorDigest = false) {
+  const question = lastConversationQuestion(evidence, coordinatorDigest);
+  const last = evidence.turns.at(-1);
+  if (!question || !last) return null;
+  const earlier = evidence.turns.slice(0, -1).filter(turn => turn.role === "assistant").reverse();
+  return { ...question, ...questionChoices({ question: question.markdown, context: question.context, message: last, earlier }) };
 }
 
 export function classify(e: Evidence, row: SessionRow, decision?: Preferences["judgments"][string], isCoordinator = false): Candidate {
