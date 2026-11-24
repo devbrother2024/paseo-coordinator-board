@@ -76,3 +76,18 @@ test("delivery is read once per coordinator from its recent conversation, and on
   expect(reads.sort()).toEqual(["coordinator-A", "removed-coordinator"]);
   expect((await store.confirm(paseo as never)).map(entry => entry.status)).toEqual(["pending", "delivered", "delivered", "delivered"]);
 });
+
+test("the same text under another message ID, or a page that failed or came from a stale cursor, is not a delivery", async () => {
+  const { store } = fixture();
+  store.record(request(1));
+  store.record(request(2));
+  const entries = [
+    { item: { type: "user_message", messageId: id(9), clientMessageId: id(8), text: "Request 1" } },
+    { item: { type: "user_message", messageId: id(2), text: "Request 2" } },
+  ];
+  const reading = (page: object) => ({ agents: { ref: () => ({ timeline: { refetch: async () => ({ entries, ...page }) } }) } });
+  for (const page of [{ error: "timeline unavailable" }, { staleCursor: true }]) {
+    expect((await store.confirm(reading(page) as never)).map(entry => entry.status)).toEqual(["pending", "pending"]);
+  }
+  expect((await store.confirm(reading({}) as never)).map(entry => [entry.text, entry.status])).toEqual([["Request 2", "delivered"], ["Request 1", "pending"]]);
+});
