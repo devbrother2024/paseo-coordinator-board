@@ -30,6 +30,9 @@ import { BoardFacts } from "./server/board-facts";
 import { ProjectRootReader } from "./server/project-root";
 import { recordDigestCompletion } from "./server/digest";
 import { coordinatorReach, operatingProjects } from "./server/coordinator-reach";
+import { judgedMergeCardOptions, judgePullTool, registerMergeJudgmentSettings } from "./server/pull-judgments";
+import { applyPullJudgments } from "./shared/pull-judgments";
+import { pullKey } from "./shared/tracked-decisions";
 import { operatingDirectories, operatingDirectory } from "./server/operating-folders";
 
 export default function contribute(server: PluginServerContext) {
@@ -98,6 +101,11 @@ export default function contribute(server: PluginServerContext) {
     if (coordinatorRow && coordinatorRow.id === latest.coordinator) targets.set(coordinatorRow.id, coordinatorRow);
     for (const id of evidence.keys()) if (!targets.has(id)) evidence.delete(id);
     const {history = [], ...trackedDecisions} = tracked.read(selected, visible, pullRequests, evidence);
+    // Ledger matching above sees GitHub readiness. Only then may coordinator verdicts move merge cards.
+    pullRequests.items = applyPullJudgments(pullRequests.items, {
+      ...judgedMergeCardOptions(latest), judgments: latest.pullJudgments,
+      ledgerPulls: new Set(trackedDecisions.items.flatMap(item => item.matchedPull ? [pullKey(item.matchedPull.repo, item.matchedPull.number)] : [])),
+    });
     if (tracked.hasWaitingReplies()) {
       void resumeReplies({paseo}).catch(()=>console.warn("Could not check waiting board replies."));
     }
@@ -215,6 +223,7 @@ export default function contribute(server: PluginServerContext) {
     }
   });
   prs.register(server, invalidateCount,mergeNotifications);
+  registerMergeJudgmentSettings(server, prefs, invalidateCount);
   const onRecipientAvailable = async (event: {agent?: {id:string}}, context: PluginHandlerContext) => {
     if (!event.agent?.id) return;
     const id=event.agent.id;
@@ -317,6 +326,6 @@ export default function contribute(server: PluginServerContext) {
     return { ok: true };
   });
   const removeReport = attachReportTool(server, notes);
-  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount)]);
+  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount), judgePullTool(prefs, prs, invalidateCount)]);
   return () => { removeMergeTurn(); removeMergePermission(); removeReplyClose(); removeReplyArchive(); removeCoordinator(); removeReport(); };
 }

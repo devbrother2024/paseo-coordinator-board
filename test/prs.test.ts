@@ -210,3 +210,10 @@ test("conflicting workspace remotes avoid unnecessary git probes of other checko
   expect(f.log.local).toEqual(["/missing"]);
   expect(f.log.gh).toBeEmpty();
 });
+
+test("open PRs carry the head commit only when GitHub reports a full SHA", () => {
+  const sha = "f".repeat(40);
+  const {items} = parseOpenPulls("org/example", JSON.stringify([raw(1,{headSha:sha}), raw(2,{headSha:"abc"}), raw(3)]));
+  expect(items.map(item => item.headSha)).toEqual([sha, undefined, undefined]);
+  expect(pullRequestViewSchema.parse({items:items.map(item => ({...item, projectIds:["root"]})), projects:[]}).items[0].headSha).toBe(sha);
+});

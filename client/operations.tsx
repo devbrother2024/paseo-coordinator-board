@@ -18,6 +18,7 @@ import { setUsageRouting } from "../shared/usage-routing";
 import { UsageRouting } from "./usage-routing";
 import { ProviderSettings } from "./providers";
 import { FactReplyControls } from "./fact-reply-controls";
+import { MergeJudgmentControls } from "./merge-judgment-controls";
 import { CoordinatorPinControls } from "./coordinator-pin";
 import { CoordinatorReplace } from "./coordinator-replace";
 import { RouteEditor, routeName, wrap, type RoutingSave } from "./route-editor";
@@ -197,6 +198,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
 
   if (settings) return <View style={{ gap: 14 }}>
     <FactReplyControls theme={theme} />
+    <MergeJudgmentControls theme={theme} />
     <CoordinatorPinControls theme={theme} coordinator={coordinator} />
     <View style={section}>
       <View style={{ ...wrap, alignItems: "center", justifyContent: "space-between" }}>
