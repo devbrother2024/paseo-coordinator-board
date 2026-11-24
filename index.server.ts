@@ -1,5 +1,5 @@
 import type { ReplyEntry } from "./shared/reply-history";
-import { trackedRecipient, usesSourceCoordinator } from "./shared/tracked-decisions";
+import { trackedFallbackRecipient, trackedRecipient, usesSourceCoordinator, type TrackedReplyReason } from "./shared/tracked-decisions";
 import { boardReadiness } from "./shared/readiness";
 import { SnapshotReads } from "./server/snapshot-reads";
 import { readProjectDecisionSources } from "./server/project-decision-sources";
@@ -212,22 +212,29 @@ export default function contribute(server: PluginServerContext) {
   const removeReplyClose = server.addHook("agent.close.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });
   const removeReplyArchive = server.addHook("agent.archive.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });
   const removeMergePermission = server.addHook("agent.permission.after",onRecipientAvailable);
-  const resumeReplies = tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, async (item,targetId,{paseo}) => {
+  const resumeReplies = tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, async (item,targetId,{paseo},route) => {
     let rows = await discoverSessions(paseo);
-    const owned = usesSourceCoordinator(item);
-    const current = () => {
+    const fallback = route === "coordinator";
+    const owned = fallback ? item.sourceCoordinatorId !== undefined : usesSourceCoordinator(item);
+    const mismatch = (): TrackedReplyReason | null => {
       const scope = prefs.read();
       const managed = managedSessions(rows,scope);
-      if (!scope.projects.length || (item.projectId && !scope.projects.includes(item.projectId))) return false;
-      if (trackedRecipient(item,scope.coordinator,managed) !== targetId) return false;
+      if (!scope.projects.length || (item.projectId && !scope.projects.includes(item.projectId))) return "recipient-changed";
+      const expected = fallback ? trackedFallbackRecipient(item,scope.coordinator,managed) : trackedRecipient(item,scope.coordinator,managed);
+      if (expected !== targetId) return owned ? "owner-changed" : expected ? "recipient-changed" : "recipient-missing";
       return !owned || managed.some(row => row.id === targetId) ||
-        (isManagedCoordinator(scope,targetId) && targetId === scope.coordinator && rows.some(row => row.id === targetId));
+        (isManagedCoordinator(scope,targetId) && targetId === scope.coordinator && rows.some(row => row.id === targetId)) ? null : "owner-changed";
     };
-    if (!current()) return null;
+    const current = () => mismatch() === null;
+    const before = mismatch();
+    if (before) return {blocked:before};
     const handle=paseo.agents.ref(targetId);
     if (owned) rows = await discoverSessions(paseo);
     const agent=(await handle.refresh())?.agent;
-    if (!current() || !agent || agent.id!==targetId || agent.internal || agent.archivedAt || agent.status==="closed" || agent.status==="error") return null;
+    if (!agent || agent.id!==targetId || agent.internal || agent.archivedAt) return {blocked:"recipient-missing"};
+    if (agent.status==="closed" || agent.status==="error") return {blocked:agent.status==="closed" ? "recipient-closed" : "recipient-error"};
+    const after = mismatch();
+    if (after) return {blocked:after};
     return {
       stillCurrent:current,
       send:async (answer,messageId,images)=>{
@@ -238,7 +245,7 @@ export default function contribute(server: PluginServerContext) {
         return !page.error && !page.gap && !page.staleCursor && page.entries.some(({item:m})=>m.type==="user_message" &&
           (m.messageId===messageId || m.clientMessageId===messageId) && m.text===answer);
       },
-      ready:canReceiveBoardInput(agent,owned || targetId===prefs.read().coordinator),
+      ready:canReceiveBoardInput(agent,owned || fallback || targetId===prefs.read().coordinator),
     };
   });
   server.handle(boardSnapshot, (input, { paseo }) => reads.read(() => buildSnapshot(paseo), input.fresh));

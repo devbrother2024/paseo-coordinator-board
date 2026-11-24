@@ -72,7 +72,8 @@ export function trackedAnswerText(item: TrackedDecisionInput, replies: string[],
   return [...answers, freeReply.trim()].filter(Boolean).join("\n");
 }
 
-export function suggestedTrackedReply(item: TrackedDecision) {
+// The ledger's example answer is guidance only. It may name several choices at once.
+export function trackedReplyExample(item: TrackedDecision) {
   return item.kind !== "merge" && !item.questions.length && !item.matchedSessionId ? item.howToAnswer?.trim() ?? "" : "";
 }
 
@@ -93,10 +94,49 @@ export function trackedRecipient(item:RoutedTrackedDecision, coordinator:string|
   return session ? session.id : null;
 }
 
+// A session card whose own session cannot take the reply may go to the same
+// coordinator that owns coordinator cards. An unverified owner never falls back.
+export function trackedFallbackRecipient(item:RoutedTrackedDecision, coordinator:string|null, sessions:readonly SessionRow[]) {
+  return item.where === "session" ? sourceCoordinatorRecipient(item,coordinator,sessions) : null;
+}
+
+export type TrackedReplyBlock = "closed" | "error" | "other-project" | "other-host" | "missing" | "no-session" | "owner-unverified" | "no-coordinator";
+export type TrackedReplyRoute = {
+  targetId: string | null; recipientId: string | null; fallbackId: string | null; blocked?: TrackedReplyBlock;
+};
+
+function endedState(id:string, sessions:readonly SessionRow[]) {
+  const status = sessions.find(s => s.id === id)?.status;
+  return status === "closed" || status === "error" ? status : undefined;
+}
+
+export function trackedReplyRoute(item:RoutedTrackedDecision, coordinator:string|null, sessions:readonly SessionRow[]):TrackedReplyRoute {
+  if (item.where === "manager" || item.where === "human") {
+    const owner = sourceCoordinatorRecipient(item,coordinator,sessions);
+    if (!owner) return {targetId:null, recipientId:null, fallbackId:null, blocked:item.sourceCoordinatorId === undefined ? "no-coordinator" : "owner-unverified"};
+    const ended = endedState(owner,sessions);
+    return {targetId:owner, recipientId:ended ? null : owner, fallbackId:null, ...(ended ? {blocked:ended} : {})};
+  }
+  if (item.where !== "session") return {targetId:null, recipientId:null, fallbackId:null};
+  const candidate = trackedFallbackRecipient(item,coordinator,sessions);
+  const fallbackId = candidate && !endedState(candidate,sessions) ? candidate : null;
+  const blocked = (reason:TrackedReplyBlock, targetId:string|null = null):TrackedReplyRoute => ({targetId, recipientId:null, fallbackId, blocked:reason});
+  if (!item.sessionId) return blocked("no-session");
+  if (item.sessionHost) return blocked("other-host");
+  const session = sessions.find(s => s.id === item.sessionId && s.projectId === item.projectId);
+  if (!session) return blocked(sessions.some(s => s.id === item.sessionId) ? "other-project" : "missing");
+  const ended = endedState(session.id,sessions);
+  return ended ? blocked(ended,session.id) : {targetId:session.id, recipientId:session.id, fallbackId};
+}
+
+export const trackedReplyReasons = ["removed","revised","conflict","owner-changed","recipient-changed","recipient-closed","recipient-error","recipient-missing","queue-stopped"] as const;
+export type TrackedReplyReason = typeof trackedReplyReasons[number];
+
 export const resolveTrackedDecision = defineRpc({
   name:"board.resolve-tracked-decision",
-  input: reference.extend({fingerprint,answer:z.string().max(4000).optional(),recipientId:id.optional(),images:workImages.optional(),questionIndexes:z.array(z.number().int().min(0).max(127)).max(128).optional()}).strict().refine(v => !v.recipientId || !!v.answer?.trim() || !!v.images?.length),
-  output:z.object({status:z.enum(["closed","already-closed","changed","out-of-scope","unavailable","sent","queued","busy","unconfirmed"])}),
+  input: reference.extend({fingerprint,answer:z.string().max(4000).optional(),recipientId:id.optional(),route:z.literal("coordinator").optional(),images:workImages.optional(),questionIndexes:z.array(z.number().int().min(0).max(127)).max(128).optional()}).strict()
+    .refine(v => !v.recipientId || !!v.answer?.trim() || !!v.images?.length).refine(v => !v.route || !!v.recipientId),
+  output:z.object({status:z.enum(["closed","already-closed","changed","out-of-scope","unavailable","sent","queued","busy","unconfirmed"]),reason:z.enum(trackedReplyReasons).optional()}),
 });
 export const cancelQueuedReply = defineRpc({
   name:"board.cancel-queued-reply",

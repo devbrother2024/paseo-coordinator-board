@@ -4,9 +4,9 @@ import { ReplyHistory } from "./reply-history";
 import { trackedSessionTargets } from "./tracked-session-targets";
 import type { TrackedSessionLinks } from "./tracked-session-chips";
 import { TrackedDecisionCard } from "./tracked-decisions";
-import { mentionsSecurityGate, trackedCoverage, trackedRecipient, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
+import { mentionsSecurityGate, trackedCoverage, trackedReplyRoute, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
 import { MergeFeedback, PullRequestCard, PullRequestSettings, type MergeNotice, type WorkSessionLink } from "./pull-requests";
-import { pullRowKey, recordRowKey, sessionRowKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
+import { pullRowKey, recordActionKey, sessionRowKey, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
 import { rankDecisionRows, priorityLabel } from "./decision-priority";
 import { DecisionEditingRow, keepEditingPositions, useDecisionEditing } from "./decision-editing";
 import { InlineDecisionReceipt } from "./inline-receipt";
@@ -57,7 +57,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     if (!displayed.has(id)) displayed.set(id, {id,title:names.get(id) ?? id,cards:[]});
   }
   function decisionsFor(inScope:(id:string|null)=>boolean) {
-    const visibleRecords=records.filter(item=>inScope(item.projectId) && !completed.has(recordRowKey(item)));
+    const visibleRecords=records.filter(item=>inScope(item.projectId) && !completed.has(recordActionKey(item)));
     const covered=trackedCoverage(visibleRecords);
     return {
       records:visibleRecords,
@@ -228,18 +228,20 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           const pr = item.kind === "merge" && item.mergeTarget && pullRequests?.items.find(pr =>
             pr.repo === item.mergeTarget?.repo && pr.number === item.mergeTarget.number &&
             (!item.projectId || pr.projectIds.includes(item.projectId)) && (pr.reason !== "ready" || item.matchedPull));
-          const recipient = trackedRecipient(item,snapshot!.coordinator,snapshot!.sessions);
-          const replyRecipient = native && !item.questions.length ? undefined : recipient;
+          const route = native && !item.questions.length ? undefined : trackedReplyRoute(item,snapshot!.coordinator,snapshot!.sessions);
           return <TrackedDecisionCard links={recordLinks(item, !native)} key={item.key} item={item} theme={theme} priorityLabel={priority}
             renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined)}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
               : pr && renderPull(pr, pr.projectIds.includes(item.projectId ?? "") ? item.projectId! : pr.projectIds[0], true, mentionsSecurityGate(item), true, rowKey, [item.projectId])}
-            recipientId={replyRecipient} onResolved={(status,mode,answer)=>{
+            route={route} keepsUnsent={!!rowKey} onResolved={({status,reason,mode,answer,recipientId})=>{
               if (rowKey && mode && (status === "sent" || status === "closed" || status === "already-closed")) {
-                remember({ rowKey, actionKey: recordRowKey(item), projectIds: [item.projectId],
+                remember({ rowKey, actionKey: recordActionKey(item), projectIds: [item.projectId],
                   status: status === "closed" ? (mode === "save" ? "saved" : "reviewed") : status,
-                  recipientId: status === "sent" && mode === "send" ? replyRecipient ?? undefined : undefined,
+                  recipientId: status === "sent" ? recipientId : undefined,
                   title: item.title, detail: answer || item.projectTitle || projectName(item.projectId) });
+              }
+              if (rowKey && mode && answer && (reason === "removed" || reason === "conflict")) {
+                remember({ rowKey, actionKey: unsentActionKey(item), projectIds: [item.projectId], status: "unsent", title: item.title, detail: answer });
               }
               onRefresh();
             }}>

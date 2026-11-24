@@ -5,7 +5,7 @@ import {mkdtempSync, readFileSync, rmSync, writeFileSync} from "node:fs";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {TrackedDecisionStore} from "../server/tracked-decisions";
-import {cancelQueuedReply, mentionsSecurityGate, resolveTrackedDecision, suggestedTrackedReply, trackedAnswerText, trackedPullTarget, trackedRecipient, trackedCoverage, trackedDecisionViewSchema} from "../shared/tracked-decisions";
+import {cancelQueuedReply, mentionsSecurityGate, resolveTrackedDecision, trackedReplyExample, trackedAnswerText, trackedPullTarget, trackedRecipient, trackedCoverage, trackedDecisionViewSchema} from "../shared/tracked-decisions";
 import type {SessionRow} from "../shared/contract";
 import type {PullRequestView} from "../shared/prs";
 import {readReplyPhoto} from "../shared/reply-history";
@@ -232,11 +232,11 @@ test("merge follow-up choices carry only their own answers, including after the 
   expect(item.matchedPull).toBeNull();
   expect(trackedPullTarget(item)).toEqual(target);
   expect(mentionsSecurityGate(item)).toBe(true);
-  expect(suggestedTrackedReply(item)).toBe("");
-  expect(suggestedTrackedReply({...item,questions:[]})).toBe("");
+  expect(trackedReplyExample(item)).toBe("");
+  expect(trackedReplyExample({...item,questions:[]})).toBe("");
   expect(trackedAnswerText(item, ["A · 첫 실행"], "")).toBe("Q1 · 글 작성 시점 — A · 첫 실행");
   expect(trackedAnswerText(item, [""], "")).toBe("");
-  expect(suggestedTrackedReply({...item,kind:"check",questions:[],howToAnswer:"Reviewed"})).toBe("Reviewed");
+  expect(trackedReplyExample({...item,kind:"check",questions:[],howToAnswer:"Reviewed"})).toBe("Reviewed");
   for (const ask of [[url+" "+url+"/extra "+url+"0"],["https://github.com.evil.invalid/demo/repo/pull/42"],
     [url+"?sensitive=value"],["https://github.com/demo/../pull/42"]]) {
     expect(trackedPullTarget({...item,ask})).toBeNull();
