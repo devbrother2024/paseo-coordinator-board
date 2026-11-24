@@ -30,9 +30,9 @@ export function ReceiptText({ receipt, theme }: { receipt: DecisionReceipt; them
   </Text>;
 }
 
-export function DecisionActions({ card, theme, hostLabel, coordinator, coordinatorTitle, open, onSent, receipt, clarification, priorityLabel, embedded = false }: {
+export function DecisionActions({ card, theme, hostLabel, coordinator, coordinatorTitle, open, onSent, receipt, clarification, pendingRequests, priorityLabel, embedded = false }: {
   card: Card; theme: Theme; hostLabel?: string; coordinator: string | null; coordinatorTitle?: string; open?: (id: string) => void;
-  onSent: (result: DecisionReceipt) => void; receipt?: DecisionReceipt; clarification?: ReactNode; priorityLabel?: string; embedded?: boolean;
+  onSent: (result: DecisionReceipt) => void; receipt?: DecisionReceipt; clarification?: ReactNode; pendingRequests?: ReactNode; priorityLabel?: string; embedded?: boolean;
 }) {
   const { t, language } = useBoardLanguage();
   const { session } = card;
@@ -132,9 +132,9 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
       <Text selectable style={{ color: c.foregroundMuted, fontSize: 12, flexShrink: 1 }}>{[marker, priorityLabel].filter(Boolean).join(" · ")}</Text>
       {open && <SessionChip theme={theme} label={t("담당 세션", "Assigned session")} accessibilityLabel={named(t("담당 세션 열기", "Open assigned session")).accessibilityLabel} onPress={() => open(session.id)} />}
     </View>
-    {formal || !decision ? formal && <Text style={{ color: c.foregroundMuted }}>
+    {formal || !decision ? formal && (pendingRequests ?? <Text style={{ color: c.foregroundMuted }}>
       {t("승인 요청은 담당 세션에서 확인해 주세요.", "Review the approval request in the assigned session.")}
-    </Text> : <>
+    </Text>) : <>
       {!coordination && <>
         {!proposed && !!decision.needsInput && decision.needsInput !== headline && <HistoryMarkdown theme={theme} source={decision.needsInput} />}
         {!!decision.options?.length && <View style={wrap}>{decision.options.map((option, index) =>

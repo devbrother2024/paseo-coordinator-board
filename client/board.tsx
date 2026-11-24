@@ -19,6 +19,7 @@ import { remoteScope, readRemoteHistorySession } from "./remote-sessions";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { DecisionActions, type DecisionReceipt } from "./decision-actions";
+import { PendingRequests } from "./pending-request-forms";
 import { Clarification } from "./clarification";
 import { clarificationKey, clarificationRecipient, sessionClarificationCard, trackedClarificationCard, type ClarificationCard } from "../shared/clarifications";
 import { SessionLinks } from "./session-links";
@@ -196,6 +197,12 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           clarification={!embedded && questionFor(sessionClarificationCard(card.session,card.note),card.session.title)}
           embedded={embedded} priorityLabel={priority} card={card} hostLabel={hostLabel} theme={theme} coordinator={snapshot!.coordinator} coordinatorTitle={snapshot!.sessions.find(s => s.id === snapshot!.coordinator)?.title}
           open={actions.onOpen} receipt={receipts.find(r => matches(r, card))}
+          pendingRequests={card.session.nativePending && hostId ? <PendingRequests key={JSON.stringify([hostId, card.session.id])} hostId={hostId}
+            sessionId={card.session.id} sessionTitle={card.session.title} version={card.session.permissionVersion} theme={theme} open={actions.onOpen} onRefresh={onRefresh}
+            onAnswered={result => {
+              if (rowKey) remember({ rowKey, actionKey: sessionRowKey(card), projectIds: [card.session.projectId], status: result.handled ? "already-closed" : "sent", recipientId: card.session.id,
+                title: card.session.title + " · " + result.title, detail: result.detail || undefined });
+            }} /> : undefined}
           onSent={result => {
             if (rowKey && result.action === "reply") remember({
               rowKey, actionKey: sessionRowKey(card), projectIds: [result.projectId], status: "sent", recipientId: result.recipientId,
