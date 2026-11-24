@@ -50,7 +50,7 @@ function steps(reach: CoordinatorReach, role: ReachRole, t: Translate) {
     case "project-missing":
     case "workspace-archived":
       list.push(reach.directory
-        ? t(`Paseo에서 이 폴더를 프로젝트로 다시 추가하세요. ${reach.directory} (명령줄에서는 paseo project create "<폴더>")`, `Add this folder to Paseo as a project again. ${reach.directory} (from a terminal, use paseo project create "<folder>")`)
+        ? t(`Paseo에서 이 폴더를 프로젝트로 다시 추가하세요. "${reach.directory}" (명령줄에서는 paseo project create "<폴더>")`, `Add this folder to Paseo as a project again. "${reach.directory}" (from a terminal, use paseo project create "<folder>")`)
         : t('Paseo에서 세션이 일하던 폴더를 프로젝트로 다시 추가하세요. (명령줄에서는 paseo project create "<폴더>")', 'Add the folder the session worked in to Paseo as a project again. (From a terminal, use paseo project create "<folder>")'),
         refresh);
       break;

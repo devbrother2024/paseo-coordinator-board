@@ -140,7 +140,7 @@ test("an existing session chosen as coordinator is checked the same way, and no 
 test("the operating folder's project is marked so settings can warn before it is removed", async () => {
   const f = await fixture();
   const projects = (await f.snapshot()).projects;
-  expect(projects.find((p: any) => p.id === "operate")).toMatchObject({ operating: true, selected: false });
+  expect(projects.find((p: any) => p.id === "operate")).toMatchObject({ operating: true, operatingActive: true, selected: false });
   expect(projects.find((p: any) => p.id === "studio").operating).toBeUndefined();
   const picked = await fixture({ managed: false });
   // A work project that merely hosts a chosen coordinator session is not the operating folder.
@@ -155,14 +155,15 @@ test.each(["ko", "en"] as const)("the %s operations project is identified and re
   }));
   f.state.projects.push(...siblings);
   const view = await f.snapshot();
-  expect(view.projects.filter((p: any) => p.operating).map((p: any) => p.id)).toEqual(["operate", ...siblings.map(p => p.projectId)]);
+  expect(view.projects.filter((p: any) => p.operating).map((p: any) => [p.id, p.operatingActive]))
+    .toEqual([["operate", true], ...siblings.map(p => [p.projectId, false])]);
   f.state.projects = f.state.projects.filter(p => p.projectId !== "operate");
   f.state.agents.delete("coordinator");
 
   const { coordinatorReach } = await f.snapshot();
   expect(coordinatorReach).toEqual({ state: "project-missing", directory: f.operatingFolder });
   const notice = reachNotice(coordinatorReach, (ko, en) => language === "ko" ? ko : en);
-  expect(notice?.steps[0]).toContain(f.operatingFolder);
+  expect(notice?.steps[0]).toContain(`"${f.operatingFolder}"`);
   expect(notice?.steps[0]).toContain(language === "ko" ? 'paseo project create "<폴더>"' : 'paseo project create "<folder>"');
 });
 
@@ -180,6 +181,8 @@ test("the operating folder is recognised through another spelling of its path", 
   // Folders that no longer exist are compared by their resolved names.
   expect(await sameFolder(join(root, "gone"), join(root, "gone", "."))).toBe(true);
   expect(await sameFolder(join(root, "gone"), join(root, "Gone"))).toBe(process.platform === "win32");
+  const missing = join(root, "코디네이터 운영 (삭제 금지)");
+  expect(await sameFolder(missing, missing.normalize("NFD"), async () => new Map())).toBe(process.platform === "darwin");
   expect(await sameFolder("", folder)).toBe(false);
 });
 
@@ -198,6 +201,7 @@ test("operating project warnings reuse selected identities without probing unrel
     { id: "selected-alias", path: join(tmpdir(), "fixture-selected-alias"), rootKey: "1:8" },
     { id: "unrelated", path: join(tmpdir(), "fixture-offline-volume") },
   ];
-  expect(await operatingProjects(catalog, [operatingFolder], scopes, undefined, folderReader)).toEqual(new Set(["operating", "selected-alias"]));
+  expect(await operatingProjects(catalog, [operatingFolder], scopes, undefined, folderReader, [operatingFolder]))
+    .toEqual(new Map([["operating", true], ["selected-alias", true]]));
   expect(read).toEqual([operatingFolder]);
 });

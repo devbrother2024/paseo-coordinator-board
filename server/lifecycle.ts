@@ -127,7 +127,9 @@ export class CoordinatorLifecycle {
     // Keep the candidate ID across disconnects and plugin restarts. A retry can
     // adopt the exact same daemon session even if its creation receipt was lost.
     const saved = scope.pendingCoordinator;
-    const pending: Pending = saved?.previous === current && sameConfig(saved.config, config) ? saved : { id: randomUUID(), previous: current, config, language };
+    // Once a named folder exists, use it across devices with different board languages.
+    const pending: Pending = saved?.previous === current && sameConfig(saved.config, config) ? saved
+      : { id: randomUUID(), previous: current, config, language: prepared?.language ?? language };
     this.prefs.change(s => {
       if (!s.projects.length || s.coordinator !== current || s.pendingCoordinator?.id !== saved?.id) throw new Error(stale);
       s.pendingCoordinator = pending;

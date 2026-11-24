@@ -63,21 +63,33 @@ test.each([
   expect(f.prefs.read().createdCoordinator?.language).toBe(language);
 });
 
-test("replacing a legacy coordinator uses the new folder and respects disabled auto-pin", async () => {
+test.each([true, false])("replacing a legacy coordinator preserves auto-pin preference %s", async autoPin => {
   const f = setup();
   f.agents.set("old", { id: "old", workspaceId: "legacy-workspace", status: "idle" });
   f.prefs.change(scope => {
     scope.coordinator = "old";
     scope.createdCoordinator = { id: "old", workspaceId: "legacy-workspace", previous: null, config: start.config };
-    scope.autoPinCoordinatorWorkspace = false;
+    scope.autoPinCoordinatorWorkspace = autoPin;
   });
   expect(await f.lifecycle.ensure(f.sdk, { ...start, expectedCoordinator: "old", language: "en" })).toMatchObject({ sessionId: "old", reused: true });
   expect(f.opened).toEqual([]);
 
   await f.lifecycle.ensure(f.sdk, { ...start, expectedCoordinator: "old", replace: true, language: "en" });
   expect(f.opened).toEqual([join(f.directory, "Coordinator operations (do not delete)")]);
-  expect(f.pins.calls).toEqual([]);
+  expect(f.pins.calls).toEqual(autoPin ? [true] : []);
+  expect(f.prefs.read().autoPinCoordinatorWorkspace).toBe(autoPin);
   expect(f.agents.get("old")?.workspaceId).toBe("legacy-workspace");
+});
+
+test("a device language change does not create or pin a second operations workspace", async () => {
+  const f = setup();
+  const first = await f.lifecycle.ensure(f.sdk, { ...start, language: "en" });
+  const second = await f.lifecycle.ensure(f.sdk, { ...start, expectedCoordinator: first.sessionId, replace: true, language: "ko" });
+  const path = join(f.directory, "Coordinator operations (do not delete)");
+  expect(f.opened).toEqual([path, path]);
+  expect(second.workspaceId).toBe(first.workspaceId);
+  expect(f.prefs.read().createdCoordinator?.language).toBe("en");
+  expect(f.pins.calls).toEqual([true]);
 });
 
 test("신규 설치 두 창이 동시에 시작해도 운영 세션 한 개와 기존 발췌 판단을 유지한다", async () => {

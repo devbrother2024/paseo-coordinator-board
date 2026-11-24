@@ -334,10 +334,16 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             return <Button key={p.id} theme={theme} selected={p.selected} disabled={actions.changing}
               label={label} onPress={() => onProject(p.id, !p.selected)} />;
           })}
-          {snapshot.projects.filter(p => p.operating).map(p => <Text key={p.id} accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>
-            {t(`‘${p.title}’ 프로젝트는 코디네이터 운영 폴더입니다. Paseo에서 이 프로젝트를 제거하면 워크스페이스와 코디네이터 세션이 함께 보관되어, 코디네이터에게 보내는 요청과 답장이 전달되지 않습니다. Paseo 프로젝트 목록에 그대로 두세요.`,
-              `“${p.title}” is the coordinator's operating folder. Removing this project in Paseo archives its workspace and the coordinator session with it, so requests and replies stop reaching the coordinator. Keep it in your Paseo project list.`)}
-          </Text>)}
+          {snapshot.projects.filter(p => p.operating).map(p => {
+            const inactive = p.operatingActive === false;
+            return <Text key={p.id} accessibilityLiveRegion="polite" style={{ color: inactive ? c.foregroundMuted : c.statusWarning }}>
+              {inactive
+                ? t(`‘${p.title}’은 현재 쓰지 않는 운영 폴더입니다. 이 프로젝트를 제거해도 현재 코디네이터 연결에는 영향이 없습니다.`,
+                  `“${p.title}” is an unused operations folder. Removing it will not disconnect the current coordinator.`)
+                : t(`‘${p.title}’은 코디네이터 운영에 사용 중입니다. 제거하면 워크스페이스가 보관되어 요청과 답장이 전달되지 않습니다. Paseo 프로젝트 목록에 그대로 두세요.`,
+                  `“${p.title}” is in use for coordinator operations. Removing it archives the workspace and stops requests and replies. Keep it in your Paseo project list.`)}
+            </Text>;
+          })}
         </>}
       </View>}
       {settings && snapshot && configured && <SessionLinks projects={activeProjects} theme={theme} onChange={onRefresh} />}

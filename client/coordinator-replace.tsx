@@ -16,7 +16,7 @@ type Props = {
 
 // Replace the coordinator, optionally with a model picked right here: pick, choose a model, confirm.
 export function CoordinatorReplace({ theme, coordinator, data, loading, disabled = false, reload, onReplaced, onClose, extraAction, footer }: Props) {
-  const { t, language } = useBoardLanguage();
+  const { t, language, languageReady } = useBoardLanguage();
   const setup = useRpc(setupCoordinator);
   const [picking, setPicking] = useState(false);
   const [query, setQuery] = useState("");
@@ -35,13 +35,13 @@ export function CoordinatorReplace({ theme, coordinator, data, loading, disabled
   const choice = offeredPick(data, picked);
   const target = choice ?? usual;
   const mode = data && target ? replacementMode(data, target.provider) : null;
-  const blocked = disabled || busy || loading;
+  const blocked = disabled || busy || loading || !languageReady;
   const list = picking && data ? replacementChoices(data, query, t) : null;
   const rememberLabel = t("다음 교체에도 이 모델을 기본으로 사용", "Use this model as the default for later replacements");
 
   async function replace() {
     const plan = replacementSelection(choice, usual, remember);
-    if (!plan || !mode || pending.current) return;
+    if (!plan || !mode || blocked || pending.current) return;
     pending.current = true;
     setBusy(true); setError(""); setNotice("");
     try {

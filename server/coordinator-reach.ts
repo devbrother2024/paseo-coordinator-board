@@ -14,6 +14,7 @@ const defaultRoots = new ProjectRootReader();
 function matchFolders(left: string, right: string, leftKey?: string, rightKey?: string) {
   if (left === right) return true;
   if (leftKey && rightKey) return leftKey === rightKey;
+  if (process.platform === "darwin") return left.normalize("NFC") === right.normalize("NFC");
   return process.platform === "win32" && left.toLowerCase() === right.toLowerCase();
 }
 
@@ -49,16 +50,19 @@ export async function coordinatorReach(paseo: Sdk, scope: Scope, listed: Pick<Se
 
 // Removing this project in Paseo archives the workspace the board's coordinator lives in.
 export async function operatingProjects(projects: readonly { id: string; path: string; rootKey?: string }[], operatingFolders: readonly string[],
-  scope: Scope, listed: Pick<SessionRow, "id" | "projectId" | "sourceProjectId"> | undefined, roots: ProjectRootReader) {
+  scope: Scope, listed: Pick<SessionRow, "id" | "projectId" | "sourceProjectId"> | undefined, roots: ProjectRootReader,
+  inUseFolders: readonly string[]) {
   const folders = operatingFolders.map(folder => resolve(folder));
   const comparable = (path: string) => path.normalize("NFC").toLowerCase();
   const comparableFolders = new Set(folders.map(comparable));
-  const ids = new Set<string>();
-  if (listed && listed.id === scope.coordinator && scope.createdCoordinator?.id === listed.id) ids.add(listed.sourceProjectId ?? listed.projectId);
+  const inUse = new Set(inUseFolders.map(folder => resolve(folder)));
+  const listedProject = listed && listed.id === scope.coordinator ? listed.sourceProjectId ?? listed.projectId : undefined;
+  const ids = new Map<string, boolean>();
+  if (listedProject && scope.createdCoordinator?.id === listed?.id) ids.set(listedProject, true);
   const candidates = projects.flatMap(project => {
     if (!project.path) return [];
     const path = resolve(project.path);
-    if (folders.includes(path)) ids.add(project.id);
+    if (folders.includes(path) && !ids.has(project.id)) ids.set(project.id, project.id === listedProject || inUse.has(path));
     // Reuse selected roots. For unmanaged projects only comparable spellings need a disk lookup.
     if (ids.has(project.id) || (!project.rootKey && !comparableFolders.has(comparable(path)))) return [];
     return [{ ...project, path }];
@@ -67,7 +71,8 @@ export async function operatingProjects(projects: readonly { id: string; path: s
     const keys = await roots.folderKeys([...folders, ...candidates.filter(project => !project.rootKey).map(project => project.path)]);
     for (const project of candidates) {
       const key = project.rootKey ?? keys.get(project.path);
-      if (folders.some(folder => matchFolders(project.path, folder, key, keys.get(folder)))) ids.add(project.id);
+      const matching = folders.filter(folder => matchFolders(project.path, folder, key, keys.get(folder)));
+      if (matching.length) ids.set(project.id, project.id === listedProject || matching.some(folder => inUse.has(folder)));
     }
   }
   return ids;

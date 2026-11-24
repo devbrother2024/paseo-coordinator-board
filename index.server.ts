@@ -30,7 +30,7 @@ import { BoardFacts } from "./server/board-facts";
 import { ProjectRootReader } from "./server/project-root";
 import { recordDigestCompletion } from "./server/digest";
 import { coordinatorReach, operatingProjects } from "./server/coordinator-reach";
-import { operatingDirectories } from "./server/operating-folders";
+import { operatingDirectories, operatingDirectory } from "./server/operating-folders";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(hostVisibility);
@@ -133,8 +133,11 @@ export default function contribute(server: PluginServerContext) {
     const listedCoordinator = coordinatorRow?.id === latest.coordinator ? coordinatorRow : undefined;
     const projects = [...choices.values()];
     const reach = await coordinatorReach(paseo, latest, listedCoordinator, operatingRoot, projects, projectRoots);
-    const operating = await operatingProjects(projects, operatingFolders, latest, listedCoordinator, projectRoots);
-    const knownProjects = projects.map(p => ({ ...p, selected: selected.has(p.id), ...(operating.has(p.id) ? { operating: true } : {}) }));
+    const inUseFolders = [latest.createdCoordinator?.id === latest.coordinator ? latest.createdCoordinator : undefined, latest.pendingCoordinator]
+      .flatMap(record => record ? [operatingDirectory(operatingRoot, record.language)] : []);
+    const operating = await operatingProjects(projects, operatingFolders, latest, listedCoordinator, projectRoots, inUseFolders);
+    const knownProjects = projects.map(p => ({ ...p, selected: selected.has(p.id),
+      ...(operating.has(p.id) ? { operating: true, operatingActive: operating.get(p.id) } : {}) }));
     const missingProjects = latest.projects.filter(id => !selected.has(id)).map(id => ({
       id, title: id, path: "", selected: true, missing: true as const, temporary: false,
     }));
