@@ -1,8 +1,8 @@
 import { defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
 
-// Requests this board already answered, kept on the host so a redrawn card, a reloaded app or
-// another device does not answer the same request a second time.
+// Requests this board already answered, kept on the host that runs the board plugin so a redrawn
+// card, a reloaded app or another screen attached to that host does not answer one a second time.
 const sentRecord = z.object({ session: z.string().min(1).max(256), request: z.string().min(1).max(256), at: z.number() });
 export type SentRecord = z.infer<typeof sentRecord>;
 export const answeredRequests = defineSettings({

@@ -119,9 +119,10 @@ export function answerSummary(questions: Question[], draft: Draft) {
   return questions.flatMap(question => !answers[question.header] ? [] : [question.masked ? "••••" : answers[question.header]]).join(" · ");
 }
 
-export function dismissResponse(request: PendingRequest, questions: Question[], draft: Draft): PermissionResponse {
-  // A form made only of optional free answers is closed by answering it empty.
-  if (questions.every(question => question.allowEmpty && !question.options.length)) return answerResponse(request, questions, draft);
+export function dismissResponse(request: PendingRequest, questions: Question[]): PermissionResponse {
+  // A form made only of optional free answers is closed by answering it empty. Text the person
+  // was typing is not sent: closing means not answering.
+  if (questions.every(question => question.allowEmpty && !question.options.length)) return answerResponse(request, questions, emptyDraft(questions));
   return { behavior: "deny", message: dismissed };
 }
 

@@ -139,12 +139,15 @@ test("a masked answer is sent to the session and never kept on the board", () =>
 test("closing a question denies it, and a question that accepts an empty answer is answered empty", () => {
   const questions = parseQuestions(claudeInput)!;
   const pending = request({ kind: "question", input: claudeInput });
-  expect(dismissResponse(pending, questions, toggleOption(questions, emptyDraft(questions), 0, 0)))
-    .toEqual({ behavior: "deny", message: "Dismissed by user" });
-  const input = { questions: [{ header: "Note", question: "Anything to add?", options: [], allowEmpty: true }] };
+  expect(dismissResponse(pending, questions)).toEqual({ behavior: "deny", message: "Dismissed by user" });
+  const input = { questions: [{ header: "Note", question: "Anything to add?", options: [], allowEmpty: true }, { header: "More", question: "Anything else?", options: [], allowEmpty: true }] };
   const optional = parseQuestions(input)!;
-  expect(dismissResponse(request({ kind: "question", input }), optional, emptyDraft(optional)))
-    .toEqual({ behavior: "allow", updatedInput: { ...input, answers: { Note: "" } } });
+  expect(dismissResponse(request({ kind: "question", input }), optional))
+    .toEqual({ behavior: "allow", updatedInput: { ...input, answers: { Note: "", More: "" } } });
+  // Closing does not answer: text left in the input is never part of what is sent.
+  const typing = writeOther(optional, emptyDraft(optional), 0, "a half-written note");
+  expect(JSON.stringify(dismissResponse(request({ kind: "question", input }), optional))).not.toContain("half-written");
+  expect(answerResponse(request({ kind: "question", input }), optional, typing)).toMatchObject({ updatedInput: { answers: { Note: "a half-written note", More: "" } } });
 });
 
 test("a plan request shows its text, offers only rejecting and implementing, and each sends its own choice", () => {
@@ -367,7 +370,7 @@ test("only the client responder answers a waiting request, never the plugin serv
   expect(callers).toEqual([join("client", "pending-requests.ts")]);
 });
 
-test("a request another card, an earlier visit or another device answered is checked, not sent again", async () => {
+test("a request another card, an earlier visit or another screen answered is checked, not sent again", async () => {
   const { state, port } = agent(["request-1", "request-2"]);
   state.clearOnSend = false;
   const recorded: string[] = [];

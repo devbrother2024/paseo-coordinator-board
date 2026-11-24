@@ -201,7 +201,7 @@ function QuestionForm({ request, questions, theme, sessionTitle, locked, busy, o
         onPress={() => onSend(answerResponse(request, questions, draft), answerSummary(questions, draft))} />
       <Button theme={theme} label={t("답하지 않고 닫기", "Dismiss without answering")}
         accessibilityLabel={sessionTitle + " · " + t("질문에 답하지 않고 닫기", "Dismiss the question without answering")} disabled={locked}
-        onPress={() => onSend(dismissResponse(request, questions, draft), t("답하지 않고 닫음", "Dismissed without answering"))} />
+        onPress={() => onSend(dismissResponse(request, questions), t("답하지 않고 닫음", "Dismissed without answering"))} />
     </View>
     {!ready && !locked && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{questions.length > 1
       ? t("모든 질문에 답하면 제출할 수 있습니다.", "Answer every question to submit.") : t("선택하거나 입력하면 제출할 수 있습니다.", "Choose or type an answer to submit.")}</Text>}
@@ -227,23 +227,31 @@ function PlanForm({ plan, actions, provider, theme, sessionTitle, locked, onSend
     {!asked && <View style={wrap}>
       {actions.map(action => {
         const text = actionLabel(action, provider, t);
-        const press = () => action.behavior === "allow" ? setConfirming(action.id) : onSend(actionResponse(action), text);
-        return action.danger
-          ? <Pressable key={action.id} accessibilityRole="button" accessibilityLabel={sessionTitle + " · " + text} accessibilityState={{ disabled: locked }} disabled={locked} onPress={press}
-              style={({ pressed }) => ({ borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, borderColor: c.statusDanger, backgroundColor: c.surface0, opacity: locked || pressed ? 0.6 : 1 })}>
-              <Text style={{ fontSize: 13, fontWeight: "500", color: c.statusDanger }}>{text}</Text>
-            </Pressable>
-          : <Button key={action.id} theme={theme} label={text} accessibilityLabel={sessionTitle + " · " + text} disabled={locked} onPress={press} />;
+        return <PlanButton key={action.id} theme={theme} label={text} accessibilityLabel={sessionTitle + " · " + text} disabled={locked}
+          tone={action.danger ? "danger" : "plain"} onPress={() => action.behavior === "allow" ? setConfirming(action.id) : onSend(actionResponse(action), text)} />;
       })}
     </View>}
     {asked && <View style={{ gap: 6 }}>
       <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{t("승인하면 세션이 이 계획대로 바로 구현을 시작합니다. 계획을 확인한 뒤 한 번 더 눌러 주세요.", "Approving makes the session start implementing this plan at once. Review the plan, then press once more.")}</Text>
       <View style={wrap}>
-        <Button theme={theme} selected={!locked} label={t("승인 확정 · ", "Confirm · ") + actionLabel(asked, provider, t)}
+        <PlanButton theme={theme} tone="confirm" label={t("승인 확정 · ", "Confirm · ") + actionLabel(asked, provider, t)}
           accessibilityLabel={sessionTitle + " · " + t("승인 확정 · ", "Confirm · ") + actionLabel(asked, provider, t)} disabled={locked}
           onPress={() => onSend(actionResponse(asked), actionLabel(asked, provider, t))} />
-        <Button theme={theme} label={t("취소", "Cancel")} accessibilityLabel={sessionTitle + " · " + t("계획 승인 취소", "Cancel plan approval")} disabled={locked} onPress={() => setConfirming(null)} />
+        <PlanButton theme={theme} tone="plain" label={t("취소", "Cancel")} accessibilityLabel={sessionTitle + " · " + t("계획 승인 취소", "Cancel plan approval")} disabled={locked} onPress={() => setConfirming(null)} />
       </View>
     </View>}
   </View>;
+}
+
+// A plan button says what it does, so its label is long. It wraps inside the card on a narrow screen.
+function PlanButton({ label, accessibilityLabel, tone, disabled, onPress, theme }: {
+  label: string; accessibilityLabel: string; tone: "plain" | "danger" | "confirm"; disabled: boolean; onPress: () => void; theme: Theme;
+}) {
+  const c = theme.colors;
+  const confirm = tone === "confirm" && !disabled;
+  return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
+    style={({ pressed }) => ({ maxWidth: "100%", flexShrink: 1, borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, opacity: disabled || pressed ? 0.6 : 1,
+      borderColor: tone === "danger" ? c.statusDanger : confirm ? c.accent : c.border, backgroundColor: confirm ? c.accent : c.surface0 })}>
+    <Text style={{ fontSize: 13, fontWeight: "500", color: tone === "danger" ? c.statusDanger : confirm ? c.accentForeground : c.foreground }}>{label}</Text>
+  </Pressable>;
 }
