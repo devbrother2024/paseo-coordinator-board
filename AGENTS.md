@@ -42,6 +42,16 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 - 새 최상위 폴더를 만들면 `package.json`의 `files`에 더한다. 빠지면 배포 ZIP에서 조용히 빠진다. 꼭 있어야 할 파일은 `scripts/package_release.py`의 `required`에도 더한다.
 - `client/vendor/`, `third-party/`의 외부 코드를 고치지 않는다. 바꿀 때는 `THIRD_PARTY_NOTICES.md`와 라이선스 파일을 함께 갱신한다.
 
+## Orca 플러그인 (`orca/`)
+
+- `orca/`는 Orca용 보드(MVP)다. Paseo판과 따로 설치되고 버전도 따로다(`orca/orca-plugin.json`). 루트 `package.json`의 `files`와 배포 ZIP에 넣지 않는다.
+- Orca는 플러그인 폴더 밖을 불러오지 못한다. `../shared` 같은 import를 쓰지 않고, 필요한 로직은 의존성 없이 `orca/src/*.ts`에 다시 쓴다. Orca 플러그인에는 `node_modules`가 없으니 zod도 쓰지 않는다.
+- 같은 테스트 경계를 지킨다. 판단은 `orca/src/model.ts`, `github.ts`, `labels.ts`에 두고, `panel.tsx`에는 화면만 둔다.
+- 출처 규칙의 Orca판: `terminal.sendText`는 사람이 친 글과 구분되지 않는다. 그래서 출처 없는 전송은 사용자가 쓰고 누른 글에만 쓴다. 보드가 만든 문장을 보내는 경로를 만들면 `[coordinator-board]` 머리말을 붙이고, 실패해도 다시 보내지 않는다.
+- 권한 대기 세션에는 보내지 않는다. 전송 직전에 `agents.list`로 상태를 다시 읽고 `replyGuard`(`orca/src/model.ts`)를 거친다.
+- 검증: `npx tsc -p orca`, `orca plugin test orca`, `orca plugin check orca`, `orca plugin validate orca`. CI에는 Orca CLI가 없어서 돌지 않으니 PR 전에 로컬에서 돌린다. 루트 `tsconfig.json`은 `orca`를 `exclude`한다.
+- 플러그인 승인(`--approve`)은 사람이 권한 목록을 보고 직접 한다. 에이전트가 대신 승인하지 않는다.
+
 ## Standards & References
 
 - 사용자에게 보이는 기능을 바꾸는 PR은 `README.md`(한국어)와 `OVERVIEW.md`(영어)를 같은 내용으로 함께 고치고, `package.json`과 `package-lock.json`의 버전을 함께 올린다. 최근 PR(#11~#18)이 모두 이 셋을 함께 바꿨다.
