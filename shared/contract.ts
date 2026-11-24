@@ -59,7 +59,8 @@ export const boardSnapshot = defineRpc({
   name: "board.snapshot",
   input: z.object({ fresh: z.boolean().optional() }),
   output: z.object({ sessions: z.array(session), notes: z.record(z.string(), noteSchema),
-    projects: z.array(z.object({ id: z.string(), title: z.string(), path: z.string(), selected: z.boolean() })),
+    // Projects that open the same folder on disk share `folder`.
+    projects: z.array(z.object({ id: z.string(), title: z.string(), path: z.string(), folder: z.string().optional(), selected: z.boolean() })),
     coordinator: sessionId.nullable(), clarifications:z.array(clarificationEntry).optional(), replyHistory: z.array(replyEntry).optional(), trackedDecisions: trackedDecisionViewSchema.optional(), pullRequests: pullRequestViewSchema.optional() }),
 });
 export const boardDecisionCount = defineRpc({

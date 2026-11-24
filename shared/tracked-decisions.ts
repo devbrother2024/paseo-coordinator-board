@@ -3,6 +3,7 @@ import { z } from "zod";
 import { workImages } from "./work-images";
 import { repositorySlug, type PullRequestView } from "./prs";
 import type { SessionRow } from "./contract";
+import { sameProject, type ProjectFolders } from "./project-folders";
 
 const id = z.string().min(1).max(256);
 const projectId = z.string().min(1).max(4096);
@@ -87,11 +88,16 @@ export function sourceCoordinatorRecipient(item:RoutedTrackedDecision, coordinat
   return owner && (owner === coordinator || sessions.some(s => s.id === owner)) ? owner : null;
 }
 
-export function trackedRecipient(item:RoutedTrackedDecision, coordinator:string|null, sessions:readonly SessionRow[]) {
+// The card's own session among this host's sessions. A session in another Paseo project counts when both projects
+// open the same folder. The reply route and the card's session chip use the same check.
+export function trackedSession(item:Pick<RoutedTrackedDecision,"sessionId"|"projectId">, sessions:readonly SessionRow[], folders:ProjectFolders = {}) {
+  return item.sessionId ? sessions.find(s => s.id === item.sessionId && sameProject(s.projectId, item.projectId, folders)) : undefined;
+}
+
+export function trackedRecipient(item:RoutedTrackedDecision, coordinator:string|null, sessions:readonly SessionRow[], folders:ProjectFolders = {}) {
   if (item.where === "manager" || item.where === "human") return sourceCoordinatorRecipient(item,coordinator,sessions);
   if (item.where !== "session" || item.sessionHost || !item.sessionId) return null;
-  const session = sessions.find(s => s.id === item.sessionId && s.projectId === item.projectId);
-  return session ? session.id : null;
+  return trackedSession(item,sessions,folders)?.id ?? null;
 }
 
 // A session card whose own session cannot take the reply may go to the same
@@ -110,7 +116,7 @@ function endedState(id:string, sessions:readonly SessionRow[]) {
   return status === "closed" || status === "error" ? status : undefined;
 }
 
-export function trackedReplyRoute(item:RoutedTrackedDecision, coordinator:string|null, sessions:readonly SessionRow[]):TrackedReplyRoute {
+export function trackedReplyRoute(item:RoutedTrackedDecision, coordinator:string|null, sessions:readonly SessionRow[], folders:ProjectFolders = {}):TrackedReplyRoute {
   if (item.where === "manager" || item.where === "human") {
     const owner = sourceCoordinatorRecipient(item,coordinator,sessions);
     if (!owner) return {targetId:null, recipientId:null, fallbackId:null, blocked:item.sourceCoordinatorId === undefined ? "no-coordinator" : "owner-unverified"};
@@ -123,7 +129,7 @@ export function trackedReplyRoute(item:RoutedTrackedDecision, coordinator:string
   const blocked = (reason:TrackedReplyBlock, targetId:string|null = null):TrackedReplyRoute => ({targetId, recipientId:null, fallbackId, blocked:reason});
   if (!item.sessionId) return blocked("no-session");
   if (item.sessionHost) return blocked("other-host");
-  const session = sessions.find(s => s.id === item.sessionId && s.projectId === item.projectId);
+  const session = trackedSession(item,sessions,folders);
   if (!session) return blocked(sessions.some(s => s.id === item.sessionId) ? "other-project" : "missing");
   const ended = endedState(session.id,sessions);
   return ended ? blocked(ended,session.id) : {targetId:session.id, recipientId:session.id, fallbackId};

@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { boardDecisionCount, boardScope, boardSnapshot, reportingKey, saveNote, setReporting } from "./shared/contract";
 import { canReceiveBoardInput, discoverSessions } from "./server/discovery";
+import { projectFolders } from "./server/project-folders";
 import { attachReportTool } from "./server/reporting";
 import { ConversationReader, excerpt } from "./server/conversation";
 import { isManagedCoordinator, setCoordinator, PreferenceStore } from "./server/preferences";
@@ -129,9 +130,10 @@ export default function contribute(server: PluginServerContext) {
     catalog: Awaited<ReturnType<PluginHandlerContext["paseo"]["projects"]["list"]>>,
     rows: Awaited<ReturnType<typeof discoverSessions>>) {
     const scope = prefs.read();
-    const choices = new Map(catalog.projects.map(p => {
+    const folders = projectFolders(catalog.projects);
+    const choices = new Map<string, { id: string; title: string; path: string; folder?: string; selected: boolean }>(catalog.projects.map(p => {
       const id = p.projectId;
-      return [id, { id, title: p.projectCustomName || p.projectDisplayName, path: p.projectRootPath, selected: scope.projects.includes(id) }];
+      return [id, { id, title: p.projectCustomName || p.projectDisplayName, path: p.projectRootPath, folder: folders[id], selected: scope.projects.includes(id) }];
     }));
     for (const row of rows) {
       if (!choices.has(row.projectId)) choices.set(row.projectId, { id: row.projectId, title: row.projectTitle, path: "", selected: scope.projects.includes(row.projectId) });
@@ -214,6 +216,10 @@ export default function contribute(server: PluginServerContext) {
   const removeMergePermission = server.addHook("agent.permission.after",onRecipientAvailable);
   const resumeReplies = tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, async (item,targetId,{paseo},route) => {
     let rows = await discoverSessions(paseo);
+    // Only a card's own local session may sit in another project on the same folder.
+    // Without the project list, that session counts only in the card's own project.
+    const folders = item.where === "session" && item.sessionId && !item.sessionHost
+      ? await paseo.projects.list().then(({projects}) => projectFolders(projects), () => ({})) : {};
     const fallback = route === "coordinator";
     const owned = fallback ? item.sourceCoordinatorId !== undefined : usesSourceCoordinator(item);
     const mismatch = (): TrackedReplyReason | null => {
@@ -221,8 +227,8 @@ export default function contribute(server: PluginServerContext) {
       const managed = managedSessions(rows,scope);
       if (!scope.projects.length || (item.projectId && !scope.projects.includes(item.projectId))) return "recipient-changed";
       // A redirected reply goes out only while the card's own session still cannot take it.
-      if (fallback && trackedReplyRoute(item,scope.coordinator,managed).recipientId) return "recipient-changed";
-      const expected = fallback ? trackedFallbackRecipient(item,scope.coordinator,managed) : trackedRecipient(item,scope.coordinator,managed);
+      if (fallback && trackedReplyRoute(item,scope.coordinator,managed,folders).recipientId) return "recipient-changed";
+      const expected = fallback ? trackedFallbackRecipient(item,scope.coordinator,managed) : trackedRecipient(item,scope.coordinator,managed,folders);
       if (expected !== targetId) return owned ? "owner-changed" : expected ? "recipient-changed" : "recipient-missing";
       return !owned || managed.some(row => row.id === targetId) ||
         (isManagedCoordinator(scope,targetId) && targetId === scope.coordinator && rows.some(row => row.id === targetId)) ? null : "recipient-missing";

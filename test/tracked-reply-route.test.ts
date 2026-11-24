@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import contribute from "../index.server";
@@ -8,8 +8,11 @@ import {
   nextFailureStreak, recommendedChoices, recommendedTrackedReply, trackedBasisRecipient, trackedDraftLayout, trackedReplyBasis, trackedRetryFingerprint,
 } from "../client/tracked-reply-draft";
 import { boardSnapshot, boardScope } from "../shared/contract";
+import { projectFolderMap } from "../shared/project-folders";
 import { linkSession } from "../shared/session-links";
-import { resolveTrackedDecision, trackedAnswerText, trackedDecisionSchema, trackedReplyExample, trackedReplyRoute } from "../shared/tracked-decisions";
+import {
+  resolveTrackedDecision, trackedAnswerText, trackedDecisionSchema, trackedReplyExample, trackedReplyRoute, trackedSession,
+} from "../shared/tracked-decisions";
 
 const scratch: string[] = [];
 afterEach(() => { for (const path of scratch.splice(0)) rmSync(path, {recursive: true, force: true}); });
@@ -18,7 +21,8 @@ type Agent = {project: string; status: string};
 const card = (id: string, extra: Record<string, unknown>) => ({id, title: "Card " + id, kind: "answer", ...extra});
 
 // Two selected checkouts of one repository: the ledger names "studio", one live session sits in "studio-copy".
-async function fixture(items: Record<string, unknown>[], owner = "operator") {
+// `roots` gives the projects folders on disk. Without them, each project is only itself.
+async function fixture(items: Record<string, unknown>[], owner = "operator", roots: Record<string, string> = {}) {
   const root = mkdtempSync(join(tmpdir(), "reply-route-")); scratch.push(root);
   const data = join(root, "plugin-data", "coordinator-board"), ledger = join(root, "ledger");
   mkdirSync(data, {recursive: true}); mkdirSync(ledger);
@@ -46,7 +50,7 @@ async function fixture(items: Record<string, unknown>[], owner = "operator") {
   const page = (entries: unknown[]) => ({entries, pageInfo: {hasMore: false, nextCursor: null}});
   const sdk = {
     workspaces: {list: async () => page([])},
-    projects: {list: async () => ({projects: ["studio", "studio-copy"].map(projectId => ({projectId, projectDisplayName: projectId, projectRootPath: ""}))})},
+    projects: {list: async () => ({projects: ["studio", "studio-copy"].map(projectId => ({projectId, projectDisplayName: projectId, projectRootPath: roots[projectId] ?? ""}))})},
     agents: {
       list: async () => page([...agents].filter(([id]) => !hidden.has(id)).map(([id, agent]) => ({agent: actor(id), project: {projectKey: agent.project}}))),
       ref: (id: string) => ({
@@ -70,7 +74,7 @@ async function fixture(items: Record<string, unknown>[], owner = "operator") {
   const board = () => rpc(boardSnapshot, {fresh: true});
   const find = async (id: string) => {
     const snapshot = await board(), item = snapshot.trackedDecisions.items.find(i => i.id === id);
-    return {snapshot, item, route: item && trackedReplyRoute(item, snapshot.coordinator, snapshot.sessions)};
+    return {snapshot, item, route: item && trackedReplyRoute(item, snapshot.coordinator, snapshot.sessions, projectFolderMap(snapshot.projects))};
   };
   const reply = (item, extra: Record<string, unknown> = {}) => rpc(resolveTrackedDecision, {
     id: item.id, source: item.source, projectId: item.projectId, fingerprint: item.fingerprint, answer: "Delete it", ...extra,
@@ -163,6 +167,40 @@ test("a session in another project explains the session link and still offers th
   expect(linked.route).toEqual({targetId: "elsewhere", recipientId: "elsewhere", fallbackId: "operator"});
   expect(await f.reply(linked.item, {recipientId: "elsewhere"})).toEqual({status: "sent"});
   expect(f.sent.map(m => m.id)).toEqual(["elsewhere"]);
+});
+
+test("a work session in a project on the same folder gets the chip and the reply; another folder gets neither", async () => {
+  const disk = mkdtempSync(join(tmpdir(), "reply-folders-")); scratch.push(disk);
+  const checkout = join(disk, "Work", "app"), named = join(disk, "other", "app"), alias = join(disk, "alias");
+  mkdirSync(checkout, {recursive: true}); mkdirSync(named, {recursive: true}); symlinkSync(checkout, alias, "junction");
+  const cased = join(disk, "work", "app"), insensitive = existsSync(cased);
+  const open = async (copyRoot: string, status = "idle") => {
+    const f = await fixture([card("palette", {where: "session", agentId: "elsewhere"})], "operator", {studio: checkout, "studio-copy": copyRoot});
+    f.agents.set("elsewhere", {project: "studio-copy", status});
+    const found = await f.find("palette");
+    // The card's session chip and its send button read the same check.
+    const chip = trackedSession(found.item!, found.snapshot.sessions, projectFolderMap(found.snapshot.projects))?.id ?? null;
+    return {f, ...found, chip};
+  };
+  const linked = await open(alias);
+  expect(linked.chip).toBe("elsewhere");
+  expect(linked.route).toEqual({targetId: "elsewhere", recipientId: "elsewhere", fallbackId: "operator"});
+  expect(await linked.f.reply(linked.item, {recipientId: "operator", route: "coordinator"})).toEqual({status: "changed", reason: "recipient-changed"});
+  expect(await linked.f.reply(linked.item, {recipientId: "elsewhere"})).toEqual({status: "sent"});
+  expect(linked.f.sent.map(m => m.id)).toEqual(["elsewhere"]);
+  // Two spellings of one path are one folder only where the disk ignores letter case.
+  const spelled = await open(cased);
+  expect(spelled.chip).toBe(insensitive ? "elsewhere" : null);
+  expect(spelled.route?.recipientId ?? null).toBe(insensitive ? "elsewhere" : null);
+  const other = await open(named);
+  expect(other.chip).toBeNull();
+  expect(other.route).toEqual({targetId: null, recipientId: null, fallbackId: "operator", blocked: "other-project"});
+  expect(await other.f.reply(other.item, {recipientId: "elsewhere"})).toEqual({status: "changed", reason: "recipient-missing"});
+  expect(other.f.sent).toBeEmpty();
+  const ended = await open(alias, "closed");
+  expect(ended.route).toEqual({targetId: "elsewhere", recipientId: null, fallbackId: "operator", blocked: "closed"});
+  expect(await ended.f.reply(ended.item, {recipientId: "elsewhere"})).toEqual({status: "changed", reason: "recipient-closed"});
+  expect(ended.f.sent).toBeEmpty();
 });
 
 test("a closed coordinator never redirects a coordinator card", async () => {

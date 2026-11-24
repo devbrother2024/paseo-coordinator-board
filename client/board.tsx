@@ -1,10 +1,11 @@
 import type { BoardReadiness } from "../shared/readiness";
-import { matchesProject, historySessionLinks, type HistoryLinks } from "./history-sessions";
+import { historySessionLinks, type HistoryLinks } from "./history-sessions";
 import { ReplyHistory } from "./reply-history";
 import { trackedSessionTargets } from "./tracked-session-targets";
 import type { TrackedSessionLinks } from "./tracked-session-chips";
 import { TrackedDecisionCard } from "./tracked-decisions";
-import { mentionsSecurityGate, trackedCoverage, trackedReplyRoute, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
+import { mentionsSecurityGate, trackedCoverage, trackedReplyRoute, trackedSession, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
+import { projectFolderMap } from "../shared/project-folders";
 import { MergeFeedback, PullRequestCard, PullRequestSettings, type MergeNotice, type WorkSessionLink } from "./pull-requests";
 import { pullRowKey, recordActionKey, sessionRowKey, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
 import { rankDecisionRows, priorityLabel } from "./decision-priority";
@@ -49,6 +50,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     return [...snapshot?.trackedDecisions?.items ?? []].sort((a,b) => priority(a.urgency) - priority(b.urgency) ||
       (a.where === "human" ? 0 : 1) - (b.where === "human" ? 0 : 1) || (a.since ?? "~").localeCompare(b.since ?? "~"));
   }, [snapshot?.trackedDecisions]);
+  const folders = useMemo(() => projectFolderMap(snapshot?.projects ?? []), [snapshot?.projects]);
   const [inlineReceipts, setInlineReceipts] = useState<InlineReceipt[]>([]);
   const completed = new Set(inlineReceipts.map(receipt => receipt.actionKey));
   const names = new Map(snapshot?.projects.map(project => [project.id, project.title]));
@@ -181,7 +183,8 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       const peer = peers.find(g => g.host.serverId === item.sessionHost && g.rows.some(s => s.sessionId === id && s.projectId === item.projectId));
       return peer && onOpenHostSession ? () => onOpenHostSession(peer.host.serverId,id) : undefined;
     }
-    const local = snapshot?.sessions.find(s => s.id === id && (matchesProject(s.projectId,item.projectId,historyRepos) || s.id === item.matchedSessionId));
+    const local = item.matchedSessionId ? snapshot?.sessions.find(s => s.id === item.matchedSessionId)
+      : snapshot && trackedSession(item, snapshot.sessions, folders);
     return local && actions.onOpen ? () => actions.onOpen!(local.id) : undefined;
   }
   function recordLinks(item: TrackedDecision, showSource = true): TrackedSessionLinks {
@@ -228,7 +231,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           const pr = item.kind === "merge" && item.mergeTarget && pullRequests?.items.find(pr =>
             pr.repo === item.mergeTarget?.repo && pr.number === item.mergeTarget.number &&
             (!item.projectId || pr.projectIds.includes(item.projectId)) && (pr.reason !== "ready" || item.matchedPull));
-          const route = native && !item.questions.length ? undefined : trackedReplyRoute(item,snapshot!.coordinator,snapshot!.sessions);
+          const route = native && !item.questions.length ? undefined : trackedReplyRoute(item,snapshot!.coordinator,snapshot!.sessions,folders);
           return <TrackedDecisionCard links={recordLinks(item, !native)} key={item.key} item={item} theme={theme} priorityLabel={priority}
             renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined)}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
