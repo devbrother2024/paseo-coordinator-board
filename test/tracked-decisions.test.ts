@@ -296,7 +296,7 @@ test("tracked photo-only replies keep recipient-scoped previews and recover the 
   const calls=[];
   const target={ready:true,stillCurrent:()=>true,
     send:async(body,messageId,images)=>{calls.push({body,messageId,images});throw Error("Uncertain delivery");},
-    accepted:async(body,messageId)=>calls.some(call=>call.body===body && call.messageId===messageId),
+    accepted:async(messageId,matches)=>calls.some(call=>matches(call.body) && call.messageId===messageId),
   };
   const attempt=(request=input)=>f.service.deliver(request,()=>f.selected,async()=>target);
   expect((await attempt()).status).toBe("unconfirmed");
@@ -327,7 +327,7 @@ test("a pending receipt written by an older board is acknowledged using the orig
   }]}));
   let sends=0;
   const target={ready:true,stillCurrent:()=>true,send:async()=>{sends++;},
-    accepted:async(body,id)=>body===input.answer && id===messageId};
+    accepted:async(id,matches)=>matches(input.answer) && id===messageId};
   expect((await f.service.deliver(input,()=>f.selected,async()=>target)).status).toBe("sent");
   expect(sends).toBe(0);
   expect(f.read().history?.[0]).toMatchObject({status:"sent",answer:input.answer});

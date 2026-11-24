@@ -1,14 +1,28 @@
 import { isLongReply } from "./decision-reply-state";
-import type { TrackedDecision } from "../shared/tracked-decisions";
+import type { TrackedDecision, TrackedReplyRoute } from "../shared/tracked-decisions";
 
 export const optionId = (option: { key: string; text: string }) => JSON.stringify([option.key, option.text]);
 
-// A reply answers these. Evidence, priority and history edits keep a draft sendable as written.
+// Evidence, risks, urgency, the example answer, history and labels may change under a draft. The ledger owner
+// has its own confirmation, and the rest is bookkeeping.
+const unaffected = new Set(["why", "risk", "urgency", "howToAnswer", "qa", "replyHistory", "since", "projectTitle", "owner", "answerLead",
+  "dueAt", "blocksWork", "sourceCoordinatorId", "key", "fingerprint", "queuedReply", "matchedPull"]);
+
+// Any other edit changes what the reply answers, so the person looks again before sending it.
 export function trackedReplyBasis(item: TrackedDecision, recipientId: string | null) {
-  const subject = item.questions.length
-    ? item.questions.map(question => [question.id ?? null, question.text, question.multi, question.options.map(optionId)])
-    : [item.title, item.ask];
-  return JSON.stringify([item.kind, item.mergeTarget ?? null, subject, item.where ?? null, item.sessionId, item.sessionHost ?? null, recipientId]);
+  return JSON.stringify([Object.entries(item).filter(([field]) => !unaffected.has(field)), recipientId]);
+}
+
+// The session or coordinator that would take the reply now. A ledger owner is confirmed on its own.
+export function trackedBasisRecipient(item: Pick<TrackedDecision, "sourceCoordinatorId">, route: TrackedReplyRoute | undefined) {
+  return item.sourceCoordinatorId !== undefined ? null : route?.recipientId ?? route?.fallbackId ?? null;
+}
+
+// Retrying an unconfirmed reply checks that reply under the revision it was sent for, so it is never sent twice.
+export function trackedRetryFingerprint(previous: { status: string; requested?: string; answer?: string; recipientId?: string } | null,
+  fingerprint: string, answer: string, recipientId: string | null) {
+  const same = (previous?.answer ?? "") === answer.trim() && (previous?.recipientId ?? null) === recipientId;
+  return previous?.status === "unconfirmed" && previous.requested && same ? previous.requested : fingerprint;
 }
 
 // Merge cards use the PR action, and long explanations are not answers to send as they are.
@@ -16,6 +30,19 @@ export function recommendedTrackedReply(item: TrackedDecision) {
   if (item.kind === "merge" || item.questions.length || item.matchedSessionId) return "";
   const line = item.recommend[0]?.trim() ?? "";
   return isLongReply(line) ? "" : line;
+}
+
+// Everything a card sends stays on screen. A reply written before the card gained questions keeps its editor,
+// and a photo of a question that no longer exists has to be removed before sending.
+export function trackedDraftLayout<Photo extends { questionIndex?: number }>(
+  item: Pick<TrackedDecision, "questions" | "matchedSessionId">, freeReply: string, photos: readonly Photo[],
+) {
+  const questions = item.questions.length;
+  return {
+    freeEditor: !questions && !item.matchedSessionId,
+    carried: questions > 0 && (!!freeReply.trim() || photos.some(photo => photo.questionIndex === undefined)),
+    orphaned: photos.filter(photo => photo.questionIndex !== undefined && photo.questionIndex >= questions),
+  };
 }
 
 export type FailureStreak = { key: string; count: number } | null;

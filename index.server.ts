@@ -1,5 +1,5 @@
 import type { ReplyEntry } from "./shared/reply-history";
-import { trackedFallbackRecipient, trackedRecipient, usesSourceCoordinator, type TrackedReplyReason } from "./shared/tracked-decisions";
+import { trackedFallbackRecipient, trackedRecipient, trackedReplyRoute, usesSourceCoordinator, type TrackedReplyReason } from "./shared/tracked-decisions";
 import { boardReadiness } from "./shared/readiness";
 import { SnapshotReads } from "./server/snapshot-reads";
 import { readProjectDecisionSources } from "./server/project-decision-sources";
@@ -220,6 +220,8 @@ export default function contribute(server: PluginServerContext) {
       const scope = prefs.read();
       const managed = managedSessions(rows,scope);
       if (!scope.projects.length || (item.projectId && !scope.projects.includes(item.projectId))) return "recipient-changed";
+      // A redirected reply goes out only while the card's own session still cannot take it.
+      if (fallback && trackedReplyRoute(item,scope.coordinator,managed).recipientId) return "recipient-changed";
       const expected = fallback ? trackedFallbackRecipient(item,scope.coordinator,managed) : trackedRecipient(item,scope.coordinator,managed);
       if (expected !== targetId) return owned ? "owner-changed" : expected ? "recipient-changed" : "recipient-missing";
       return !owned || managed.some(row => row.id === targetId) ||
@@ -240,10 +242,10 @@ export default function contribute(server: PluginServerContext) {
       send:async (answer,messageId,images)=>{
         await handle.send(answer,{messageId,activeTurnBehavior:"steer",...(images?.length ? {images} : {})});
       },
-      accepted:async (answer,messageId)=>{
+      accepted:async (messageId,matches)=>{
         const page=await handle.timeline.refetch({direction:"tail",projection:"projected",limit:128});
         return !page.error && !page.gap && !page.staleCursor && page.entries.some(({item:m})=>m.type==="user_message" &&
-          (m.messageId===messageId || m.clientMessageId===messageId) && m.text===answer);
+          (m.messageId===messageId || m.clientMessageId===messageId) && matches(m.text));
       },
       ready:canReceiveBoardInput(agent,owned || fallback || targetId===prefs.read().coordinator),
     };

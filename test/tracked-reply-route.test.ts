@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import contribute from "../index.server";
 import { recordActionKey, recordRowKey } from "../client/decision-receipts";
-import { nextFailureStreak, recommendedChoices, recommendedTrackedReply, trackedReplyBasis } from "../client/tracked-reply-draft";
+import {
+  nextFailureStreak, recommendedChoices, recommendedTrackedReply, trackedBasisRecipient, trackedDraftLayout, trackedReplyBasis, trackedRetryFingerprint,
+} from "../client/tracked-reply-draft";
 import { boardSnapshot, boardScope } from "../shared/contract";
 import { linkSession } from "../shared/session-links";
-import { resolveTrackedDecision, trackedDecisionSchema, trackedReplyExample, trackedReplyRoute } from "../shared/tracked-decisions";
+import { resolveTrackedDecision, trackedAnswerText, trackedDecisionSchema, trackedReplyExample, trackedReplyRoute } from "../shared/tracked-decisions";
 
 const scratch: string[] = [];
 afterEach(() => { for (const path of scratch.splice(0)) rmSync(path, {recursive: true, force: true}); });
@@ -35,8 +37,11 @@ async function fixture(items: Record<string, unknown>[], owner = "operator") {
     ["worker", {project: "studio", status: "closed"}],
     ["elsewhere", {project: "studio-copy", status: "idle"}],
   ]);
-  const sent: {id: string; text: string}[] = [];
+  const sent: {id: string; text: string; messageId?: string}[] = [];
   const hidden = new Set<string>();
+  // `lost`: the SDK call delivers the message and then fails. `history`: the recipient's timeline shows what arrived.
+  const lost = new Set<string>();
+  const history = {visible: false};
   const actor = (id: string) => ({id, title: id, updatedAt: "1", status: agents.get(id)!.status, pendingPermissions: []});
   const page = (entries: unknown[]) => ({entries, pageInfo: {hasMore: false, nextCursor: null}});
   const sdk = {
@@ -46,8 +51,12 @@ async function fixture(items: Record<string, unknown>[], owner = "operator") {
       list: async () => page([...agents].filter(([id]) => !hidden.has(id)).map(([id, agent]) => ({agent: actor(id), project: {projectKey: agent.project}}))),
       ref: (id: string) => ({
         refresh: async () => agents.has(id) ? {agent: actor(id)} : null,
-        timeline: {refetch: async () => ({epoch: id, entries: []})},
-        send: async (text: string) => { sent.push({id, text}); },
+        timeline: {refetch: async () => ({epoch: id, entries: history.visible
+          ? sent.filter(m => m.id === id).map(m => ({item: {type: "user_message", messageId: m.messageId, text: m.text}})) : []})},
+        send: async (text: string, options?: {messageId?: string}) => {
+          sent.push({id, text, messageId: options?.messageId});
+          if (lost.has(id)) throw new Error("connection lost");
+        },
       }),
     },
   };
@@ -74,7 +83,7 @@ async function fixture(items: Record<string, unknown>[], owner = "operator") {
     writeFileSync(scopePath, JSON.stringify({...scope, createdCoordinator: {id, previous: null, workspaceId: "board-workspace", config: {provider: "claude"}}}));
     agents.set(id, {project: "board-workspace", status: "idle"});
   };
-  return {board, find, reply, link, context, agents, hidden, sent, ledgerItems, writeLedger, setOwner, createdBy};
+  return {board, find, reply, link, context, agents, hidden, sent, lost, history, ledgerItems, writeLedger, setOwner, createdBy};
 }
 
 const tenQuestions = Array.from({length: 10}, (_, index) => ({id: "Q" + (index + 1), text: "Question " + (index + 1),
@@ -98,7 +107,7 @@ test("an edit between listing and sending says revised, and the same draft sends
   const f = await fixture([card("icon", {where: "manager", recommend: ["Red"], why: ["First check"]})], "general");
   f.createdBy("general");
   const {item} = await f.find("icon");
-  Object.assign(f.ledgerItems.items[0], {why: ["First check", "Checked again"], recommend: ["Red", "It matches the logo"]});
+  Object.assign(f.ledgerItems.items[0], {why: ["First check", "Checked again"], urgency: "today"});
   f.writeLedger();
   expect(await f.reply(item, {recipientId: "general"})).toEqual({status: "changed", reason: "revised"});
   const {item: latest} = await f.find("icon");
@@ -192,12 +201,13 @@ test("a busy coordinator does not queue a redirected reply", async () => {
   expect(f.sent).toBeEmpty();
 });
 
-test("a display-only edit keeps the draft's basis; changed questions or recipients need a new look", async () => {
-  const f = await fixture([card("notes", {where: "manager", recommend: ["Delete"], questions: [
-    {id: "Q1", text: "Which branch?", options: [{key: "A", text: "Delete", recommended: true}, {key: "B", text: "Keep"}]},
+test("a display-only edit keeps the draft's basis; anything the reply answers needs a new look", async () => {
+  const f = await fixture([card("notes", {where: "manager", ask: ["Build 12 to staging?"], recommend: ["Delete"], questions: [
+    {id: "Q1", text: "Which branch?", options: [{key: "A", text: "Delete", recommended: true, does: "Removes it from staging"}, {key: "B", text: "Keep"}]},
   ]})]);
   const {item} = await f.find("notes");
-  Object.assign(f.ledgerItems.items[0], {why: ["Added later"], urgency: "now", recommend: ["Delete, it is merged"]});
+  Object.assign(f.ledgerItems.items[0], {why: ["Added later"], risk: ["Slow rebuild"], urgency: "now", howToAnswer: "A or B",
+    qa: [{q: "Is it merged?", a: "Yes"}], replyHistory: [{text: "Asked once", at: null}]});
   f.writeLedger();
   const {item: revised} = await f.find("notes");
   expect(revised.fingerprint).not.toBe(item.fingerprint);
@@ -205,9 +215,14 @@ test("a display-only edit keeps the draft's basis; changed questions or recipien
   expect(trackedReplyBasis(revised, null)).toBe(trackedReplyBasis(item, null));
   expect(recordRowKey(revised)).toBe(recordRowKey(item));
   expect(recordActionKey(revised)).not.toBe(recordActionKey(item));
+  const [delete_, keep] = item.questions[0].options;
+  const option = (change: Record<string, unknown>) => ({questions: [{...item.questions[0], options: [{...delete_, ...change}, keep]}]});
   for (const change of [
     {questions: [{id: "Q1", text: "Which branch now?", options: item.questions[0].options}]},
     {questions: [{id: "Q1", text: "Which branch?", options: [{key: "A", text: "Archive"}, {key: "B", text: "Keep"}]}]},
+    {title: "Release build"}, {ask: ["Build 13 to production?"]}, {recommend: ["Keep"]},
+    option({does: "Removes it from production"}), option({note: "Only after the release"}), option({pros: "Less noise"}), option({cons: "No rollback"}),
+    option({recommended: false}),
     {where: "session", sessionId: "worker"},
   ]) expect(trackedReplyBasis({...revised, ...change} as typeof item, null)).not.toBe(trackedReplyBasis(item, null));
   expect(trackedReplyBasis(item, "general")).not.toBe(trackedReplyBasis(item, "operator"));
@@ -239,6 +254,72 @@ test("a feed card without a ledger owner falls back to the live board coordinato
   expect(trackedReplyRoute(item, null, sessions)).toMatchObject({fallbackId: null});
   expect(trackedReplyRoute({...item, sourceCoordinatorId: null}, "general", sessions)).toMatchObject({fallbackId: null});
   expect(trackedReplyRoute({...item, where: "manager"}, null, sessions)).toEqual({targetId: null, recipientId: null, fallbackId: null, blocked: "no-coordinator"});
+  // A board coordinator replaced while the reply is being written asks for a new look; a ledger owner has its own check.
+  const replaced = [sessions[0], {id: "operator", projectId: "studio", status: "idle"}] as never[];
+  const basis = (coordinator: string, list: never[], card = item) => trackedReplyBasis(card, trackedBasisRecipient(card, trackedReplyRoute(card, coordinator, list)));
+  expect(trackedBasisRecipient(item, trackedReplyRoute(item, "general", sessions))).toBe("general");
+  expect(basis("operator", replaced)).not.toBe(basis("general", sessions));
+  const owned = {...item, sourceCoordinatorId: "general"};
+  expect(trackedBasisRecipient(owned, trackedReplyRoute(owned, "general", sessions))).toBeNull();
+});
+
+test("a redirected reply is refused once the card's own session can take it", async () => {
+  const f = await fixture([card("cleanup", {where: "session", agentId: "worker"}), card("palette", {where: "session", agentId: "elsewhere"})]);
+  const {item: cleanup, route} = await f.find("cleanup");
+  const {item: palette} = await f.find("palette");
+  expect(route).toMatchObject({recipientId: null, fallbackId: "operator", blocked: "closed"});
+  f.agents.set("worker", {project: "studio", status: "idle"});
+  expect(await f.reply(cleanup, {recipientId: "operator", route: "coordinator"})).toEqual({status: "changed", reason: "recipient-changed"});
+  await f.link({sessionId: "elsewhere", sourceProjectId: "studio-copy", targetProjectId: "studio", expectedTargetProjectId: null});
+  expect(await f.reply(palette, {recipientId: "operator", route: "coordinator"})).toEqual({status: "changed", reason: "recipient-changed"});
+  expect(f.sent).toBeEmpty();
+  expect(await f.reply(cleanup, {recipientId: "worker"})).toEqual({status: "sent"});
+  expect(f.sent.map(m => m.id)).toEqual(["worker"]);
+});
+
+test("an unconfirmed reply is only checked, never sent again, after its card changes", async () => {
+  const f = await fixture([card("icon", {where: "manager", why: ["First check"]}), card("logo", {where: "manager", why: ["First check"]})]);
+  const first = (await f.find("icon")).item, other = (await f.find("logo")).item;
+  f.lost.add("operator");
+  expect(await f.reply(first, {recipientId: "operator"})).toEqual({status: "unconfirmed"});
+  expect(await f.reply(other, {recipientId: "operator"})).toEqual({status: "unconfirmed"});
+  f.lost.clear();
+  for (const entry of f.ledgerItems.items) Object.assign(entry, {why: ["First check", "Checked again"]});
+  f.writeLedger();
+  const revised = (await f.find("icon")).item, otherRevised = (await f.find("logo")).item;
+  expect(revised.fingerprint).not.toBe(first.fingerprint);
+  // The card keeps the attempt, so its retry names the revision that was sent.
+  const retry = trackedRetryFingerprint({status: "unconfirmed", requested: first.fingerprint, answer: "Delete it", recipientId: "operator"},
+    revised.fingerprint, "Delete it", "operator");
+  expect(retry).toBe(first.fingerprint);
+  expect(trackedRetryFingerprint({status: "unconfirmed", requested: first.fingerprint, answer: "Delete it", recipientId: "operator"},
+    revised.fingerprint, "Keep it", "operator")).toBe(revised.fingerprint);
+  expect(trackedRetryFingerprint({status: "changed", requested: first.fingerprint}, revised.fingerprint, "", null)).toBe(revised.fingerprint);
+  expect(await f.reply({...revised, fingerprint: retry}, {recipientId: "operator"})).toEqual({status: "unconfirmed"});
+  // A reloaded board asks with the new revision, and still nothing goes out.
+  expect(await f.reply(revised, {recipientId: "operator"})).toEqual({status: "unconfirmed"});
+  expect(await f.reply(revised, {recipientId: "operator", answer: "Keep it"})).toEqual({status: "changed", reason: "conflict"});
+  f.history.visible = true;
+  expect(await f.reply({...revised, fingerprint: retry}, {recipientId: "operator"})).toEqual({status: "sent"});
+  expect(await f.reply({...revised, fingerprint: retry}, {recipientId: "operator"})).toEqual({status: "sent"});
+  expect(await f.reply(otherRevised, {recipientId: "operator"})).toEqual({status: "sent"});
+  expect(f.sent).toHaveLength(2);
+  expect((await f.board()).replyHistory.map(entry => entry.status)).toEqual(["sent", "sent"]);
+});
+
+test("a reply or photo kept from before the card had questions stays on screen until it is removed", () => {
+  const item = trackedDecisionSchema.parse({source: "production", projectId: "studio", id: "theme", title: "Theme", key: "t",
+    fingerprint: "c".repeat(64), matchedSessionId: null, matchedPull: null, kind: "answer", where: "manager"});
+  expect(trackedDraftLayout(item, "Use the dark theme", [])).toEqual({freeEditor: true, carried: false, orphaned: []});
+  const asked = {...item, questions: [{id: "Q1", text: "Which theme?", multi: false, options: []}]};
+  expect(trackedDraftLayout(asked, "Use the dark theme", [])).toEqual({freeEditor: false, carried: true, orphaned: []});
+  expect(trackedAnswerText(asked, ["Dark"], "Use the dark theme").split("\n")).toEqual([trackedAnswerText(asked, ["Dark"], ""), "Use the dark theme"]);
+  expect(trackedDraftLayout(asked, "", [{questionIndex: undefined}]).carried).toBe(true);
+  expect(trackedDraftLayout(asked, " ", [{questionIndex: 0}])).toEqual({freeEditor: false, carried: false, orphaned: []});
+  const stray = {questionIndex: 1};
+  expect(trackedDraftLayout(asked, "", [stray, {questionIndex: 0}]).orphaned).toEqual([stray]);
+  expect(trackedDraftLayout(item, "", [{questionIndex: 0}]).orphaned).toHaveLength(1);
+  expect(trackedDraftLayout({...item, matchedSessionId: "worker"}, "Use the dark theme", [])).toEqual({freeEditor: false, carried: false, orphaned: []});
 });
 
 test("the example answer is only a placeholder; the recommendation is inserted on request", () => {

@@ -7,7 +7,7 @@ import { sortTrackedByPriority } from "../shared/decision-priority";
 import type { SessionRow } from "../shared/contract";
 import { readReplyPhoto, replyOrigin, type ReplyEntry } from "../shared/reply-history";
 import { MAX_WORK_IMAGES, WORK_IMAGE_MIME_TYPES, type WorkImage } from "../shared/work-images";
-import { describePhotos, readLocalPhoto, removeLocalPhotos, saveLocalPhotos } from "./reply-photos";
+import { describePhotos, readLocalPhoto, removeLocalPhotos, saveLocalPhotos, type PhotoReference } from "./reply-photos";
 import { boardPhotoMessageId } from "../shared/session-photos";
 import { SessionPhotoStore } from "./session-photos";
 import { trackedReplyMessage, trackedReplyOrigin } from "./decision-message";
@@ -33,7 +33,7 @@ const receipts = z.object({version:z.literal(1),items:z.array(receipt)});
 type SourceStatus = TrackedDecisionView["status"];
 type InputRow = {key:string;fingerprint:string;item:RoutedTrackedDecision};
 type Receipt = z.output<typeof receipt>;
-type PendingDelivery = { ready:boolean; send:(answer:string,messageId:string,images?:WorkImage[])=>Promise<void>; accepted:(answer:string,messageId:string)=>Promise<boolean>; stillCurrent:()=>boolean };
+type PendingDelivery = { ready:boolean; send:(answer:string,messageId:string,images?:WorkImage[])=>Promise<void>; accepted:(messageId:string,matches:(text:string)=>boolean)=>Promise<boolean>; stillCurrent:()=>boolean };
 export type BlockedDelivery = { blocked:TrackedReplyReason };
 type Prepared = PendingDelivery | BlockedDelivery | null;
 type Attempt = z.output<typeof resolveTrackedDecision.output> & {queueId?:string};
@@ -48,6 +48,16 @@ function validQuestions(row:TrackedDecisionInput,input:TrackedResolution) {
 
 function receiptKey(key: string, fingerprint: string): string {
   return JSON.stringify([key, fingerprint]);
+}
+
+function sameReply(receipt:Receipt,input:TrackedResolution,photos:readonly PhotoReference[]) {
+  return receipt.recipientId===input.recipientId && (receipt.answer ?? "")===(input.answer ?? "") && JSON.stringify(receipt.photos ?? [])===JSON.stringify(photos);
+}
+
+// The recorded message is matched by its hash, which still holds after the card has changed.
+function sentAs(receipt:Receipt) {
+  return (text:string) => typeof text==="string" &&
+    (receipt.messageHash ? createHash("sha256").update(text).digest("hex")===receipt.messageHash : text===(receipt.answer ?? ""));
 }
 
 function readJson(path:string):{data:unknown;status:"ok"} | {status:"absent"|"invalid"|"unavailable"} {
@@ -279,7 +289,8 @@ export class TrackedDecisionStore {
     const {row,unavailable}=current();
     if (unavailable) return {status:"unavailable"};
     if (!row) return changed("removed");
-    if (row.fingerprint!==input.fingerprint || !validQuestions(row.item,input)) return changed("revised");
+    if (row.fingerprint!==input.fingerprint) return this.confirmEarlier(input,version,row.item,prepare);
+    if (!validQuestions(row.item,input)) return changed("revised");
     if ((!input.answer?.trim() && !input.images?.length) || !input.recipientId) return changed();
     const fallback=input.route==="coordinator";
     if (fallback && row.item.where!=="session") return changed("recipient-changed");
@@ -301,17 +312,19 @@ export class TrackedDecisionStore {
     if (queuedId && (!previous?.queue || previous.queue.stopped || previous.messageId!==queuedId)) return changed("queue-stopped");
     if (previous?.queue && previous.queue.owner!==row.item.sourceCoordinatorId) return changed("owner-changed");
     const photos=describePhotos(input.images);
+    // Nothing new goes out while a reply to another revision of this card is still unconfirmed.
+    const waiting=previous ? undefined : [...records].find(([,record])=>record.key===key && record.fingerprint!==input.fingerprint && record.pending && !record.queue);
+    if (waiting) return sameReply(waiting[1],input,photos) ? this.confirm(waiting[0],waiting[1],target) : changed("conflict");
     const text=trackedReplyMessage(row.item,input);
     const messageHash=createHash("sha256").update(text).digest("hex");
-    if (previous && (previous.recipientId!==input.recipientId || (previous.answer ?? "")!==(input.answer ?? "") ||
-        JSON.stringify(previous.photos ?? [])!==JSON.stringify(photos) || (previous.messageHash && previous.messageHash!==messageHash))) return changed("conflict");
+    if (previous && (!sameReply(previous,input,photos) || (previous.messageHash && previous.messageHash!==messageHash))) return changed("conflict");
     if (previous && !previous.pending && !previous.queue) return {status:"sent"};
     if (previous?.queue && !queuedId) return previous.queue.stopped ? changed("queue-stopped") : {status:"queued",queueId:previous.messageId};
     const messageId=previous?.messageId ?? (photos.length ? boardPhotoMessageId(randomUUID()) : randomUUID());
     const receipt:Receipt=previous ?? {origin:trackedReplyOrigin(row.item,input),messageHash,...(photos.length ? {photos} : {}),title:row.item.title,coordinator:fallback || row.item.where==="human" || row.item.where==="manager",key,fingerprint:input.fingerprint,at:new Date().toISOString(),answer:input.answer,recipientId:input.recipientId,messageId,pending:true};
     try {
       if (previous && !previous.queue) {
-        if (!(await target.accepted(previous.messageHash ? text : (input.answer ?? ""),messageId))) return {status:"unconfirmed"};
+        if (!(await target.accepted(messageId,sentAs(previous)))) return {status:"unconfirmed"};
       } else {
         if (!target.ready) {
           if (previous?.queue) return {status:"queued"};
@@ -339,6 +352,24 @@ export class TrackedDecisionStore {
     const latest=this.recorded();
     if (!latest || latest.get(version)?.messageId!==messageId) return {status:"unconfirmed"};
     latest.set(version,{...receipt,pending:false});
+    return {status:this.save(latest) ? "sent" : "unconfirmed"};
+  }
+
+  // Retrying an unconfirmed reply after its card changed only checks that reply. It is never sent again.
+  private async confirmEarlier(input:TrackedResolution, version:string, item:RoutedTrackedDecision, prepare:(row:RoutedTrackedDecision)=>Promise<Prepared>):Promise<Attempt> {
+    const earlier=this.recorded()?.get(version);
+    if (!input.recipientId || !earlier || earlier.queue || !sameReply(earlier,input,describePhotos(input.images))) return changed("revised");
+    return earlier.pending ? this.confirm(version,earlier,await prepare(item)) : {status:"sent"};
+  }
+
+  private async confirm(version:string, receipt:Receipt, target:Prepared):Promise<Attempt> {
+    const {messageId}=receipt;
+    if (!messageId || !target || "blocked" in target) return {status:"unconfirmed"};
+    try { if (!(await target.accepted(messageId,sentAs(receipt)))) return {status:"unconfirmed"}; }
+    catch { return {status:"unconfirmed"}; }
+    const latest=this.recorded(), recorded=latest?.get(version);
+    if (!latest || !recorded || recorded.messageId!==messageId) return {status:"unconfirmed"};
+    latest.set(version,{...recorded,pending:false});
     return {status:this.save(latest) ? "sent" : "unconfirmed"};
   }
 

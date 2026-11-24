@@ -13,14 +13,18 @@ import { HistoryMarkdown } from "./history-markdown";
 import { TrackedPullStatus } from "./pull-requests";
 import { useBoardLanguage } from "./language";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
-import { nextFailureStreak, optionId, recommendedChoices, recommendedTrackedReply, trackedReplyBasis, type FailureStreak } from "./tracked-reply-draft";
+import {
+  nextFailureStreak, optionId, recommendedChoices, recommendedTrackedReply, trackedBasisRecipient, trackedDraftLayout, trackedReplyBasis, trackedRetryFingerprint,
+  type FailureStreak,
+} from "./tracked-reply-draft";
 
 import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session-chips";
 
 type Resolution = ReturnType<typeof resolveTrackedDecision.output.parse>["status"];
 type ResolutionMode = "send" | "fallback" | "save" | "review";
 export type TrackedOutcome = { status: Resolution; reason?: TrackedReplyReason; mode?: ResolutionMode; answer?: string; recipientId?: string };
-type Outcome = TrackedOutcome & { fingerprint: string };
+// `fingerprint` is the revision on screen at the attempt; `requested` is the revision the board was asked to answer.
+type Outcome = TrackedOutcome & { fingerprint: string; requested?: string };
 type Props = {
   item: TrackedDecision; theme: Theme; priorityLabel?: string; route?: TrackedReplyRoute; links: TrackedSessionLinks; children?: ReactNode; pull?: ReactNode;
   renderClarification?: (onDraftChange:(active:boolean) => void) => ReactNode;
@@ -120,13 +124,14 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
   // A receipt belongs to the revision it answered, so a newer revision of the same card opens again.
   const isClosed = !!outcome && outcome.fingerprint === item.fingerprint && (result === "sent" || result === "closed" || result === "already-closed");
   const needsRefresh = result === "out-of-scope" || result === "unavailable" || (result === "changed" && !(outcome?.reason && recoverable.has(outcome.reason)));
-  const awaitingRevision = outcome?.reason === "revised" && outcome.fingerprint === item.fingerprint;
+  const awaitingRevision = outcome?.reason === "revised" && (outcome.requested ?? outcome.fingerprint) === item.fingerprint;
   const blocking = result === "changed" && (needsRefresh || awaitingRevision || (outcome?.reason !== "revised" && !!outcome?.reason && recoverable.has(outcome.reason)));
   const stuck = blocking && (streak?.count ?? 0) >= 2;
   const example = trackedReplyExample(item);
   const template = /<[^>]+>/.test(example);
   const recommendation = recommendedTrackedReply(item);
   const freeReply = editedReply ?? "";
+  const { freeEditor, carried, orphaned } = trackedDraftLayout(item, freeReply, attachments.photos);
   const questionText = item.questions.map((question, index) => typed[index] ?? question.options
     .filter(option => selected[index]?.includes(optionId(option)))
     .map(option => option.key + " · " + option.text).join(", "));
@@ -160,11 +165,11 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
   // A suggestion is visible before the person edits. Checking a record sends no reply.
   const hasDraft = hasQuestionDraft || hasPhotos || !!editedReply?.trim() || questionText.some(value => !!value.trim());
   const hasAnswerDraft = hasPhotos || !!editedReply?.trim() || questionText.some(value => !!value.trim()) || Object.values(skipped).some(Boolean);
-  const basis = trackedReplyBasis(item, coordinatorCard && !owned ? route?.targetId ?? null : null);
+  const basis = trackedReplyBasis(item, trackedBasisRecipient(item, route));
   const [confirmedBasis, setConfirmedBasis] = useState(basis);
   useEffect(() => { if (!hasAnswerDraft) setConfirmedBasis(basis); }, [hasAnswerDraft, basis]);
   const basisChanged = hasAnswerDraft && basis !== confirmedBasis;
-  const answerDisabled = busy || attachments.blocked || !hasAnswer || outstanding || tooLong || basisChanged || awaitingRevision;
+  const answerDisabled = busy || attachments.blocked || !hasAnswer || outstanding || tooLong || basisChanged || awaitingRevision || orphaned.length > 0;
   const sendReply = { disabled: !recipientId || !recordActions || answerDisabled || changedOwner, onPress: () => void acknowledge("send") };
   const inputFocus = useDecisionInteraction(!queue && !isClosed && !needsRefresh &&
     (hasDraft || editedReply !== null || Object.values(typed).some(value => value !== undefined) ||
@@ -213,21 +218,22 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
     if (send && (!to || (mode === "send" ? changedOwner : fallbackOwnerChanged))) return;
     const text = mode === "review" ? "" : answer;
     if (queue || pending.current || attachments.blocksSubmit() || isClosed || needsRefresh || outstanding ||
-      (mode !== "review" && (tooLong || basisChanged || awaitingRevision))) return;
+      (mode !== "review" && (tooLong || basisChanged || awaitingRevision || orphaned.length > 0))) return;
     if (mode === "review" ? hasDraft || attachments.latest.current.length > 0 || item.matchedSessionId : !text && !hasPhotos) return;
     pending.current = true; setBusy(true);
     const fingerprint = item.fingerprint;
+    const requested = send ? trackedRetryFingerprint(outcome, fingerprint, text, to) : fingerprint;
     let response: { status: Resolution; reason?: TrackedReplyReason };
     try {
       const images = attachments.latest.current.map(photo => photo.image);
-      response = await resolve({ source: item.source, projectId: item.projectId, id: item.id, fingerprint,
+      response = await resolve({ source: item.source, projectId: item.projectId, id: item.id, fingerprint: requested,
         ...(text ? { answer: text } : {}), ...(images.length ? { images } : {}),
         ...(item.questions.length ? { questionIndexes: replies.flatMap((reply, index) => reply ? [index] : []) } : {}),
         ...(send && to ? { recipientId: to } : {}), ...(mode === "fallback" ? { route: "coordinator" as const } : {}) });
       if (response.status === "sent" || response.status === "closed" || response.status === "already-closed") clearDraft();
     } catch { response = { status: send ? "unconfirmed" : "unavailable" }; }
     const attempt: TrackedOutcome = { ...response, mode, ...(text.trim() ? { answer: text.trim() } : {}), ...(to ? { recipientId: to } : {}) };
-    setOutcome({ ...attempt, fingerprint }); setConfirming(false);
+    setOutcome({ ...attempt, fingerprint, requested }); setConfirming(false);
     setStreak(previous => nextFailureStreak(previous, response, to));
     try { await onResolved(attempt); } catch { setRefreshFailed(true); }
     finally { pending.current = false; setBusy(false); }
@@ -240,7 +246,7 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
     const reason = outcome.reason;
     if (!reason) return t(messages.changed[0], messages.changed[1]);
     if (reason === "revised" && awaitingRevision) return t("카드 내용이 바뀌어 최신 내용을 불러오는 중입니다. 입력한 답은 그대로 둡니다.", "The card changed. Loading the latest version; your reply is kept.");
-    if (reason === "revised" && !basisChanged) return t("카드 설명이 갱신되었습니다. 질문·선택지·받는 곳은 그대로라 입력한 답을 그대로 다시 보낼 수 있습니다.", "The card details were updated. The question, options, and recipient are unchanged, so you can send your reply as written.");
+    if (reason === "revised" && !basisChanged) return t("카드의 근거·위험·긴급도 같은 설명만 바뀌었습니다. 입력한 답을 그대로 다시 보낼 수 있습니다.", "Only details such as the card's evidence, risks, or urgency changed. You can send your reply as written.");
     // The recipient line below already explains a session that cannot receive.
     if (recipientBlocks[reason] && recipientBlocks[reason] === blocked) return null;
     return t(reasons[reason][0], reasons[reason][1]);
@@ -330,12 +336,21 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
           accessibilityLabel={item.title + " · " + question.text + " · " + t("건너뛰기", "Skip")} selected={!!skipped[index]}
           disabled={busy || attachments.reading || attachments.errors.has(index) || attachments.photos.some(photo => photo.questionIndex === index)} onPress={() => skip(index)} /></View>
       </View>)}
-      {!item.questions.length && !item.matchedSessionId && <>
+      {(freeEditor || carried) && <>
+        {carried && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>
+          {t("질문이 생기기 전에 쓴 답입니다. 질문의 답과 함께 보내니 고치거나 빼 주세요.", "You wrote this before the card had questions. It is sent with your answers, so edit or remove it.")}
+        </Text>}
         <PhotoComposer theme={theme} disabled={busy} draft={attachments}>
-          <DecisionReplyInput {...inputFocus} send={sendReply} theme={theme} accessibilityLabel={item.title + " · " + t("답장 내용", "Reply text")}
+          <DecisionReplyInput {...inputFocus} send={sendReply} theme={theme}
+            accessibilityLabel={item.title + " · " + (carried ? t("질문이 생기기 전에 쓴 답", "Reply written before the questions") : t("답장 내용", "Reply text"))}
             value={freeReply} disabled={busy} maxLength={4000} onChangeText={value => { setEditedReply(value); setConfirming(false); }}
             placeholder={example ? t("예시 · ", "Example · ") + example : t("내 답을 입력하세요", "Write your reply")} />
         </PhotoComposer>
+        {carried && <View style={wrap}><Button theme={theme} disabled={busy} {...named(t("이 답 빼기", "Remove this reply"))}
+          onPress={() => {
+            setEditedReply(null); setConfirming(false);
+            for (const photo of attachments.latest.current) if (photo.questionIndex === undefined) attachments.remove(photo.id);
+          }} /></View>}
         {(!!recommendation || template) && !freeReply.trim() && <View style={wrap}>
           {!!recommendation && <Button theme={theme} disabled={busy} {...named(t("추천 답 넣기", "Use recommendation") + " · " + recommendation)}
             onPress={() => { setEditedReply(recommendation); setConfirming(false); }} />}
@@ -344,8 +359,16 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
         </View>}
       </>}
       {tooLong && <Text style={{ color: c.statusWarning }}>{t("답을 4,000자 이내로 줄여 주세요.", "Shorten the answer to 4,000 characters.")}</Text>}
+      {orphaned.length > 0 && <View style={{ gap: 5 }}>
+        <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>
+          {t("질문이 바뀌어 붙일 곳이 없어진 사진이 " + orphaned.length + "장 있습니다. 이 사진을 빼야 보낼 수 있습니다.",
+            orphaned.length + (orphaned.length === 1 ? " photo belongs" : " photos belong") + " to a question that no longer exists. Remove them to send.")}
+        </Text>
+        <View style={wrap}><Button theme={theme} disabled={busy} {...named(t("그 사진 빼기", "Remove those photos"))}
+          onPress={() => { for (const photo of orphaned) attachments.remove(photo.id); }} /></View>
+      </View>}
       {basisChanged && <View style={{ gap: 5 }}>
-        <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{t("질문·선택지·받는 곳이 바뀌었습니다. 입력한 답은 그대로 두었으니 바뀐 내용을 확인한 뒤 보내 주세요.", "The question, options, or recipient changed. Your reply is kept; review the changes before sending.")}</Text>
+        <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{t("카드의 제목·요청·추천이나 질문·선택지, 받는 곳이 바뀌었습니다. 입력한 답은 그대로 두었으니 바뀐 내용을 확인한 뒤 보내 주세요.", "The card's title, request, recommendation, questions, options, or recipient changed. Your reply is kept; review the changes before sending.")}</Text>
         <View style={wrap}><Button theme={theme} {...named(t("바뀐 내용 확인했어요", "I reviewed the changes"))} disabled={busy}
           onPress={() => { setConfirmedBasis(basis); setOutcome(null); }} /></View>
       </View>}
