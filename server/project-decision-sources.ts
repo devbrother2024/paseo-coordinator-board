@@ -23,7 +23,7 @@ const entry = z.object({
     key:nonempty,text:nonempty,recommended:z.boolean().default(false),does:lines,pros:lines,cons:lines,note:z.string().nullish(),
   })) })).default([]),
   pr: z.number().int().positive().nullish(), since:z.string().nullish(), howToAnswer:z.string().nullish(), answerLead:z.string().nullish(), urgency:z.string().nullish(),
-  dueAt:z.string().max(64).nullish(), blocksWork:z.boolean().nullish(),
+  dueAt:z.string().max(64).nullish(), blocksWork:z.boolean().nullish(), recommendedReply:z.string().nullish(),
 });
 const ledger = z.object({ items: z.array(z.unknown()) });
 type LedgerSource = z.infer<typeof manifest>["sources"][number];
@@ -189,7 +189,7 @@ function readLedger(source: LedgerSource, selected: Set<string>, sourceCoordinat
       sourceCoordinatorId, source: source.source, projectId: source.projectId, projectTitle: source.projectTitle,
       ...(historyUnavailable ? { historyUnavailable: true } : {}),
       id:row.id,title:row.title,kind,where:row.where,ask:row.ask,recommend:row.recommend,why:row.why,risk:row.risk,steps:row.steps,
-      dueAt:row.dueAt, blocksWork:row.blocksWork, since:row.since, urgency:row.urgency, howToAnswer:row.howToAnswer, answerLead:row.answerLead, sessionId:row.agentId ?? null, sessionHost:row.sessionHost ?? null,
+      dueAt:row.dueAt, blocksWork:row.blocksWork, recommendedReply:row.recommendedReply, since:row.since, urgency:row.urgency, howToAnswer:row.howToAnswer, answerLead:row.answerLead, sessionId:row.agentId ?? null, sessionHost:row.sessionHost ?? null,
       questions:row.questions.map(q => ({...q, multi:q.multi ?? /복수|여러\s*개|여럿|select (?:all|multiple)/i.test(q.text)})),
       qa, replyHistory:(answers?.get(row.id) ?? []).filter(current),
       pullRepository:source.repository, pullTarget,

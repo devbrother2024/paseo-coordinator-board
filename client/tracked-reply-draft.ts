@@ -3,9 +3,9 @@ import type { TrackedDecision, TrackedReplyReason, TrackedReplyRoute } from "../
 
 export const optionId = (option: { key: string; text: string }) => JSON.stringify([option.key, option.text]);
 
-// Evidence, risks, urgency, the example answer, PR links, history and labels may change under a draft. The ledger owner
-// has its own confirmation, and the rest is bookkeeping.
-const unaffected = new Set(["why", "risk", "urgency", "howToAnswer", "qa", "replyHistory", "since", "projectTitle", "owner",
+// Evidence, risks, urgency, the example and recommended answers, PR links, history and labels may change under a draft.
+// The ledger owner has its own confirmation, and the rest is bookkeeping.
+const unaffected = new Set(["why", "risk", "urgency", "howToAnswer", "recommendedReply", "qa", "replyHistory", "since", "projectTitle", "owner",
   "dueAt", "blocksWork", "pullTarget", "pullRepository", "sourceCoordinatorId", "key", "fingerprint", "queuedReply", "matchedPull"]);
 
 // Any other edit changes what the reply answers, so the person looks again before sending it.
@@ -39,11 +39,11 @@ export function closedRevision(outcome: { status: string; requested?: string; re
   return outcome && finished.has(outcome.status) ? outcome.revision ?? outcome.requested ?? null : null;
 }
 
-// Merge cards use the PR action, and long explanations are not answers to send as they are.
+// Merge cards use the PR action, and long explanations are not answers to send as they are. The ledger's own short
+// reply comes first, then the first recommendation line.
 export function recommendedTrackedReply(item: TrackedDecision) {
   if (item.kind === "merge" || item.questions.length || item.matchedSessionId) return "";
-  const line = item.recommend[0]?.trim() ?? "";
-  return isLongReply(line) ? "" : line;
+  return [item.recommendedReply, item.recommend[0]].map(line => line?.trim() ?? "").find(line => line && !isLongReply(line)) ?? "";
 }
 
 // Everything a card sends stays on screen. A reply written before the card gained questions keeps its editor,

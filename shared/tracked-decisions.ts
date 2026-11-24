@@ -30,7 +30,7 @@ export const trackedDecisionInputSchema = reference.extend({
   sessionMatch:z.object({projectId,sessionId:id,question:text}).nullish(),
   since:optionalText, howToAnswer:optionalText, projectTitle:optionalText, urgency:optionalText,
   where:z.enum(["human","manager","session","unknown"]).nullish(), owner:optionalText, answerLead:optionalText,
-  dueAt:z.string().max(64).nullish(), blocksWork:z.boolean().nullish(),
+  dueAt:z.string().max(64).nullish(), blocksWork:z.boolean().nullish(), recommendedReply:optionalText,
 });
 export type TrackedDecisionInput = z.output<typeof trackedDecisionInputSchema>;
 export type RoutedTrackedDecision = TrackedDecisionInput & { sourceCoordinatorId?: string | null };

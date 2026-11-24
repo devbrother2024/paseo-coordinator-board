@@ -462,10 +462,11 @@ test("a display-only edit keeps the draft's basis; anything the reply answers ne
   ]})]);
   const {item} = await f.find("notes");
   Object.assign(f.ledgerItems.items[0], {why: ["Added later"], risk: ["Slow rebuild"], urgency: "now", howToAnswer: "A or B",
-    qa: [{q: "Is it merged?", a: "Yes"}], replyHistory: [{text: "Asked once", at: null}]});
+    recommendedReply: "Delete it", qa: [{q: "Is it merged?", a: "Yes"}], replyHistory: [{text: "Asked once", at: null}]});
   f.writeLedger();
   const {item: revised} = await f.find("notes");
   expect(revised.fingerprint).not.toBe(item.fingerprint);
+  expect(revised.recommendedReply).toBe("Delete it");
   expect(await f.reply(item, {recipientId: "operator", questionIndexes: [0]})).toEqual({status: "changed", reason: "revised"});
   expect(trackedReplyBasis(revised, null)).toBe(trackedReplyBasis(item, null));
   expect(trackedReplyBasis({...revised, pullRepository: "studio/app", pullTarget: {repo: "studio/app", number: 7}}, null)).toBe(trackedReplyBasis(item, null));
@@ -607,9 +608,15 @@ test("the example answer is only a placeholder; the recommendation is inserted o
     recommend: ["Delete", "Its work is already merged."], howToAnswer: "Tell the worker: delete / keep"});
   expect(trackedReplyExample(item)).toBe("Tell the worker: delete / keep");
   expect(recommendedTrackedReply(item)).toBe("Delete");
-  for (const change of [{kind: "merge"}, {matchedSessionId: "worker"}, {recommend: ["x".repeat(121)]}, {recommend: ["Delete\nor keep"]}, {recommend: []}]) {
+  for (const change of [{kind: "merge"}, {matchedSessionId: "worker"}, {recommend: ["x".repeat(121)]}, {recommend: ["Delete\nor keep"]}, {recommend: []},
+    {recommendedReply: "Keep", kind: "merge"}, {recommendedReply: "x".repeat(121), recommend: ["Delete\nor keep"]}, {recommendedReply: "  ", recommend: []}]) {
     expect(recommendedTrackedReply({...item, ...change} as typeof item)).toBe("");
   }
+  // The ledger's short reply comes first; a long one falls back to the first recommendation line.
+  expect(recommendedTrackedReply({...item, recommendedReply: " Keep the branch "})).toBe("Keep the branch");
+  expect(recommendedTrackedReply({...item, recommendedReply: "Keep", recommend: []})).toBe("Keep");
+  expect(recommendedTrackedReply({...item, recommendedReply: "Keep\nfor now"})).toBe("Delete");
+  expect(recommendedTrackedReply({...item, recommendedReply: "x".repeat(121)})).toBe("Delete");
   const choices = {...item, questions: [
     {id: "Q1", text: "Pick", multi: false, options: [{key: "A", text: "One", recommended: true}, {key: "B", text: "Two", recommended: false}]},
     {id: "Q2", text: "Pick any", multi: true, options: [{key: "1", text: "Logs", recommended: true}, {key: "2", text: "Docs", recommended: true}]},

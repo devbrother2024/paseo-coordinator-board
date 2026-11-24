@@ -141,8 +141,8 @@ export class TrackedDecisionStore {
       const key=trackedKey(item);
       if(rows.has(key))return {status:"invalid",rows:new Map()};
       // An old feed without a host and a current feed explicitly marking this host are the same record.
-      // Display-only scheduling and PR references must not reopen an answered version.
-      const {dueAt, blocksWork, pullTarget, pullRepository, ...content} = item;
+      // Display-only scheduling, PR references and the reply offered to fill in must not reopen an answered version.
+      const {dueAt, blocksWork, pullTarget, pullRepository, recommendedReply, ...content} = item;
       const fingerprint=createHash("sha256").update(JSON.stringify({...content,sessionHost:item.sessionHost ?? undefined})).digest("hex");
       // Authority belongs to the operator-configured importer. Keep it out of
       // the content fingerprint so rotating owners cannot reopen old receipts.
