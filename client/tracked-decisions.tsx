@@ -58,7 +58,7 @@ const blocks: Record<TrackedReplyBlock, readonly [string, string]> = {
   closed: ["담당 세션이 종료되어 원래 세션에는 보낼 수 없습니다.", "The assigned session has ended, so the reply cannot go to it."],
   error: ["담당 세션이 오류 상태라 원래 세션에는 보낼 수 없습니다.", "The assigned session is in an error state, so the reply cannot go to it."],
   missing: ["담당 세션을 이 호스트에서 찾지 못해 원래 세션에는 보낼 수 없습니다.", "The assigned session was not found on this host."],
-  "other-project": ["담당 세션이 이 카드와 다른 프로젝트에 있어 바로 보낼 수 없습니다. 설정의 세션 연결에서 카드의 프로젝트로 연결하면 보낼 수 있습니다.", "The assigned session belongs to another project. Link it to this card’s project in settings to reply directly."],
+  "other-project": ["담당 세션이 이 카드와 다른 프로젝트에 있어 바로 보낼 수 없습니다. 설정 → 다른 프로젝트의 세션 하나 연결에서 카드의 프로젝트로 연결하면 바로 보낼 수 있습니다.", "The assigned session belongs to another project. Use Settings → Link a session from another project to link it to this card’s project and reply directly."],
   "other-host": ["담당 세션이 다른 호스트에 있어 이 보드에서 보낼 수 없습니다.", "The assigned session is on another host and cannot receive replies from this board."],
   "no-session": ["카드에 담당 세션이 적혀 있지 않습니다.", "The card does not name an assigned session."],
   "owner-unverified": ["이 호스트에서 원장의 운영 코디네이터를 확인할 수 없습니다.", "The ledger owner could not be verified on this host."],
