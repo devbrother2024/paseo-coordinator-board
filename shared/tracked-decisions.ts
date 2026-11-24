@@ -158,7 +158,10 @@ export function trackedReplyRoute(item:RoutedTrackedDecision, coordinator:string
   return ended ? blocked(ended,session.id) : {targetId:session.id, recipientId:session.id, fallbackId};
 }
 
-export const trackedReplyReasons = ["removed","revised","conflict","owner-changed","recipient-changed","recipient-closed","recipient-error","recipient-missing","queue-stopped"] as const;
+// `earlier-unconfirmed` and `recipient-unchecked` clear with time: the first lasts while an earlier reply holds the card,
+// the second while a project folder cannot be read.
+export const trackedReplyReasons = ["removed","revised","conflict","earlier-unconfirmed","owner-changed","recipient-changed","recipient-closed",
+  "recipient-error","recipient-missing","recipient-unchecked","queue-stopped"] as const;
 export type TrackedReplyReason = typeof trackedReplyReasons[number];
 
 export const resolveTrackedDecision = defineRpc({

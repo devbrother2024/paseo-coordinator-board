@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { boardDecisionCount, boardScope, boardSnapshot, reportingKey, saveNote, setReporting } from "./shared/contract";
 import { canReceiveBoardInput, discoverSessions } from "./server/discovery";
-import { projectFolderMap } from "./shared/project-folders";
+import { projectFolderMap, type ProjectFolders } from "./shared/project-folders";
 import { attachReportTool } from "./server/reporting";
 import { ConversationReader, excerpt } from "./server/conversation";
 import { isManagedCoordinator, setCoordinator, PreferenceStore } from "./server/preferences";
@@ -239,13 +239,15 @@ export default function contribute(server: PluginServerContext) {
   const removeReplyArchive = server.addHook("agent.archive.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });
   const removeMergePermission = server.addHook("agent.permission.after",onRecipientAvailable);
   // The board's own same-folder judgment, read again when a reply goes out. Only selected projects get a key.
-  async function currentFolders(paseo: PluginHandlerContext["paseo"]) {
+  // `unread` says a project's folder, or the project list itself, could not be read just now.
+  async function currentFolders(paseo: PluginHandlerContext["paseo"]): Promise<{ folders: ProjectFolders; unread: (id: string | null) => boolean }> {
     try {
       const projects = (await paseo.projects.list()).projects.map(p => ({ id: p.projectId, path: p.projectRootPath || "" }));
       const roots = await projectRoots.describe(projects, new Set(prefs.read().projects));
-      return projectFolderMap(projects.map((project, i) => ({ ...project, ...roots[i] })));
+      const unread = new Set(projects.filter((_, i) => roots[i].unread).map(project => project.id));
+      return { folders: projectFolderMap(projects.map((project, i) => ({ ...project, ...roots[i] }))), unread: (id: string | null) => !!id && unread.has(id) };
     } catch {
-      return {};
+      return { folders: {}, unread: () => true };
     }
   }
   // Looks for a reply the board sent in the recent conversation of the session that took it.
@@ -257,8 +259,7 @@ export default function contribute(server: PluginServerContext) {
   const resumeReplies = tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, async (item,targetId,{paseo},route) => {
     let rows = await discoverSessions(paseo);
     // Only a card's own local session may sit in another project on the same folder.
-    // Without the project list, that session counts only in the card's own project.
-    const folders = item.where === "session" && item.sessionId && !item.sessionHost ? await currentFolders(paseo) : {};
+    const {folders, unread} = item.where === "session" && item.sessionId && !item.sessionHost ? await currentFolders(paseo) : {folders: {}, unread: () => false};
     const fallback = route === "coordinator";
     const owned = fallback ? item.sourceCoordinatorId !== undefined : usesSourceCoordinator(item);
     const mismatch = (): TrackedReplyReason | null => {
@@ -266,7 +267,14 @@ export default function contribute(server: PluginServerContext) {
       const managed = managedSessions(rows,scope);
       if (!scope.projects.length || (item.projectId && !scope.projects.includes(item.projectId))) return "recipient-changed";
       const expected = fallback ? trackedFallbackRecipient(item,scope.coordinator,managed) : trackedRecipient(item,scope.coordinator,managed,folders);
-      if (expected !== targetId) return owned ? "owner-changed" : expected ? "recipient-changed" : "recipient-missing";
+      if (expected !== targetId) {
+        // An owner that is still the ledger's owner but no longer listed is missing, not replaced.
+        if (owned) return item.sourceCoordinatorId === targetId ? "recipient-missing" : "owner-changed";
+        if (expected) return "recipient-changed";
+        // The card's own session in another project is not ruled out while either folder could not be read.
+        const own = !fallback && targetId === item.sessionId ? managed.find(row => row.id === targetId) : undefined;
+        return own && own.projectId !== item.projectId && (unread(own.projectId) || unread(item.projectId)) ? "recipient-unchecked" : "recipient-missing";
+      }
       return !owned || managed.some(row => row.id === targetId) ||
         (isManagedCoordinator(scope,targetId) && targetId === scope.coordinator && rows.some(row => row.id === targetId)) ? null : "recipient-missing";
     };
@@ -293,7 +301,13 @@ export default function contribute(server: PluginServerContext) {
       accepted:(messageId,matches)=>arrived(handle,messageId,matches),
       ready:canReceiveBoardInput(agent,owned || fallback || targetId===prefs.read().coordinator),
     };
-  }, ({paseo}) => (recipientId,messageId,matches) => arrived(paseo.agents.ref(recipientId),messageId,matches));
+  }, ({paseo}) => ({
+    arrived:(recipientId,messageId,matches)=>arrived(paseo.agents.ref(recipientId),messageId,matches),
+    gone:async recipientId=>{
+      const agent=(await paseo.agents.ref(recipientId).refresh())?.agent;
+      return !agent || !!agent.archivedAt;
+    },
+  }));
   server.handle(boardSnapshot, (input, { paseo }) => reads.read(() => buildSnapshot(paseo), input.fresh));
   server.handle(boardDecisionCount, async (_input, { paseo }) => ({
     count: await reads.count(() => buildSnapshot(paseo)),

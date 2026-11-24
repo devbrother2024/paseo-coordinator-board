@@ -39,9 +39,14 @@ type Receipt = z.output<typeof receipt>;
 type PendingDelivery = { ready:boolean; send:(answer:string,messageId:string,images?:WorkImage[])=>Promise<void>; accepted:(messageId:string,matches:(text:string)=>boolean)=>Promise<boolean>; stillCurrent:()=>boolean; redirectable?:()=>boolean };
 export type BlockedDelivery = { blocked:TrackedReplyReason };
 type Prepared = PendingDelivery | BlockedDelivery | null;
-// Looks for a reply the board already sent in the conversation of the session that took it. It never sends.
-type SentCheck = (recipientId:string,messageId:string,matches:(text:string)=>boolean)=>Promise<boolean>;
-const notChecked:SentCheck = async () => false;
+// Asks the session that took a reply the board already sent whether the reply is in its conversation, and whether that
+// session was deleted or archived. It never sends.
+type SentCheck = {
+  arrived:(recipientId:string,messageId:string,matches:(text:string)=>boolean)=>Promise<boolean>;
+  gone:(recipientId:string)=>Promise<boolean>;
+};
+const notChecked:SentCheck = {arrived:async () => false, gone:async () => false};
+const holdMs = 10 * 60_000;
 type Attempt = z.output<typeof resolveTrackedDecision.output> & {queueId?:string};
 const changed = (reason?:TrackedReplyReason):Attempt => ({status:"changed", ...(reason ? {reason} : {})});
 type AdditionalSources = unknown[] | {items:unknown[];partial?:boolean;diagnostics?:LedgerDiagnostics};
@@ -67,6 +72,14 @@ function sameContent(receipt:Receipt,input:TrackedResolution,photos:readonly Pho
 
 function sameReply(receipt:Receipt,input:TrackedResolution,photos:readonly PhotoReference[],item:TrackedDecisionInput) {
   return receipt.recipientId===input.recipientId && sameContent(receipt,input,photos,item);
+}
+
+// An unconfirmed reply to an earlier revision holds its card for `holdMs`, and only while the session that took it is
+// still there. When that session cannot be asked, the reply keeps holding the card until the time runs out.
+async function holdsCard(receipt:Receipt, check:SentCheck) {
+  if (!receipt.recipientId || !(Date.now()-Date.parse(receipt.at) < holdMs)) return false;
+  try { return !(await check.gone(receipt.recipientId)); }
+  catch { return true; }
 }
 
 // The recorded message is matched by its hash, which still holds after the card has changed.
@@ -340,15 +353,15 @@ export class TrackedDecisionStore {
     if (queuedId && (!previous?.queue || previous.queue.stopped || previous.messageId!==queuedId)) return changed("queue-stopped");
     if (previous?.queue && previous.queue.owner!==row.item.sourceCoordinatorId) return changed("owner-changed");
     const photos=describePhotos(input.images);
-    // Nothing new goes out while a reply to another revision of this card is still unconfirmed. That reply is looked for
-    // with the session that took it, even after the card moved to another session.
-    const waiting=previous ? undefined : [...records].find(([,record])=>record.key===key && record.fingerprint!==input.fingerprint && record.pending && !record.queue);
-    if (waiting) {
-      const [earlierVersion,earlier]=waiting;
+    // While a reply to another revision of this card is still unconfirmed and holds the card, sending the same reply only
+    // checks it and a different reply waits. That reply is looked for with the session that took it, even after the card
+    // moved to another session. Once the hold ends, a new reply goes out and the earlier one stays unconfirmed.
+    const waiting=previous ? [] : [...records].filter(([,record])=>record.key===key && record.fingerprint!==input.fingerprint && record.pending && !record.queue);
+    for (const [earlierVersion,earlier] of waiting) {
       const checked=await this.confirm(earlierVersion,earlier,check,input.recipientId);
-      if (checked.status!=="sent") return sameReply(earlier,input,photos,row.item) ? checked : changed("conflict");
       // Once it arrived, the same reply closes only its own revision. A different reply answers the card as it is now.
-      return sameContent(earlier,input,photos,row.item) ? checked : this.deliver(input,getScope,prepare,queuedId,check);
+      if (checked.status==="sent") return sameContent(earlier,input,photos,row.item) ? checked : this.deliver(input,getScope,prepare,queuedId,check);
+      if (await holdsCard(earlier,check)) return sameReply(earlier,input,photos,row.item) ? checked : changed("earlier-unconfirmed");
     }
     if (previous && !sameReply(previous,input,photos,row.item)) return changed("conflict");
     // A retry repeats the recorded reply as it was written then.
@@ -406,7 +419,7 @@ export class TrackedDecisionStore {
   private async confirm(version:string, receipt:Receipt, check:SentCheck, asked:string|undefined):Promise<Attempt> {
     const {messageId,recipientId}=receipt;
     if (!messageId || !recipientId) return {status:"unconfirmed"};
-    try { if (!(await check(recipientId,messageId,sentAs(receipt)))) return {status:"unconfirmed"}; }
+    try { if (!(await check.arrived(recipientId,messageId,sentAs(receipt)))) return {status:"unconfirmed"}; }
     catch { return {status:"unconfirmed"}; }
     const latest=this.recorded(), recorded=latest?.get(version);
     if (!latest || !recorded || recorded.messageId!==messageId) return {status:"unconfirmed"};

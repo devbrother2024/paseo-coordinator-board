@@ -71,6 +71,29 @@ test("a blocked filesystem does not block snapshots or start another probe for t
   }
 });
 
+test("a selected folder is unread while its read is late or two blocked reads hold every slot", async () => {
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const roots = new ProjectRootReader({
+    host: { platform: "linux", temp: "/tmp" }, timeoutMs: 15,
+    disk: { stat: async path => {
+      if (path.startsWith("/mount/")) await blocked;
+      return directory;
+    }, realpath },
+  });
+  const three = [project("three", "/work/three")];
+  try {
+    const late = [project("one", "/mount/one"), project("two", "/mount/two"), project("other", "/mount/other")];
+    expect(await roots.describe(late, new Set(["one", "two"]))).toEqual([{ temporary: false, unread: true }, { temporary: false, unread: true }, { temporary: false }]);
+    // Both reads are still blocked, so a third folder is not read at all.
+    expect(await roots.describe(three, new Set(["three"]))).toEqual([{ temporary: false, unread: true }]);
+  } finally {
+    release();
+  }
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(await roots.describe(three, new Set(["three"]))).toEqual([{ rootKey: "1:5:/work/three", temporary: false }]);
+});
+
 test("one folder needs the same file numbers and the same resolved path", async () => {
   const keys = async (platform: NodeJS.Platform, inodes: Record<string, bigint>, resolve: (path: string) => string) => {
     const roots = new ProjectRootReader({

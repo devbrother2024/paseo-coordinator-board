@@ -69,7 +69,8 @@ export function nextFailureStreak(previous: FailureStreak, outcome: { status: st
 }
 
 // These reasons keep the form and the typed reply. The rest need a fresh card first.
-const recoverable = new Set<string>(["revised", "owner-changed", "recipient-changed", "recipient-closed", "recipient-error", "recipient-missing"] satisfies TrackedReplyReason[]);
+const recoverable = new Set<string>(["revised", "earlier-unconfirmed", "owner-changed", "recipient-changed", "recipient-closed", "recipient-error",
+  "recipient-missing", "recipient-unchecked"] satisfies TrackedReplyReason[]);
 
 // What a rejected reply leaves the person able to do. A changed card holds the send button until its newer revision is
 // on screen. Any other rejection repeated for the same recipient points to the session instead of another refresh.

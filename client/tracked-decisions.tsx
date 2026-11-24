@@ -55,11 +55,13 @@ const reasons: Record<TrackedReplyReason, readonly [string, string]> = {
   removed: ["이 카드는 원장에서 내려갔습니다. 이미 처리됐을 수 있으니 보드를 새로 고쳐 확인해 주세요.", "This card left the ledger. It may already be handled; refresh to check."],
   revised: ["카드 내용이 바뀌었습니다. 입력한 답은 그대로 두었습니다.", "The card changed. Your reply is kept."],
   conflict: ["이 카드에는 이미 다른 답이 기록됐거나 전송 확인 중입니다. 최근 결정 기록을 확인해 주세요.", "A different reply is already recorded or awaiting confirmation for this card. Check recent decision activity."],
+  "earlier-unconfirmed": ["앞서 보낸 답이 아직 확인되지 않아 보내지 않았습니다. 그 답이 확인되거나 10분이 지나면 보낼 수 있습니다. 입력한 답은 그대로 두었습니다.", "An earlier reply to this card is not confirmed yet, so this one was not sent. You can send it once that reply is confirmed or 10 minutes have passed. Your reply is kept."],
   "owner-changed": ["운영 코디네이터가 바뀌었습니다. 새 운영 코디네이터를 확인한 뒤 보내 주세요.", "The ledger owner changed. Confirm the new owner before sending."],
   "recipient-changed": ["받는 곳이 바뀌었습니다. 최신 카드에서 받는 곳을 확인한 뒤 다시 보내 주세요.", "The recipient changed. Check it on the latest card and send again."],
   "recipient-closed": ["받는 세션이 종료되어 보내지 못했습니다.", "The recipient session has ended, so the reply was not sent."],
   "recipient-error": ["받는 세션이 오류 상태라 보내지 못했습니다.", "The recipient session is in an error state, so the reply was not sent."],
   "recipient-missing": ["받는 세션을 이 호스트에서 찾지 못해 보내지 못했습니다.", "The recipient session was not found on this host, so the reply was not sent."],
+  "recipient-unchecked": ["받는 세션이 이 카드의 프로젝트와 같은 폴더인지 지금 확인하지 못해 보내지 않았습니다. 잠시 뒤 다시 보내 주세요.", "Could not check just now whether the recipient session opens this card's project folder, so the reply was not sent. Try again in a moment."],
   "queue-stopped": ["자동 전송이 중단됐습니다. 카드와 받는 세션을 확인해 주세요.", "Automatic delivery stopped. Check the card and its recipient."],
 };
 const blocks: Record<TrackedReplyBlock, readonly [string, string]> = {
@@ -277,6 +279,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
     return t("새로 고친 뒤에도 같은 이유로 보내지 못했습니다.", "This failed again for the same reason after refreshing.") + " " + (reason === "revised"
       ? t("카드가 계속 바뀌고 있거나 보드 목록이 아직 최신이 아닙니다. 세션을 열어 직접 답하거나 잠시 뒤 다시 보내 주세요.", "The card keeps changing or the board has not caught up. Answer in the session directly, or try again shortly.")
       : reason === "conflict" ? t("최근 결정 기록에서 이미 기록된 답을 확인해 주세요.", "Check the reply already recorded in recent decision activity.")
+      : reason === "earlier-unconfirmed" || reason === "recipient-unchecked" ? t("잠시 뒤 다시 보내거나 세션을 열어 직접 답해 주세요.", "Try again in a moment, or answer in the session directly.")
       : reason === "removed" ? t("세션을 열어 이 카드가 이미 처리됐는지 확인해 주세요.", "Open the session to check whether this card was already handled.")
       : t("받는 세션을 열어 상태를 확인하거나 그 세션에 직접 답해 주세요. 답은 보드에만 저장할 수도 있습니다.", "Open the receiving session to check it or answer there directly. You can also save the answer on the board."));
   }

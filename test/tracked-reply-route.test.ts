@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import {
   trackedRecovery, trackedReplyBasis, trackedRetryFingerprint,
 } from "../client/tracked-reply-draft";
 import { trackedWorkSession } from "../client/tracked-session-targets";
+import { ProjectRootReader } from "../server/project-root";
 import { boardSnapshot, boardScope } from "../shared/contract";
 import { projectFolderMap } from "../shared/project-folders";
 import { linkSession } from "../shared/session-links";
@@ -19,7 +20,7 @@ import {
 const scratch: string[] = [];
 afterEach(() => { for (const path of scratch.splice(0)) rmSync(path, {recursive: true, force: true}); });
 
-type Agent = {project: string; status: string};
+type Agent = {project: string; status: string; archived?: boolean};
 const card = (id: string, extra: Record<string, unknown>) => ({id, title: "Card " + id, kind: "answer", ...extra});
 
 // Two selected checkouts of one repository: the ledger names "studio", one live session sits in "studio-copy".
@@ -48,7 +49,8 @@ async function fixture(items: Record<string, unknown>[], owner = "operator", roo
   // `lost`: the SDK call delivers the message and then fails. `history`: the recipient's timeline shows what arrived.
   const lost = new Set<string>();
   const history = {visible: false};
-  const actor = (id: string) => ({id, title: id, updatedAt: "1", status: agents.get(id)!.status, pendingPermissions: []});
+  const actor = (id: string) => ({id, title: id, updatedAt: "1", status: agents.get(id)!.status, pendingPermissions: [],
+    ...(agents.get(id)!.archived ? {archivedAt: "2026-01-02T00:00:00.000Z"} : {})});
   const page = (entries: unknown[]) => ({entries, pageInfo: {hasMore: false, nextCursor: null}});
   const sdk = {
     workspaces: {list: async () => page([])},
@@ -171,7 +173,7 @@ test("a reply left unconfirmed is checked with the session that took it after th
   expect(after["same"].route.recipientId).toBe("worker-b");
   expect(after["same"].item.fingerprint).not.toBe(before["same"].fingerprint);
   // Until the first reply is found, nothing new goes out to either session.
-  expect(await f.reply(after["same"].item, {recipientId: "worker-b"})).toEqual({status: "changed", reason: "conflict"});
+  expect(await f.reply(after["same"].item, {recipientId: "worker-b"})).toEqual({status: "changed", reason: "earlier-unconfirmed"});
   expect(await f.reply(before["stale"], {recipientId: "worker-a"})).toEqual({status: "unconfirmed"});
   expect(f.sent).toHaveLength(3);
   f.history.visible = true;
@@ -184,6 +186,36 @@ test("a reply left unconfirmed is checked with the session that took it after th
   // Once the first reply is found, a different reply answers the card as it is now.
   expect(await f.reply(after["other"].item, {recipientId: "worker-b", answer: "Keep it"})).toEqual({status: "sent"});
   expect(f.sent.slice(3).map(m => [m.id, m.text.endsWith("\n\nKeep it")])).toEqual([["worker-b", true]]);
+});
+
+test("an unconfirmed reply holds its card for ten minutes, or until the session that took it is deleted or archived", async () => {
+  const firsts = {held: "worker-a", deleted: "worker-c", archived: "worker-d"};
+  const f = await fixture(Object.entries(firsts).map(([id, agentId]) => card(id, {where: "session", agentId})));
+  for (const id of [...Object.values(firsts), "worker-b"]) f.agents.set(id, {project: "studio", status: "idle"});
+  const before = {};
+  for (const [id, agentId] of Object.entries(firsts)) {
+    before[id] = (await f.find(id)).item;
+    f.lost.add(agentId);
+    expect(await f.reply(before[id], {recipientId: agentId})).toEqual({status: "unconfirmed"});
+  }
+  // The cards move to another session before any first reply is found, and two of the first sessions go away.
+  for (const item of f.ledgerItems.items) item.agentId = "worker-b";
+  f.writeLedger();
+  f.agents.delete("worker-c");
+  f.agents.set("worker-d", {project: "studio", status: "idle", archived: true});
+  const after = {};
+  for (const id of Object.keys(firsts)) after[id] = (await f.find(id)).item;
+  expect(await f.reply(after["held"], {recipientId: "worker-b", answer: "Keep it"})).toEqual({status: "changed", reason: "earlier-unconfirmed"});
+  for (const id of ["deleted", "archived"]) expect(await f.reply(after[id], {recipientId: "worker-b", answer: "Keep it"})).toEqual({status: "sent"});
+  setSystemTime(new Date(Date.now() + 10 * 60_000 + 1000));
+  try {
+    expect(await f.reply(after["held"], {recipientId: "worker-b", answer: "Keep it"})).toEqual({status: "sent"});
+  } finally {
+    setSystemTime();
+  }
+  // Every first reply is still unconfirmed, so retrying it only checks again.
+  for (const [id, agentId] of Object.entries(firsts)) expect(await f.reply(before[id], {recipientId: agentId})).toEqual({status: "unconfirmed"});
+  expect(f.sent.map(m => m.id)).toEqual(["worker-a", "worker-c", "worker-d", "worker-b", "worker-b", "worker-b"]);
 });
 
 test("an edit between listing and sending says revised, and the same draft sends once the board refreshes", async () => {
@@ -219,11 +251,24 @@ test("an owner the board cannot find on this host is reported missing, and a rep
   expect(await f.reply(item, {recipientId: "general"})).toEqual({status: "sent"});
 });
 
+test("a ledger owner that has only left the session list is reported missing, not changed", async () => {
+  const f = await fixture([card("icon", {where: "manager"}), card("cleanup", {where: "session", agentId: "worker"})]);
+  const icon = await f.find("icon"), cleanup = await f.find("cleanup");
+  expect(icon.route?.recipientId).toBe("operator");
+  expect(cleanup.route?.fallbackId).toBe("operator");
+  f.hidden.add("operator");
+  expect(await f.reply(icon.item, {recipientId: "operator"})).toEqual({status: "changed", reason: "recipient-missing"});
+  expect(await f.reply(cleanup.item, {recipientId: "operator", route: "coordinator"})).toEqual({status: "changed", reason: "recipient-missing"});
+  expect(f.sent).toBeEmpty();
+  f.hidden.delete("operator");
+  expect(await f.reply(icon.item, {recipientId: "operator"})).toEqual({status: "sent"});
+});
+
 test("a rejected reply keeps the form, waits for the newer revision, or asks for a refresh", () => {
   const twice = {key: "same", count: 2};
   const rejected = (status: string, reason?: string) => ({status, ...(reason ? {reason} : {}), requested: "rev-1", fingerprint: "rev-1"});
   // The typed reply stays editable when the owner or recipient changed. The same rejection twice points to the session.
-  for (const reason of ["owner-changed", "recipient-changed", "recipient-closed", "recipient-error", "recipient-missing"]) {
+  for (const reason of ["earlier-unconfirmed", "owner-changed", "recipient-changed", "recipient-closed", "recipient-error", "recipient-missing", "recipient-unchecked"]) {
     expect(trackedRecovery(rejected("changed", reason), "rev-1", null)).toEqual({needsRefresh: false, awaitingRevision: false, stuck: false});
     expect(trackedRecovery(rejected("changed", reason), "rev-1", twice).stuck).toBe(true);
   }
@@ -306,6 +351,24 @@ test("a work session in a project on the same folder gets the chip and the reply
   expect(ended.f.sent).toBeEmpty();
 });
 
+test("a same-folder session the board cannot check just now asks for another try instead of calling it missing", async () => {
+  const disk = mkdtempSync(join(tmpdir(), "reply-folders-")); scratch.push(disk);
+  const checkout = join(disk, "app"), alias = join(disk, "alias");
+  mkdirSync(checkout); symlinkSync(checkout, alias, "junction");
+  const f = await fixture([card("palette", {where: "session", agentId: "elsewhere"})], "operator", {studio: checkout, "studio-copy": alias});
+  const {item, route} = await f.find("palette");
+  expect(route?.recipientId).toBe("elsewhere");
+  // Neither folder is read in time when the reply goes out.
+  const late = spyOn(ProjectRootReader.prototype, "describe").mockResolvedValue([{temporary: false, unread: true}, {temporary: false, unread: true}]);
+  try {
+    expect(await f.reply(item, {recipientId: "elsewhere"})).toEqual({status: "changed", reason: "recipient-unchecked"});
+  } finally {
+    late.mockRestore();
+  }
+  expect(f.sent).toBeEmpty();
+  expect(await f.reply(item, {recipientId: "elsewhere"})).toEqual({status: "sent"});
+});
+
 test("a closed coordinator never redirects a coordinator card", async () => {
   const f = await fixture([card("owner-card", {where: "manager", recommend: ["Delete"]})]);
   f.agents.set("operator", {project: "studio", status: "closed"});
@@ -325,9 +388,9 @@ test("a rotated or unverified ledger owner never receives a redirected reply", a
   f.setOwner("remote-owner");
   const unverified = await f.find("cleanup");
   expect(unverified.route).toMatchObject({blocked: "closed", fallbackId: null});
-  for (const recipientId of ["remote-owner", "general"]) {
-    expect(await f.reply(item, {recipientId, route: "coordinator"})).toEqual({status: "changed", reason: "owner-changed"});
-  }
+  // The owner is unchanged but has no session on this host. Any other session is not the owner.
+  expect(await f.reply(item, {recipientId: "remote-owner", route: "coordinator"})).toEqual({status: "changed", reason: "recipient-missing"});
+  expect(await f.reply(item, {recipientId: "general", route: "coordinator"})).toEqual({status: "changed", reason: "owner-changed"});
   expect(f.sent).toBeEmpty();
 });
 
@@ -490,7 +553,7 @@ test("an unconfirmed reply is only checked, never sent again, after its card cha
   expect(await f.reply({...revised, fingerprint: retry}, {recipientId: "operator"})).toEqual({status: "unconfirmed"});
   // A reloaded board asks with the new revision, and still nothing goes out.
   expect(await f.reply(revised, {recipientId: "operator"})).toEqual({status: "unconfirmed"});
-  expect(await f.reply(revised, {recipientId: "operator", answer: "Keep it"})).toEqual({status: "changed", reason: "conflict"});
+  expect(await f.reply(revised, {recipientId: "operator", answer: "Keep it"})).toEqual({status: "changed", reason: "earlier-unconfirmed"});
   f.history.visible = true;
   expect(await f.reply({...revised, fingerprint: retry}, {recipientId: "operator"})).toEqual({status: "sent", revision: first.fingerprint});
   expect(await f.reply({...revised, fingerprint: retry}, {recipientId: "operator"})).toEqual({status: "sent", revision: first.fingerprint});
