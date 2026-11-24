@@ -8,7 +8,7 @@ import { attachCoordinatorTools } from "../server/coordinator";
 import { ConversationReader } from "../server/conversation";
 import { PreferenceStore, setCoordinator } from "../server/preferences";
 import {
-  CoordinatorToolStamps, coordinatorToolsView, readCoordinatorTools, staleToolNote, toolsFingerprint,
+  CoordinatorToolStamps, coordinatorToolsView, readCoordinatorTools, staleToolNote, toolsFingerprint, withStaleNote,
 } from "../server/coordinator-tools";
 import { nextToolStamp, toolStaleness } from "../shared/coordinator-tools";
 import { staleToolsNotice } from "../client/coordinator-tools";
@@ -42,7 +42,7 @@ function host(provider = "claude") {
 }
 
 // One board build: the real coordinator hook, with the tools it hands out wrapped for stamping.
-async function board(prefs: PreferenceStore, extra = oldBuild) {
+async function board(prefs: PreferenceStore, extra: any[] = oldBuild) {
   const stamps = new CoordinatorToolStamps(prefs);
   let hook: any;
   attachCoordinatorTools({ addHook: (_: string, h: any) => { hook = h; return () => {}; } } as any, prefs, new ConversationReader(), extra, stamps);
@@ -78,6 +78,13 @@ test("the fingerprint follows tool definitions, not their order", () => {
   expect(toolsFingerprint(oldBuild)).not.toBe(toolsFingerprint(newBuild));
   const reworded = [defineAgentTool({ ...oldBuild[0], description: "Plan an assignment on a host." })];
   expect(toolsFingerprint(reworded)).not.toBe(toolsFingerprint(oldBuild));
+  // Key order, required-name order and description spacing are not changes a conversation can see.
+  const two = (shape: Record<string, z.ZodType>, description = "Plan an assignment.") =>
+    [defineAgentTool({ name: "plan_assignment", description, input: z.strictObject(shape), execute: () => ({ text: "" }) })];
+  const a = two({ needsHooks: z.boolean().describe("Hooks  needed."), projectId: z.string() });
+  const b = two({ projectId: z.string(), needsHooks: z.boolean().describe("Hooks needed. ") }, "  Plan an\n assignment. ");
+  expect(toolsFingerprint(b)).toBe(toolsFingerprint(a));
+  expect(toolsFingerprint(two({ needsHooks: z.boolean(), projectId: z.string().max(40) }))).not.toBe(toolsFingerprint(two({ needsHooks: z.boolean(), projectId: z.string() })));
   // A schema that cannot be described leaves the board unable to judge.
   expect(toolsFingerprint([{ name: "x", description: "x", input: { toJSONSchema: null } as any }])).toBeUndefined();
 });
@@ -142,21 +149,81 @@ test("a failed conversation lookup never changes the tool's own result", async (
   try { expect((await b.call(broken)).text).toBe("planned"); } finally { console.warn = warn; }
 });
 
-test("the note in a stale tool result names /clear only for Claude, in both languages", () => {
-  expect(staleToolNote("claude")).toContain("/clear");
-  expect(staleToolNote("codex")).not.toContain("/clear");
-  for (const note of [staleToolNote("claude"), staleToolNote("codex")]) {
-    expect(note).toContain("replace the coordinator");
-    expect(note).toContain("코디네이터를 교체");
-    expect(note).not.toContain("—");
+test("the note in a stale tool result names both fixes in both languages", () => {
+  for (const text of ["replace the coordinator", "/clear", "코디네이터를 교체"]) expect(staleToolNote).toContain(text);
+  expect(staleToolNote).not.toContain("\u2014");
+});
+
+test("a JSON tool result keeps its JSON, and the note goes to structured content", () => {
+  const listing = JSON.stringify([{ id: "worker-1" }]);
+  const json = withStaleNote({ text: listing });
+  expect(json.text).toBe(listing);
+  expect((json.structuredContent as any).boardToolsNotice).toBe(staleToolNote);
+  const object = withStaleNote({ text: "{\"sessionId\":\"worker-1\"}", structuredContent: { kept: true } });
+  expect(JSON.parse(object.text!)).toEqual({ sessionId: "worker-1" });
+  expect(object.structuredContent).toEqual({ kept: true, boardToolsNotice: staleToolNote });
+  // Plain text, and text that only looks like JSON, carry the note at the end.
+  expect(withStaleNote({ text: "Recorded." }).text).toBe(`Recorded.\n\n${staleToolNote}`);
+  expect(withStaleNote({ text: "[draft] saved" }).text).toEndWith(staleToolNote);
+  expect(withStaleNote({}).text).toBe(staleToolNote);
+  expect(withStaleNote({ text: "x", structuredContent: [1] }).structuredContent).toEqual([1]);
+});
+
+test("a JSON-returning board tool stays parseable in a stale conversation", async () => {
+  const prefs = store();
+  const h = host();
+  const listing = (description: string) => [defineAgentTool({ name: "read_board", description, input: z.object({}), execute: () => ({ text: JSON.stringify([{ id: "worker-1" }]) }) })];
+  const callList = async (tools: any[]) => {
+    let hook: any;
+    attachCoordinatorTools({ addHook: (_: string, f: any) => { hook = f; return () => {}; } } as any, prefs, new ConversationReader(), tools, new CoordinatorToolStamps(prefs));
+    const opened = await hook({ request: { purpose: "interactive", agentId: "coordinator-1", tools: [], metadata: {} } });
+    return opened.tools.find((t: any) => t.name === "read_board").execute({}, { paseo: h.paseo, agent: { id: "coordinator-1", provider: "claude" } });
+  };
+  expect((await callList(listing("List."))).structuredContent).toBeUndefined();
+  const result = await callList(listing("List managed sessions."));
+  expect(JSON.parse(result.text)).toEqual([{ id: "worker-1" }]);
+  expect(result.structuredContent.boardToolsNotice).toBe(staleToolNote);
+});
+
+test("a coordinator on another provider is neither stamped nor told anything", async () => {
+  const prefs = store();
+  const codex = host("codex");
+  await (await board(prefs, oldBuild)).call(codex);
+  expect(prefs.read().toolStamps).toEqual({});
+  // Even with a stamp left from a Claude conversation, another provider gets no note.
+  await (await board(prefs, oldBuild)).call(host());
+  expect((await (await board(prefs, newBuild)).call(codex)).text).toBe("planned");
+});
+
+test("a conversation ID that is too long or oddly shaped is never stored, and a bad stored stamp does not stop the board", async () => {
+  const prefs = store();
+  const b = await board(prefs, oldBuild);
+  for (const id of ["x".repeat(300), "two words", "../escape", ""]) {
+    const h = host();
+    h.conversations.set("coordinator-1", id);
+    expect((await b.call(h)).text).toBe("planned");
+    expect(prefs.read().toolStamps).toEqual({});
+    expect(b.stamps.staleness("coordinator-1", id)).toBe("unknown");
   }
+  const h = host();
+  h.conversations.set("coordinator-1", "y".repeat(256));
+  await b.call(h);
+  expect(prefs.read().toolStamps["coordinator-1"]?.session).toBe("y".repeat(256));
+  // A stamp the schema rejects, written by hand or by another build, is dropped rather than fatal.
+  const path = (prefs as any).path as string;
+  const raw = JSON.parse(readFileSync(path, "utf8"));
+  raw.toolStamps = { "coordinator-1": { session: "z".repeat(300), fingerprint: "f", at: new Date().toISOString() } };
+  writeFileSync(path, JSON.stringify(raw));
+  expect(prefs.read().toolStamps).toEqual({});
+  expect(prefs.read().coordinator).toBe("coordinator-1");
 });
 
 test("the board shows the notice only for its own listed coordinator", () => {
   const row = { status: "idle", provider: "claude" };
-  expect(coordinatorToolsView("stale", row)).toEqual({ stale: true, certain: true });
-  expect(coordinatorToolsView("stale", { ...row, status: "running" })).toEqual({ stale: true, certain: true });
-  expect(coordinatorToolsView("stale", { ...row, provider: "codex" })).toEqual({ stale: true, certain: false });
+  expect(coordinatorToolsView("stale", row)).toEqual({ stale: true });
+  expect(coordinatorToolsView("stale", { ...row, status: "running" })).toEqual({ stale: true });
+  expect(coordinatorToolsView("stale", { ...row, provider: "codex" })).toBeUndefined();
+  expect(coordinatorToolsView("stale", { ...row, provider: null })).toBeUndefined();
   expect(coordinatorToolsView("current", row)).toBeUndefined();
   expect(coordinatorToolsView("unknown", row)).toBeUndefined();
   // No coordinator, or one on another host.
@@ -178,7 +245,9 @@ test("the snapshot reads the coordinator's conversation only when its stamp diff
   expect(await readCoordinatorTools(counted, same.stamps, row)).toBeUndefined();
   expect(reads).toBe(0);
   const updated = await board(prefs, newBuild);
-  expect(await readCoordinatorTools(counted, updated.stamps, row)).toEqual({ stale: true, certain: true });
+  expect(await readCoordinatorTools(counted, updated.stamps, row)).toEqual({ stale: true });
+  expect(reads).toBe(1);
+  expect(await readCoordinatorTools(counted, updated.stamps, { ...row, provider: "codex" })).toBeUndefined();
   expect(reads).toBe(1);
   expect(await readCoordinatorTools(counted, updated.stamps, { ...row, serverId: "host-b" })).toBeUndefined();
   h.conversations.set("coordinator-1", "conversation-2");
@@ -188,20 +257,16 @@ test("the snapshot reads the coordinator's conversation only when its stamp diff
   expect(await readCoordinatorTools(offline, updated.stamps, row)).toBeUndefined();
 });
 
-test("notice wording in both languages: Claude gets the /clear step, others only the replacement", () => {
+test("notice wording in both languages names the replacement and /clear", () => {
   expect(staleToolsNotice(undefined, ko)).toBeNull();
-  const claude = staleToolsNotice({ stale: true, certain: true }, ko)!;
-  expect(claude.title).toBe("코디네이터가 보드 업데이트 전의 도구 정의를 기억하고 있어 새 기능을 쓰지 못합니다.");
-  expect(claude.clear).toBe(true);
-  expect(claude.steps).toHaveLength(2);
-  expect(claude.steps[1]).toContain("/clear");
-  const other = staleToolsNotice({ stale: true, certain: false }, en)!;
-  expect(other.title).toContain("may still use");
-  expect(other.clear).toBe(false);
-  expect(other.steps.join(" ")).not.toContain("/clear");
-  for (const certain of [true, false]) for (const t of [ko, en]) {
-    const notice = staleToolsNotice({ stale: true, certain }, t)!;
-    for (const text of [notice.title, notice.effect, ...notice.steps]) { expect(text.length).toBeGreaterThan(0); expect(text).not.toContain("—"); }
+  const notice = staleToolsNotice({ stale: true }, ko)!;
+  expect(notice.title).toBe("코디네이터가 보드 업데이트 전의 도구 정의를 기억하고 있어 새 기능을 쓰지 못합니다.");
+  expect(notice.steps).toHaveLength(2);
+  expect(notice.steps[1]).toContain("/clear");
+  expect(staleToolsNotice({ stale: true }, en)!.title).toContain("cannot use new features");
+  for (const t of [ko, en]) {
+    const view = staleToolsNotice({ stale: true }, t)!;
+    for (const text of [view.title, view.effect, ...view.steps]) { expect(text.length).toBeGreaterThan(0); expect(text).not.toContain("\u2014"); }
   }
 });
 

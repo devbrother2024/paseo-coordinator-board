@@ -12,6 +12,7 @@ import { factSchema } from "../shared/board-facts";
 import { assignmentPolicy, hostIdentity } from "../shared/host-assignment";
 import { assignmentLocation, assignmentNotice } from "../shared/dispatch-hosts";
 import { pullJudgmentSchema } from "../shared/pull-judgments";
+import { conversationIdPattern } from "../shared/coordinator-tools";
 
 export const judgment = z.object({
   content: decisionFields.optional(),
@@ -86,7 +87,8 @@ const schema = z.object({
     language: z.enum(["ko", "en"]).optional(),
   }).optional(),
   // For each coordinator, the fingerprint of the board tool definitions its current conversation first called.
-  toolStamps: z.record(z.string(), z.object({ session: z.string().min(1).max(256), fingerprint: z.string().max(128), at: z.iso.datetime() })).default({}),
+  // A stamp the board cannot read is dropped rather than stopping the board.
+  toolStamps: z.record(z.string(), z.object({ session: z.string().regex(conversationIdPattern), fingerprint: z.string().max(128), at: z.iso.datetime() })).catch({}),
 });
 export type Preferences = z.infer<typeof schema>;
 export type DispatchReceipt = Preferences["dispatchReceipts"][string];

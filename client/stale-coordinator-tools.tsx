@@ -20,7 +20,7 @@ export function StaleCoordinatorTools({ tools, theme, onReplace, onOpen }: {
     {notice.steps.map((step, index) => <Text key={index} selectable style={{ color: c.foreground, fontSize: 14 }}>{index + 1}. {step}</Text>)}
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
       {onReplace && <Button theme={theme} selected label={t("새 세션으로 교체", "Replace with a new session")} onPress={onReplace} />}
-      {notice.clear && onOpen && <Button theme={theme} label={t("코디네이터 세션 열기", "Open coordinator session")} onPress={onOpen} />}
+      {onOpen && <Button theme={theme} label={t("코디네이터 세션 열기", "Open coordinator session")} onPress={onOpen} />}
     </View>
   </View>;
 }

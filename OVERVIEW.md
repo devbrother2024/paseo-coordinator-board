@@ -42,7 +42,7 @@ There are two fixes.
 1. Choose **Replace with a new session**. This creates a coordinator in the operations folder and keeps current work and decision cards.
 2. Choose **Open coordinator session** and type `/clear` yourself. A new conversation starts in the same session, without the earlier conversation. The board never types `/clear` or `/compact` for you.
 
-The notice goes away once the new conversation starts. Providers other than Claude Code may store tool definitions differently, so for them the board says the tools may be old and suggests only a replacement. A board tool called with the old definitions also says in its result that a replacement is needed.
+The notice goes away once the new conversation starts. A board tool called with the old definitions also says in its result that a replacement is needed. The board shows this only for Claude Code coordinators. Other providers may receive the new tools when Paseo reopens the session, which the board cannot tell, so it shows nothing for them.
 
 ## Work with a coordinator
 
