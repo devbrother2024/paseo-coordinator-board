@@ -9,9 +9,10 @@ import type { ProjectPullRequests } from "./prs";
 
 type Reader = Pick<ProjectPullRequests, "read">;
 
-// Coordinator verdicts gate merge cards only while a coordinator is designated and the setting is on.
-export function judgedMergeCardsEnabled(scope: Pick<Preferences, "judgedMergeCards" | "coordinator">) {
-  return scope.judgedMergeCards && scope.coordinator !== null;
+// Options for applyPullJudgments. Only the setting turns verdicts off; without a coordinator,
+// GitHub decides new heads but a current non-ready verdict still holds.
+export function judgedMergeCardOptions(scope: Pick<Preferences, "judgedMergeCards" | "coordinator">) {
+  return { enabled: scope.judgedMergeCards, coordinator: scope.coordinator !== null };
 }
 
 export function registerMergeJudgmentSettings(server: PluginServerContext, prefs: PreferenceStore, invalidate: () => void) {

@@ -55,8 +55,25 @@ async function fixture() {
   const ask = (item,snapshot,id:string,key:string) => rpc(askClarification,{
     card:trackedClarificationCard(item,snapshot.sessions),recipientId:id,question:"What changed?",requestKey:key,
   });
-  return {board,answer,ask,owner,ownerPath,configure,project,sendLog,hook};
+  return {board,answer,ask,owner,ownerPath,configure,project,sendLog,hook,ledger};
 }
+
+test("history failures block tracked questions and leave independent records usable", async () => {
+  const f = await fixture();
+  const before = await f.board();
+  const card = before.trackedDecisions.items.find(i => i.id === "warning");
+  const historyPath = join(f.ledger,"live","board-questions.tsv");
+  mkdirSync(historyPath,{recursive:true});
+  const blocked = await f.board();
+  const unavailable = blocked.trackedDecisions.items.find(i => i.id === card.id);
+  expect(unavailable).toMatchObject({ fingerprint:card.fingerprint, historyUnavailable:true });
+  expect(clarificationRecipient(trackedClarificationCard(unavailable,blocked.sessions),blocked)).toBeNull();
+  await expect(f.ask(card,before,"operator","unreadable-history")).rejects.toThrow();
+  expect((await f.answer(unavailable,"operator")).status).toBe("unavailable");
+  expect(f.sendLog).toBeEmpty();
+  const independent = blocked.trackedDecisions.items.find(i => i.id === "independent");
+  expect((await f.answer(independent)).status).toBe("closed");
+});
 
 test("only an operator-configured local owner can receive imported coordinator answers and questions", async () => {
   const f = await fixture(), board = await f.board();

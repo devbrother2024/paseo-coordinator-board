@@ -11,8 +11,10 @@ export type PullJudgment = z.output<typeof pullJudgmentSchema>;
 export const pullJudgmentKey = (repo: string, number: number) => repo + "#" + number;
 
 type Options = {
-  // false when the person turned the setting off or no coordinator is designated.
+  // false only when the person turned the setting off.
   enabled: boolean;
+  // Whether a coordinator is designated to judge new heads.
+  coordinator: boolean;
   judgments: Record<string, PullJudgment>;
   // PRs that a coordinator ledger merge card already raised for the person.
   ledgerPulls: ReadonlySet<string>;
@@ -33,9 +35,13 @@ export function applyPullJudgments<T extends PullRequestItem>(items: readonly T[
     let gate: PullGate;
     if (!options.enabled) gate = "github";
     // A verdict bound to this exact head is the most specific evidence, even over a ledger card.
+    // It still holds while no coordinator is designated.
     else if (current) gate = current.verdict === "ready" ? "judged" : current.verdict;
-    else if (options.ledgerPulls.has(key)) gate = "ledger";
-    else gate = saved ? "stale" : "awaiting";
+    // With nobody to judge a new head, GitHub decides.
+    else if (!options.coordinator) gate = "github";
+    // A verdict on an earlier head means the ledger card predates new commits too.
+    else if (saved) gate = "stale";
+    else gate = options.ledgerPulls.has(key) ? "ledger" : "awaiting";
     const lane = gate === "github" || gate === "ledger" || gate === "judged" ? "review" : "progress";
     return { ...pr, lane, gate, ...(judgment ? { judgment } : {}) } as T;
   });

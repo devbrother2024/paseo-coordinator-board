@@ -83,7 +83,7 @@ const recommendations: Record<Grade, Recommendation[]> = {
   M: [["claude", "claude-opus-5-5", "high"], ["codex", "gpt-6.2-sol", "high"]],
 };
 
-function available(choice: RouteChoice, catalog: CatalogModel[]) {
+export function available(choice: RouteChoice, catalog: CatalogModel[]) {
   return catalog.some(m => m.provider === choice.provider && m.model === choice.model &&
     (choice.effort === null || m.efforts.includes(choice.effort)));
 }
@@ -105,14 +105,9 @@ export function validateCandidates(grade: Grade, candidates: RouteChoice[], cata
   }
 }
 
-export function resolveRoute(grade: Grade, policy: RoutePolicy, catalog: CatalogModel[], needsHooks = false, usage:readonly AccountUsage[] = []): RouteChoice | null {
-  const providers = new Set(catalog.map(m => m.provider));
-  for (const provider of providers) {
-    if (!eligibleProvider(grade, provider, needsHooks, catalog)) providers.delete(provider);
-  }
-  const allowed = catalog.filter(m => providers.has(m.provider));
-  const overrides = policy[grade];
-  if (overrides) return overrides.find(choice => available(choice, allowed)) ?? null;
+// The models the board tries on its own, best first: the recommendation table, then each remaining provider's default.
+export function recommendedRoutes(grade: Grade, catalog: CatalogModel[], needsHooks = false): RouteChoice[] {
+  const allowed = eligibleCatalog(grade, catalog, needsHooks);
   const choices: RouteChoice[] = [];
   for (const [provider, model, effort] of recommendations[grade]) {
     const match = allowed.find(m => m.provider === provider && m.model === model);
@@ -125,5 +120,22 @@ export function resolveRoute(grade: Grade, policy: RoutePolicy, catalog: Catalog
     const effort = grade !== "M" && primary(model.provider) && model.efforts.includes("high") ? "high" : null;
     choices.push({provider:model.provider,model:model.model,effort});
   }
-  return preferCapacity(choices,usage);
+  return choices;
+}
+
+function eligibleCatalog(grade: Grade, catalog: CatalogModel[], needsHooks: boolean) {
+  const providers = new Set(catalog.map(m => m.provider));
+  for (const provider of providers) {
+    if (!eligibleProvider(grade, provider, needsHooks, catalog)) providers.delete(provider);
+  }
+  return catalog.filter(m => providers.has(m.provider));
+}
+
+export function resolveRoute(grade: Grade, policy: RoutePolicy, catalog: CatalogModel[], needsHooks = false, usage:readonly AccountUsage[] = []): RouteChoice | null {
+  const overrides = policy[grade];
+  if (overrides) {
+    const allowed = eligibleCatalog(grade, catalog, needsHooks);
+    return overrides.find(choice => available(choice, allowed)) ?? null;
+  }
+  return preferCapacity(recommendedRoutes(grade, catalog, needsHooks),usage);
 }

@@ -376,13 +376,13 @@ test("first-open titles rank all eligible decisions before limiting the preview 
   expect(f.service.previewTitles(f.selected)).toEqual(["Urgent", "Release waiting", "Today"]);
 });
 
-test("changing display-only priority metadata preserves the original answer receipt", () => {
+test("changing display-only priority and PR reference metadata preserves the original answer receipt", () => {
   const f=fixture();
   const original=row("schedule");
   f.write([original]);
   const card=f.read().items[0];
   expect(f.close(card,"Done").status).toBe("closed");
-  f.write([{...original,dueAt:"2026-11-23",blocksWork:true}]);
+  f.write([{...original,dueAt:"2026-11-23",blocksWork:true,pullRepository:"studio/app",pullTarget:{repo:"studio/app",number:42}}]);
   expect(f.read().items).toEqual([]);
 });
 

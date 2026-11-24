@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PreferenceStore } from "../server/preferences";
-import { judgedMergeCardsEnabled, judgePullTool, registerMergeJudgmentSettings } from "../server/pull-judgments";
+import { judgedMergeCardOptions, judgePullTool, registerMergeJudgmentSettings } from "../server/pull-judgments";
 import { mergeJudgmentSettings, setMergeJudgment, type PullRequestItem } from "../shared/prs";
 
 const scratch: string[] = [];
@@ -91,16 +91,16 @@ test("incomplete input, unknown PRs and unmanaged owners are rejected", async ()
   expect(f.prefs.read().pullJudgments).toEqual({});
 });
 
-test("the setting defaults on, applies only with a coordinator, and turning it off invalidates the board", async () => {
+test("the setting defaults on, reports the coordinator, and turning it off invalidates the board", async () => {
   const f = fixture();
-  expect(judgedMergeCardsEnabled(f.prefs.read())).toBe(true);
-  expect(judgedMergeCardsEnabled({ ...f.prefs.read(), coordinator: null })).toBe(false);
+  expect(judgedMergeCardOptions(f.prefs.read())).toEqual({ enabled: true, coordinator: true });
+  expect(judgedMergeCardOptions({ ...f.prefs.read(), coordinator: null })).toEqual({ enabled: true, coordinator: false });
   const handlers = new Map<string, (input: unknown) => Promise<unknown>>();
   let invalidated = 0;
   registerMergeJudgmentSettings({ handle: (rpc: { name: string }, fn: never) => handlers.set(rpc.name, fn) } as never, f.prefs, () => { invalidated++; });
   expect(await handlers.get(mergeJudgmentSettings.name)!({})).toEqual({ enabled: true });
   await handlers.get(setMergeJudgment.name)!({ enabled: false });
   expect(f.prefs.read().judgedMergeCards).toBe(false);
-  expect(judgedMergeCardsEnabled(f.prefs.read())).toBe(false);
+  expect(judgedMergeCardOptions(f.prefs.read()).enabled).toBe(false);
   expect(invalidated).toBe(1);
 });

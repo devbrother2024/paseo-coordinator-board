@@ -26,7 +26,7 @@ function fixture(ids = ["root","checkout","runtime"], lookupLifecycle?: Construc
   ]);
   const log={local:[] as string[],gh:[] as string[],lookups:[] as string[],native:0,active:0,max:0};
   let now=0;
-  const behavior={fail:false, delay:async (_repo:string)=>{}, beforeOrigin:async (_path:string)=>{}, after:()=>{}};
+  const behavior={fail:false, delay:async (_repo:string)=>{}, beforeOrigin:async (_path:string)=>{}, after:()=>{}, rows:[raw()]};
   const sdk={
     projects:{list:async()=>{log.native++;return {projects:[...roots].map(([projectId,projectRootPath])=>({projectId,projectRootPath}))};}},
     workspaces:{list:async ({filter})=>{log.lookups.push(filter.projectId);return page(spaces.get(filter.projectId)??[]);}},
@@ -34,7 +34,7 @@ function fixture(ids = ["root","checkout","runtime"], lookupLifecycle?: Construc
   const deps={now:()=>now,localOrigin:async p=>{log.local.push(p);await behavior.beforeOrigin(p);return ["/primary","/checkout"].includes(p)?"org/example":null;},
     githubPulls:async repo=>{
       log.gh.push(repo);log.active++;log.max=Math.max(log.max,log.active);
-      try{await behavior.delay(repo);behavior.after();if(behavior.fail)throw Error("private host error");return parseOpenPulls(repo,JSON.stringify([raw()]));}finally{log.active--;}
+      try{await behavior.delay(repo);behavior.after();if(behavior.fail)throw Error("private host error");return parseOpenPulls(repo,JSON.stringify(behavior.rows));}finally{log.active--;}
     }};
   const prs=new ProjectPullRequests(store,deps,undefined,lookupLifecycle);
   let onMapping, onLifecycle;
@@ -120,6 +120,28 @@ test("tracked PR lifecycle reads distinguish merged, closed, open and unavailabl
   expect(calls).toBe(1);
   const moving = fixture(["root"], async () => { moving.store.change(s => {s.projects=[];}); return "MERGED"; });
   expect(await moving.lifecycle(target)).toEqual({state:"UNKNOWN"});
+});
+
+test("read-only PR references reuse the current repository cache and keep merge status behavior", async () => {
+  const target = { repo: "org/example", projectId: "root", number: 1 };
+  const lookedUp: number[] = [];
+  const f = fixture(["root"], async ({number}) => {
+    lookedUp.push(number);
+    return number === 1 ? "DRAFT" : number === 3 ? "CLOSED" : "MERGED";
+  });
+  f.behavior.rows = [raw(1, { isDraft: true }), raw(2)];
+  await f.read();
+  expect(await f.lifecycle({...target, reference:true})).toEqual({state:"DRAFT"});
+  expect(await f.lifecycle({...target, number:2, reference:true})).toEqual({state:"OPEN"});
+  expect(await f.lifecycle({...target, repo:"org/other", reference:true})).toEqual({state:"UNKNOWN"});
+  expect(lookedUp).toEqual([]);
+  expect(await f.lifecycle({...target, number:3, reference:true})).toEqual({state:"CLOSED"});
+  expect(await f.lifecycle({...target, number:4, reference:true})).toEqual({state:"MERGED"});
+  expect(await f.lifecycle(target)).toEqual({state:"OPEN"});
+  expect(lookedUp).toEqual([3,4,1]);
+  f.tick(60_001);
+  await f.lifecycle({...target, reference:true});
+  expect(lookedUp).toEqual([3,4,1,1]);
 });
 
 
