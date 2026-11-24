@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { sourceQuestion } from "../shared/clarifications";
 import type { Note, SessionRow } from "../shared/contract";
 import type { Decision } from "../shared/decision-actions";
-import { lastConversationQuestion, type Evidence } from "./conversation";
+import { conversationQuestionDetails, type Evidence } from "./conversation";
 import type { Preferences } from "./preferences";
 
 export function decorateDecision(row: SessionRow, note: Note | undefined, prefs: Preferences, evidence?: Evidence) {
@@ -35,9 +35,13 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
   } else {
     row.decision = { ...content, version };
     if (content.source === "conversation" && evidence) {
-      const excerpt = lastConversationQuestion(evidence, row.id === prefs.coordinator);
-      if (excerpt?.question === content.question && excerpt.markdown !== content.question) {
-        row.decision.questionMarkdown = excerpt.markdown;
+      const excerpt = conversationQuestionDetails(evidence, row.id === prefs.coordinator);
+      // Display-only fields stay out of the version, so new context never reopens an answered card.
+      if (excerpt?.question === content.question) {
+        if (excerpt.markdown !== content.question) row.decision.questionMarkdown = excerpt.markdown;
+        if (excerpt.context) row.decision.contextMarkdown = excerpt.context;
+        if (excerpt.choices.length) row.decision.choices = excerpt.choices;
+        if (excerpt.missingLabels.length) row.decision.missingLabels = excerpt.missingLabels;
       }
     }
   }

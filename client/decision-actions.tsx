@@ -13,6 +13,8 @@ import { Button, SessionChip, type Theme } from "./controls";
 import { useBoardLanguage } from "./language";
 import type { Card } from "./model";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
+import { QuestionContext } from "./question-context";
+import { choiceRequest, decisionChoiceNotice } from "./choice-display";
 
 type Action = DecisionInput["action"];
 type CoordinationDraft = { text: string; recipientId: string };
@@ -117,6 +119,9 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
     onPress: () => { if (coordination) void submit("coordinate", coordination.text, coordination.recipientId, editorPhotos); },
   };
   const canCoordinate = !!coordinator && coordinator !== session.id;
+  const choiceNotice = formal ? null : decisionChoiceNotice(decision);
+  // A coordinator card that names options without carrying them goes back to the coordinator through the usual request box.
+  const completion = decision?.source === "coordinator" && canCoordinate ? choiceRequest(choiceNotice, true) : null;
   const canRestore = !!decision?.recommendation && !decision.needsInput && (selection !== null || draft !== null);
   const sourceExcerpts = evidence.filter(text => text !== headline);
   const hasEvidence = !!decision?.recommendationReason || sourceExcerpts.length > 0;
@@ -132,6 +137,11 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
       <Text selectable style={{ color: c.foregroundMuted, fontSize: 12, flexShrink: 1 }}>{[marker, priorityLabel].filter(Boolean).join(" · ")}</Text>
       {open && <SessionChip theme={theme} label={t("담당 세션", "Assigned session")} accessibilityLabel={named(t("담당 세션 열기", "Open assigned session")).accessibilityLabel} onPress={() => open(session.id)} />}
     </View>
+    {!formal && decision && <QuestionContext theme={theme} title={session.title} choices={decision.choices} context={decision.contextMarkdown} notice={choiceNotice} />}
+    {completion && !coordination && <View style={wrap}>
+      <Button theme={theme} {...named(t(...completion.label))} disabled={busy || replyPhotos.reading}
+        onPress={() => { setError(null); setCoordination({ recipientId: coordinator!, text: t(...completion.text) }); }} />
+    </View>}
     {formal || !decision ? formal && (pendingRequests ?? <Text style={{ color: c.foregroundMuted }}>
       {t("승인 요청은 담당 세션에서 확인해 주세요.", "Review the approval request in the assigned session.")}
     </Text>) : <>

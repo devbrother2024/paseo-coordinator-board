@@ -15,6 +15,8 @@ import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session
 import { plainDecisionTitle } from "./decision-summary";
 import { HistoryMarkdown } from "./history-markdown";
 import { assignmentReasons } from "../shared/host-assignment";
+import { QuestionContext } from "./question-context";
+import { decisionChoiceNotice } from "./choice-display";
 type ColumnKind = Lane;
 type Actions = { sessionHostLabel?: string; onOpen?: (id:string) => void; onEdit:(id:string) => void };
 
@@ -68,6 +70,8 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
         <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[session.sourceProjectTitle && t(`원래 소속 ${session.sourceProjectTitle}`, `From ${session.sourceProjectTitle}`), session.workspaceTitle, runtime].filter(Boolean).join(" · ")}</Text>
         {!!session.detail && !detailIsQuestion && <HistoryMarkdown theme={theme} source={sessionDetail(session.detail, t)} muted />}
         {!!displayedQuestion && note?.text !== question && <HistoryMarkdown theme={theme} source={displayedQuestion} />}
+        {session.decision && session.decision.source !== "permission" && <QuestionContext theme={theme} title={session.title}
+          choices={session.decision.choices} context={session.decision.contextMarkdown} notice={decisionChoiceNotice(session.decision)} />}
         {noteTitle && note && <View style={{ gap: 3 }}>
           <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{noteTitle}</Text>
           <HistoryMarkdown theme={theme} source={note.text} />
