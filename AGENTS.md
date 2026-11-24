@@ -44,8 +44,9 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 
 ## Standards & References
 
-- 사용자에게 보이는 기능을 바꾸는 PR은 `README.md`(한국어)와 `OVERVIEW.md`(영어)를 같은 내용으로 함께 고치고, `package.json`과 `package-lock.json`의 버전을 함께 올린다. 최근 PR(#11~#18)이 모두 이 셋을 함께 바꿨다.
+- 사용자에게 보이는 기능을 바꾸는 PR은 `README.md`(한국어)와 `OVERVIEW.md`(영어)를 같은 내용으로 함께 고친다. 버전(`package.json`, `package-lock.json`)은 기능 PR에서 올리지 않고 릴리스 PR에서만 올린다. 여러 기능 PR이 동시에 열려도 버전이 충돌하지 않게 하기 위해서다.
 - 한국어 문서와 화면 문구에 em dash를 쓰지 않는다. 마침표, 쉼표, 쌍점, 괄호로 바꾼다.
-- 커밋·PR 제목은 한국어 명령형 한 줄로 쓴다(예: "전송 단축키를 버튼의 호버 및 포커스 안내로 옮겨라"). main에 직접 커밋하지 않고 PR로 올리며, 병합은 squash다.
+- 커밋·PR 제목은 한국어 명령형 한 줄로 쓴다(예: "전송 단축키를 버튼의 호버 및 포커스 안내로 옮겨라").
+- 브랜치: PR은 `next`로 연다(`gh pr create --base next`). `next`에 병합된 변경은 유지관리자 호스트에서 먼저 써 본다. `main`은 공개 배포 버전만 담고, 릴리스 PR(`next` → `main`)로만 바뀐다. 두 브랜치 모두 직접 커밋하지 않는다. 기능 PR 병합은 squash, 릴리스 PR은 merge commit이다. 절차는 `CONTRIBUTING.md`.
 - 외부 기여 PR은 저장소 시크릿 없이 읽기 권한으로만 검증된다(`verify-release.yml`의 `permissions: contents: read`). 의존성, 패키지 스크립트, 워크플로를 바꾸는 PR은 코드보다 먼저 그 부분을 검토한다.
 - Maintenance Policy: 이 파일의 규칙이나 근거 줄 번호가 코드와 어긋나면, 같은 PR에서 고치거나 고칠 것을 PR 본문에 적는다.
