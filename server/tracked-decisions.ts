@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, mkdirSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, parse } from "node:path";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
@@ -10,6 +10,7 @@ import { MAX_WORK_IMAGES, WORK_IMAGE_MIME_TYPES, type WorkImage } from "../share
 import { describePhotos, readLocalPhoto, removeLocalPhotos, saveLocalPhotos } from "./reply-photos";
 import { boardPhotoMessageId } from "../shared/session-photos";
 import { SessionPhotoStore } from "./session-photos";
+import { openNoFollowSync } from "./safe-open";
 import { trackedReplyMessage, trackedReplyOrigin } from "./decision-message";
 import type { Evidence } from "./conversation";
 import type { MergeTarget, PullRequestView } from "../shared/prs";
@@ -51,7 +52,7 @@ function readJson(path:string):{data:unknown;status:"ok"} | {status:"absent"|"in
   let fd:number|undefined;
   try {
     // Only regular files, and never allocate unbounded output for a growing export.
-    fd=openSync(path,constants.O_RDONLY|constants.O_NONBLOCK|(constants.O_NOFOLLOW ?? 0));
+    fd=openNoFollowSync(path);
     const stat=fstatSync(fd);
     if(!stat.isFile() || stat.size>maxBytes) return {status:"invalid"};
     const buffer=Buffer.alloc(stat.size+1);

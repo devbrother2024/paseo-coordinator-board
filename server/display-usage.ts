@@ -1,8 +1,7 @@
-import { constants } from "node:fs";
-import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { accountUsage, hasUsageReading, type AccountUsage } from "../shared/usage-routing";
+import { openNoFollow } from "./safe-open";
 
 const timestamp = z.iso.datetime({offset:true});
 const report = accountUsage.extend({
@@ -22,7 +21,7 @@ export async function readDisplayUsage(directory: string, providers: readonly {i
   if (!eligible.size) return [];
   let file;
   try {
-    file = await open(join(directory, "account-usage.json"), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    file = await openNoFollow(join(directory, "account-usage.json"));
     const stat = await file.stat();
     if (!stat.isFile() || stat.size > maxBytes) return [];
     const bytes = Buffer.alloc(stat.size + 1);

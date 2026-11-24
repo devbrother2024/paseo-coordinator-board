@@ -2,6 +2,7 @@ import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { repositorySlug } from "../shared/prs";
+import { openNoFollowSync } from "./safe-open";
 
 // Only an operator-provided local manifest can name a ledger directory.
 // The UI, sessions, and decision content cannot change which files are opened.
@@ -25,7 +26,7 @@ const entry = z.object({
 const ledger = z.object({ items: z.array(entry) });
 function localFile(path: string, optional = false, ownerFile = false) {
   let fd: number;
-  try { fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | (ownerFile ? constants.O_NOFOLLOW ?? 0 : 0)); }
+  try { fd = ownerFile ? openNoFollowSync(path) : openSync(path, constants.O_RDONLY | constants.O_NONBLOCK); }
   catch (error) {
     if (optional && (error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw new Error("Could not open decision source");

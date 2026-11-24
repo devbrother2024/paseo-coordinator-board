@@ -1,8 +1,9 @@
 import { boardPhotoMessageId } from "../shared/session-photos";
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, mkdirSync, readSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { MAX_WORK_IMAGE_BYTES, workImages, type WorkImage } from "../shared/work-images";
+import { openNoFollowSync } from "./safe-open";
 
 export function photoDigest({data, mimeType}: WorkImage) {
   // Buffer's base64 decoder accepts malformed input. Require the original canonical
@@ -40,7 +41,7 @@ export function saveLocalPhotos(directory:string, receiptKey:string, images: Wor
     mkdirSync(directory, {recursive:true, mode:0o700});
     for (const [index,image] of images.entries()) {
       const path = photoFile(directory, receiptKey, index);
-      const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0), 0o600);
+      const fd = openNoFollowSync(path, "overwrite");
       paths.push(path);
       try { writeFileSync(fd, Buffer.from(image.data, "base64")); }
       finally { closeSync(fd); }
@@ -62,7 +63,7 @@ export function removeLocalPhotos(directory:string, key:string, count:number) {
 export function readLocalPhoto(directory:string, receiptKey:string, index:number, ref:PhotoReference): WorkImage|null {
   let fd:number|undefined;
   try {
-    fd = openSync(photoFile(directory, receiptKey, index), constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
+    fd = openNoFollowSync(photoFile(directory, receiptKey, index));
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > MAX_WORK_IMAGE_BYTES) return null;
     const bytes = Buffer.alloc(stat.size);
