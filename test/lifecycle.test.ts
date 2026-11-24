@@ -21,6 +21,7 @@ function setup() {
   const lifecycle = new CoordinatorLifecycle(prefs, directory);
   const pages = (entries) => ({ entries, pageInfo: { hasMore: false, nextCursor: null } });
   const agents = new Map(), creations = [];
+  const opened: string[] = [];
   const effects = { beforeCreate: async (_id) => {}, afterCreate: async (_id) => {} };
   const pins = { calls: [] as boolean[], pinnedAt: null as string | null, fail: false };
   const workspaceSnapshot = () => ({ id: "operating-workspace", title: "코디네이터 운영", pinnedAt: pins.pinnedAt });
@@ -40,14 +41,56 @@ function setup() {
     } },
   };
   const sdk = {
-    workspaces: { ref: id => { expect(id).toBe(ws.id); return ws; }, open: async path => { expect(path).toBe(directory); return ws; }, list: () => pages([]) },
+    workspaces: { ref: id => { expect(id).toBe(ws.id); return ws; }, open: async path => { opened.push(path); return ws; }, list: () => pages([]) },
     agents: {
       list: () => pages([...agents.values()].map(agent => ({ agent, project: { projectKey: agent.workspaceId === ws.id ? "operate" : "team" } }))),
       ref: id => ({ refresh: async () => agents.has(id) ? { agent: agents.get(id) } : null }),
     },
   };
-  return { path, directory, prefs, lifecycle, sdk, effects, agents, creations, pins, ws };
+  return { path, directory, prefs, lifecycle, sdk, effects, agents, creations, pins, ws, opened };
 }
+
+test.each([
+  ["ko", "코디네이터 운영 (삭제 금지)"],
+  ["en", "Coordinator operations (do not delete)"],
+] as const)("new and replacement coordinators open the %s operations folder", async (language, name) => {
+  const f = setup();
+  const expectedPath = join(f.directory, name);
+  const first = await f.lifecycle.ensure(f.sdk, { ...start, language });
+  const result = await f.lifecycle.ensure(f.sdk, { ...start, language, replace: true, expectedCoordinator: first.sessionId });
+  expect(result.sessionId).not.toBe(first.sessionId);
+  expect(f.opened).toEqual([expectedPath, expectedPath]);
+  expect(f.prefs.read().createdCoordinator?.language).toBe(language);
+});
+
+test.each([true, false])("replacing a legacy coordinator preserves auto-pin preference %s", async autoPin => {
+  const f = setup();
+  f.agents.set("old", { id: "old", workspaceId: "legacy-workspace", status: "idle" });
+  f.prefs.change(scope => {
+    scope.coordinator = "old";
+    scope.createdCoordinator = { id: "old", workspaceId: "legacy-workspace", previous: null, config: start.config };
+    scope.autoPinCoordinatorWorkspace = autoPin;
+  });
+  expect(await f.lifecycle.ensure(f.sdk, { ...start, expectedCoordinator: "old", language: "en" })).toMatchObject({ sessionId: "old", reused: true });
+  expect(f.opened).toEqual([]);
+
+  await f.lifecycle.ensure(f.sdk, { ...start, expectedCoordinator: "old", replace: true, language: "en" });
+  expect(f.opened).toEqual([join(f.directory, "Coordinator operations (do not delete)")]);
+  expect(f.pins.calls).toEqual(autoPin ? [true] : []);
+  expect(f.prefs.read().autoPinCoordinatorWorkspace).toBe(autoPin);
+  expect(f.agents.get("old")?.workspaceId).toBe("legacy-workspace");
+});
+
+test("a device language change does not create or pin a second operations workspace", async () => {
+  const f = setup();
+  const first = await f.lifecycle.ensure(f.sdk, { ...start, language: "en" });
+  const second = await f.lifecycle.ensure(f.sdk, { ...start, expectedCoordinator: first.sessionId, replace: true, language: "ko" });
+  const path = join(f.directory, "Coordinator operations (do not delete)");
+  expect(f.opened).toEqual([path, path]);
+  expect(second.workspaceId).toBe(first.workspaceId);
+  expect(f.prefs.read().createdCoordinator?.language).toBe("en");
+  expect(f.pins.calls).toEqual([true]);
+});
 
 test("신규 설치 두 창이 동시에 시작해도 운영 세션 한 개와 기존 발췌 판단을 유지한다", async () => {
   const f = setup();
@@ -94,13 +137,14 @@ test("교체 승인 전에는 새 세션이 판단할 수 없고, 성공 뒤에�
 test("생성 응답이 끊겨도 이전 코디네이터를 유지하고 재시작 후 같은 ID를 찾아 전환한다", async () => {
   const f = setup();
   f.prefs.change(s => setCoordinator(s, "old"));
-  const input = { ...start, expectedCoordinator: "old", replace: true };
+  const input = { ...start, expectedCoordinator: "old", replace: true, language: "en" as const };
   f.effects.afterCreate = async () => { throw Error("연결이 끊겼습니다"); };
   await expect(f.lifecycle.ensure(f.sdk, input)).rejects.toThrow("연결");
   expect(f.prefs.read().coordinator).toBe("old");
   expect(f.prefs.read().judgments.worker).toEqual(decision);
   const restored = new CoordinatorLifecycle(new PreferenceStore(f.path), f.directory);
-  expect((await restored.ensure(f.sdk, input)).sessionId).toBe(f.creations[0].agentId);
+  expect((await restored.ensure(f.sdk, { ...input, language: "ko" })).sessionId).toBe(f.creations[0].agentId);
+  expect(f.opened).toEqual([join(f.directory, "Coordinator operations (do not delete)"), join(f.directory, "Coordinator operations (do not delete)")]);
   expect(f.creations).toHaveLength(1);
 });
 

@@ -37,7 +37,7 @@ type Props = {
 };
 
 export function OperationsPanel({ theme, settings, coordinator, configured, refreshBoard, openCoordinator, action: { pending, busy, setBusy }, digest }: Props) {
-  const { t, language } = useBoardLanguage();
+  const { t, language, languageReady } = useBoardLanguage();
   const fetchState = useRpc(operationState),
     setup = useRpc(setupCoordinator),
     includeProvider = useRpc(setProviderInclusion),
@@ -184,9 +184,9 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   </>;
 
   function connect() {
-    if (!model || !mode || !configured) return;
+    if (!model || !mode || !configured || !languageReady) return;
     void act(
-      () => setup({ expectedCoordinator: coordinator, replace: !!coordinator, expectedRoute: model, expectedModeId: mode.id }),
+      () => setup({ expectedCoordinator: coordinator, replace: !!coordinator, expectedRoute: model, expectedModeId: mode.id, language }),
       t("운영 세션을 연결했습니다.", "Coordinator session connected."),
     ).then((result) => {
       if (result && live.current) {
@@ -270,7 +270,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
         model ? t(`연결된 모델로 운영 세션을 만듭니다 · ${routeName(model, t)}`, `Create a coordinator session with ${routeName(model, t)}`) :
         data ? explainEmptyRoute(data, "M", t) : t("설정에서 실행기와 모델을 새로 고쳐 주세요.", "Refresh providers and models in Settings.")}</Text>
       {!loading && model && <Text style={{ color: muted }}>{modeText}</Text>}
-      <View style={wrap}><Button theme={theme} label={data?.routing.M ? t("저장한 모델로 시작", "Start with saved model") : t("추천 설정으로 시작", "Start with recommended settings")} disabled={busy || loading || !model || !mode} onPress={connect} /></View>
+      <View style={wrap}><Button theme={theme} label={data?.routing.M ? t("저장한 모델로 시작", "Start with saved model") : t("추천 설정으로 시작", "Start with recommended settings")} disabled={busy || loading || !model || !mode || !languageReady} onPress={connect} /></View>
     </>}
     {feedback}
   </View>;

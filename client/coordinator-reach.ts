@@ -42,16 +42,16 @@ function effect(state: Exclude<CoordinatorReachState, "ok">, role: ReachRole, t:
 }
 
 function steps(reach: CoordinatorReach, role: ReachRole, t: Translate) {
-  const replace = t("돌아오지 않으면 새 코디네이터로 교체하세요. 교체는 운영 폴더를 다시 열어 새 세션을 만들고, 진행 중인 작업과 결정 카드는 유지합니다.",
-    "If it does not return, replace the coordinator. Replacing reopens the operating folder with a new session and keeps current work and decision cards.");
+  const replace = t("세션이 돌아오지 않으면 새 코디네이터로 교체하세요. 운영 폴더에 새 세션을 만들며 진행 중인 작업과 결정 카드는 유지됩니다.",
+    "If the session does not return, replace the coordinator. This creates a session in the operations folder and keeps current work and decision cards.");
   const refresh = t("보드를 새로 고쳐 세션이 다시 보이는지 확인하세요.", "Refresh the board and check that the session is back.");
   const list: string[] = [];
   switch (reach.state) {
     case "project-missing":
     case "workspace-archived":
       list.push(reach.directory
-        ? t(`Paseo에서 이 폴더를 프로젝트로 다시 추가하세요: ${reach.directory} (명령줄에서는 paseo project create <폴더>)`, `Add this folder to Paseo as a project again: ${reach.directory} (from a terminal: paseo project create <folder>)`)
-        : t("Paseo에서 세션이 일하던 폴더를 프로젝트로 다시 추가하세요. (명령줄에서는 paseo project create <폴더>)", "Add the folder the session worked in to Paseo as a project again. (From a terminal: paseo project create <folder>)"),
+        ? t(`Paseo에서 이 폴더를 프로젝트로 다시 추가하세요. "${reach.directory}" (명령줄에서는 paseo project create "<폴더>")`, `Add this folder to Paseo as a project again. "${reach.directory}" (from a terminal, use paseo project create "<folder>")`)
+        : t('Paseo에서 세션이 일하던 폴더를 프로젝트로 다시 추가하세요. (명령줄에서는 paseo project create "<폴더>")', 'Add the folder the session worked in to Paseo as a project again. (From a terminal, use paseo project create "<folder>")'),
         refresh);
       break;
     case "archived":

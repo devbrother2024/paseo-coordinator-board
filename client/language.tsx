@@ -19,7 +19,7 @@ const translators: Record<Language, Translate> = {
 function usePreference() {
   const state = useSettings(languageSetting);
   const language = state.status === "ready" ? state.values.language : "ko";
-  return { state, language, t: translators[language] };
+  return { state, language, t: translators[language], languageReady: state.status === "ready" && !state.saving };
 }
 const Context = createContext<ReturnType<typeof usePreference> | null>(null);
 
@@ -28,9 +28,9 @@ export function BoardLanguageProvider({ children }: { children: ReactNode }) {
   return <Context.Provider value={preference}>{children}</Context.Provider>;
 }
 
-export function useBoardLanguage(): { language: Language; t: Translate } {
+export function useBoardLanguage(): { language: Language; t: Translate; languageReady: boolean } {
   const pref = useContext(Context);
-  return pref ?? { language: "ko", t: translators.ko };
+  return pref ?? { language: "ko", t: translators.ko, languageReady: true };
 }
 
 export function BoardLanguageSetting({ theme }: { theme: Theme }) {

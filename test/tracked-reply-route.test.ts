@@ -8,12 +8,12 @@ import {
   closedRevision, nextFailureStreak, recommendedChoices, recommendedTrackedReply, redirectAwaitsCheck, trackedBasisRecipient, trackedDraftLayout,
   trackedRecovery, trackedReplyBasis, trackedRetryFingerprint,
 } from "../client/tracked-reply-draft";
+import { trackedWorkSession } from "../client/tracked-session-targets";
 import { boardSnapshot, boardScope } from "../shared/contract";
 import { projectFolderMap } from "../shared/project-folders";
 import { linkSession } from "../shared/session-links";
 import {
   legacyTrackedAnswer, resolveTrackedDecision, trackedAnswerLead, trackedAnswerText, trackedDecisionSchema, trackedReplyExample, trackedReplyRoute,
-  trackedSession,
 } from "../shared/tracked-decisions";
 
 const scratch: string[] = [];
@@ -280,7 +280,9 @@ test("a work session in a project on the same folder gets the chip and the reply
     f.agents.set("elsewhere", {project: "studio-copy", status});
     const found = await f.find("palette");
     // The card's session chip and its send button read the same check.
-    const chip = trackedSession(found.item!, found.snapshot.sessions, projectFolderMap(found.snapshot.projects))?.id ?? null;
+    const target = trackedWorkSession(found.item!, {hostLabel: "This host", sessions: found.snapshot.sessions, hosts: [],
+      folders: projectFolderMap(found.snapshot.projects)});
+    const chip = target?.kind === "local" ? target.id : null;
     return {f, ...found, chip};
   };
   const linked = await open(alias);
