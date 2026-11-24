@@ -3,16 +3,20 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import contribute from "../index.server";
+import { reachNotice } from "../client/coordinator-reach";
 import { boardScope, boardSnapshot } from "../shared/contract";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 // A board with one managed project, one worker, and a coordinator the board created in its operating folder.
-async function fixture({ managed = true } = {}) {
+async function fixture({ managed = true, language }: { managed?: boolean; language?: "ko" | "en" } = {}) {
   const root = mkdtempSync(join(tmpdir(), "board-unreachable-")); roots.push(root);
   const data = join(root, "plugin-data", "coordinator-board"); mkdirSync(data, { recursive: true });
-  const operatingFolder = join(root, "plugin-workspaces", "coordinator-board");
+  const operatingRoot = join(root, "plugin-workspaces");
+  const name = language === "ko" ? "코디네이터 운영 (삭제 금지)"
+    : language === "en" ? "Coordinator operations (do not delete)" : "coordinator-board";
+  const operatingFolder = join(operatingRoot, name);
   const state = {
     projects: [{ projectId: "studio", projectDisplayName: "Studio", projectRootPath: "/synthetic/studio" },
       { projectId: "operate", projectDisplayName: "Operations", projectRootPath: operatingFolder }],
@@ -48,7 +52,7 @@ async function fixture({ managed = true } = {}) {
     },
   };
   if (managed) writeFileSync(join(data, "scope.json"), JSON.stringify({ projects: ["studio"], coordinator: "coordinator", judgments: {},
-    createdCoordinator: { id: "coordinator", previous: null, workspaceId: "operating-space", config: { provider: "codex/fixture-model" } } }));
+    createdCoordinator: { id: "coordinator", previous: null, workspaceId: "operating-space", config: { provider: "codex/fixture-model" }, language } }));
   const handlers = new Map<string, any>();
   const old = process.env.PASEO_HOME;
   process.env.PASEO_HOME = root;
@@ -59,7 +63,7 @@ async function fixture({ managed = true } = {}) {
     await rpc(boardScope, { kind: "project", projectId: "studio", enabled: true });
     await rpc(boardScope, { kind: "coordinator", sessionId: "coordinator" });
   }
-  return { state, operatingFolder, rpc, snapshot: () => rpc(boardSnapshot, { fresh: true }) as Promise<any> };
+  return { state, operatingRoot, operatingFolder, rpc, snapshot: () => rpc(boardSnapshot, { fresh: true }) as Promise<any> };
 }
 
 test("a listed coordinator is reachable and costs no extra lookup", async () => {
@@ -136,11 +140,31 @@ test("an existing session chosen as coordinator is checked the same way, and no 
 test("the operating folder's project is marked so settings can warn before it is removed", async () => {
   const f = await fixture();
   const projects = (await f.snapshot()).projects;
-  expect(projects.find((p: any) => p.id === "operate")).toMatchObject({ operating: true, selected: false });
+  expect(projects.find((p: any) => p.id === "operate")).toMatchObject({ operating: true, operatingActive: true, selected: false });
   expect(projects.find((p: any) => p.id === "studio").operating).toBeUndefined();
   const picked = await fixture({ managed: false });
   // A work project that merely hosts a chosen coordinator session is not the operating folder.
   expect((await picked.snapshot()).projects.find((p: any) => p.id === "studio").operating).toBeUndefined();
+});
+
+test.each(["ko", "en"] as const)("the %s operations project is identified and recovery names its own folder", async language => {
+  const f = await fixture({ language });
+  const otherName = language === "ko" ? "Coordinator operations (do not delete)" : "코디네이터 운영 (삭제 금지)";
+  const siblings = ["coordinator-board", otherName].map(name => ({
+    projectId: name, projectDisplayName: name, projectRootPath: join(f.operatingRoot, name),
+  }));
+  f.state.projects.push(...siblings);
+  const view = await f.snapshot();
+  expect(view.projects.filter((p: any) => p.operating).map((p: any) => [p.id, p.operatingActive]))
+    .toEqual([["operate", true], ...siblings.map(p => [p.projectId, false])]);
+  f.state.projects = f.state.projects.filter(p => p.projectId !== "operate");
+  f.state.agents.delete("coordinator");
+
+  const { coordinatorReach } = await f.snapshot();
+  expect(coordinatorReach).toEqual({ state: "project-missing", directory: f.operatingFolder });
+  const notice = reachNotice(coordinatorReach, (ko, en) => language === "ko" ? ko : en);
+  expect(notice?.steps[0]).toContain(`"${f.operatingFolder}"`);
+  expect(notice?.steps[0]).toContain(language === "ko" ? 'paseo project create "<폴더>"' : 'paseo project create "<folder>"');
 });
 
 test("the operating folder is recognised through another spelling of its path", async () => {
@@ -157,6 +181,8 @@ test("the operating folder is recognised through another spelling of its path", 
   // Folders that no longer exist are compared by their resolved names.
   expect(await sameFolder(join(root, "gone"), join(root, "gone", "."))).toBe(true);
   expect(await sameFolder(join(root, "gone"), join(root, "Gone"))).toBe(process.platform === "win32");
+  const missing = join(root, "코디네이터 운영 (삭제 금지)");
+  expect(await sameFolder(missing, missing.normalize("NFD"), async () => new Map())).toBe(process.platform === "darwin");
   expect(await sameFolder("", folder)).toBe(false);
 });
 
@@ -175,6 +201,7 @@ test("operating project warnings reuse selected identities without probing unrel
     { id: "selected-alias", path: join(tmpdir(), "fixture-selected-alias"), rootKey: "1:8" },
     { id: "unrelated", path: join(tmpdir(), "fixture-offline-volume") },
   ];
-  expect(await operatingProjects(catalog, operatingFolder, scopes, undefined, folderReader)).toEqual(new Set(["operating", "selected-alias"]));
+  expect(await operatingProjects(catalog, [operatingFolder], scopes, undefined, folderReader, [operatingFolder]))
+    .toEqual(new Map([["operating", true], ["selected-alias", true]]));
   expect(read).toEqual([operatingFolder]);
 });

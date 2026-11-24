@@ -1,13 +1,15 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { operatingDirectory } from "./operating-folders";
 import { type Preferences, PreferenceStore, setCoordinator } from "./preferences";
 
 type Sdk = PluginHandlerContext["paseo"];
 type Agent = NonNullable<Awaited<ReturnType<ReturnType<Sdk["agents"]["ref"]>["refresh"]>>>["agent"];
 type Pending = NonNullable<Preferences["pendingCoordinator"]>;
 type Start = {
-  expectedCoordinator: string | null; replace: boolean; config: Pending["config"]; verifyRoute?: (scope: Preferences) => void;
+  expectedCoordinator: string | null; replace: boolean; config: Pending["config"]; language?: Pending["language"];
+  verifyRoute?: (scope: Preferences) => void;
 };
 
 const ownerKey = "coordinator-board/operating-session";
@@ -43,7 +45,7 @@ const charter = [
 export class CoordinatorLifecycle {
   private queue: Promise<void> = Promise.resolve();
 
-  constructor(private readonly prefs: PreferenceStore, private readonly directory: string) {}
+  constructor(private readonly prefs: PreferenceStore, private readonly operatingRoot: string) {}
 
   private inOrder<T>(operation: () => Promise<T>) {
     const result = this.queue.then(operation);
@@ -90,7 +92,7 @@ export class CoordinatorLifecycle {
     if (!result.pinnedAt) throw new Error("워크스페이스 고정을 확인할 수 없습니다.");
   }
 
-  private async prepare(paseo: Sdk, { expectedCoordinator, replace, config, verifyRoute }: Start) {
+  private async prepare(paseo: Sdk, { expectedCoordinator, replace, config, language = "ko", verifyRoute }: Start) {
     const scope = this.prefs.read();
     verifyRoute?.(scope);
     if (!scope.projects.length) throw new Error("먼저 관리할 프로젝트를 선택해 주세요.");
@@ -125,7 +127,9 @@ export class CoordinatorLifecycle {
     // Keep the candidate ID across disconnects and plugin restarts. A retry can
     // adopt the exact same daemon session even if its creation receipt was lost.
     const saved = scope.pendingCoordinator;
-    const pending: Pending = saved?.previous === current && sameConfig(saved.config, config) ? saved : { id: randomUUID(), previous: current, config };
+    // Once a named folder exists, use it across devices with different board languages.
+    const pending: Pending = saved?.previous === current && sameConfig(saved.config, config) ? saved
+      : { id: randomUUID(), previous: current, config, language: prepared?.language ?? language };
     this.prefs.change(s => {
       if (!s.projects.length || s.coordinator !== current || s.pendingCoordinator?.id !== saved?.id) throw new Error(stale);
       s.pendingCoordinator = pending;
@@ -135,9 +139,10 @@ export class CoordinatorLifecycle {
       if (!s.projects.length || s.coordinator !== current || s.pendingCoordinator?.id !== pending.id) throw new Error(stale);
     };
 
-    mkdirSync(this.directory, { recursive: true, mode: 0o700 });
-    const workspace = await paseo.workspaces.open(this.directory);
-    if (!workspace.current()?.title) await workspace.setTitle("코디네이터 운영");
+    const directory = operatingDirectory(this.operatingRoot, pending.language);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const workspace = await paseo.workspaces.open(directory);
+    if (!workspace.current()?.title) await workspace.setTitle(pending.language === "en" ? "Coordinator operations" : "코디네이터 운영");
     const handle = paseo.agents.ref(pending.id);
     let snapshot = (await handle.refresh())?.agent;
     requirePending(this.prefs.read());
@@ -163,10 +168,10 @@ export class CoordinatorLifecycle {
     this.prefs.change(s => {
       requirePending(s);
       setCoordinator(s, pending.id);
-      s.createdCoordinator = { id: pending.id, previous: current, workspaceId: workspace.id, config };
+      s.createdCoordinator = { ...pending, workspaceId: workspace.id };
     });
     const result = { sessionId: pending.id, workspaceId: workspace.id, reused: false };
-    // A rotation reuses the workspace. Preserve a person's earlier manual unpin.
+    // When a rotation reuses the workspace, preserve a person's earlier manual unpin.
     if (prepared?.workspaceId !== workspace.id && this.prefs.read().autoPinCoordinatorWorkspace) {
       try { await this.pinWorkspace(paseo, pending.id, workspace.id, true); }
       catch { return { ...result, pinFailed: true }; }

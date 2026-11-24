@@ -30,6 +30,7 @@ import { BoardFacts } from "./server/board-facts";
 import { ProjectRootReader } from "./server/project-root";
 import { recordDigestCompletion } from "./server/digest";
 import { coordinatorReach, operatingProjects } from "./server/coordinator-reach";
+import { operatingDirectories, operatingDirectory } from "./server/operating-folders";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(hostVisibility);
@@ -42,8 +43,9 @@ export default function contribute(server: PluginServerContext) {
   const projectRoots = new ProjectRootReader();
   const facts = new BoardFacts(prefs, notes, reader);
   facts.register(server);
-  const operatingFolder = join(home, "plugin-workspaces", "coordinator-board");
-  const operations = createOperations(prefs, operatingFolder, facts);
+  const operatingRoot = join(home, "plugin-workspaces");
+  const operatingFolders = operatingDirectories(operatingRoot);
+  const operations = createOperations(prefs, operatingRoot, facts);
   operations.register(server);
   registerSessionLinks(server, prefs);
   const decisions = new DecisionSender(prefs, notes, reader);
@@ -126,9 +128,12 @@ export default function contribute(server: PluginServerContext) {
     const clarifications = clarificationHistory(prefs, targets, evidence);
     const listedCoordinator = coordinatorRow?.id === latest.coordinator ? coordinatorRow : undefined;
     const projects = [...choices.values()];
-    const reach = await coordinatorReach(paseo, latest, listedCoordinator, operatingFolder, projects, projectRoots);
-    const operating = await operatingProjects(projects, operatingFolder, latest, listedCoordinator, projectRoots);
-    const knownProjects = projects.map(p => ({ ...p, selected: selected.has(p.id), ...(operating.has(p.id) ? { operating: true } : {}) }));
+    const reach = await coordinatorReach(paseo, latest, listedCoordinator, operatingRoot, projects, projectRoots);
+    const inUseFolders = [latest.createdCoordinator?.id === latest.coordinator ? latest.createdCoordinator : undefined, latest.pendingCoordinator]
+      .flatMap(record => record ? [operatingDirectory(operatingRoot, record.language)] : []);
+    const operating = await operatingProjects(projects, operatingFolders, latest, listedCoordinator, projectRoots, inUseFolders);
+    const knownProjects = projects.map(p => ({ ...p, selected: selected.has(p.id),
+      ...(operating.has(p.id) ? { operating: true, operatingActive: operating.get(p.id) } : {}) }));
     const missingProjects = latest.projects.filter(id => !selected.has(id)).map(id => ({
       id, title: id, path: "", selected: true, missing: true as const, temporary: false,
     }));

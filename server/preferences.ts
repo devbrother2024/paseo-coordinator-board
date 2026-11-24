@@ -53,9 +53,11 @@ const schema = z.object({
   pendingCoordinator: z.object({
     id: z.string(), previous: z.string().nullable(),
     config: coordinatorConfig,
+    language: z.enum(["ko", "en"]).optional(),
   }).optional(),
   createdCoordinator: z.object({
     id: z.string(), previous: z.string().nullable(), workspaceId: z.string(), config: coordinatorConfig,
+    language: z.enum(["ko", "en"]).optional(),
   }).optional(),
 });
 export type Preferences = z.infer<typeof schema>;

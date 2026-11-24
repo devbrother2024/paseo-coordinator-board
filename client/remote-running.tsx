@@ -15,6 +15,7 @@ export function useRemoteRunning(current: {id:string;label:string}, projects:Loc
   const scope = remoteScope(projects, repositories);
   const registered = enabled && scope.selected.length && visibility.status === "ready"
     ? boardHosts(current, hosts).filter(host => host.serverId !== current.id && host.status === "online" && !visibility.values.hidden.includes(host.serverId))
+      .map(host => ({ ...host, registeredLabel: hosts.find(entry => entry.serverId === host.serverId)?.label ?? host.label }))
     : [];
   const key = JSON.stringify([current.id, scope, registered.map(h => [h.serverId,h.label])]);
   const [cache, setCache] = useState<{key:string; groups:RemoteGroup[]}>({key:"", groups:[]});
@@ -41,7 +42,7 @@ export function useRemoteRunning(current: {id:string;label:string}, projects:Loc
     return () => { active = false; timers.forEach(clearInterval); };
   }, [key]);
   const groups = cache.key === key ? cache.groups : [];
-  return { groups, loading: enabled && (visibility.status === "loading" || groups.length < registered.length) };
+  return { groups, hosts: registered, loading: enabled && (visibility.status === "loading" || groups.length < registered.length) };
 }
 
 export function RemoteRunning({groups, projects, theme, open}: {groups:RemoteGroup[];projects:LocalProject[];theme:Theme;open?:Open}) {
