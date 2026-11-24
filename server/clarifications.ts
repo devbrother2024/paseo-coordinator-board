@@ -24,7 +24,7 @@ type Stored = Preferences["clarifications"][string];
 type Target = NonNullable<ReturnType<typeof clarificationTarget>>;
 type View = ClarificationView & { notes: Record<string, Note> };
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
-const changed = "원래 질문이나 담당 세션이 바뀌었습니다. 카드를 새로 고쳐 주세요.";
+const changed = "원래 질문이나 작업 세션이 바뀌었습니다. 카드를 새로 고쳐 주세요.";
 const uncertain = "추가 질문의 전송 여부를 확인하지 못했습니다. 같은 내용으로 다시 확인해 주세요.";
 
 function requestId(key: string) {

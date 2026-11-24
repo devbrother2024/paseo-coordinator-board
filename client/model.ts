@@ -22,7 +22,7 @@ export function laneLabel(lane: Lane, t: Translate) { return t(labels[lane], lan
 export function noteLabel(kind: keyof typeof noteLabels, t: Translate) { return t(noteLabels[kind], noteEnglish[kind]); }
 
 const statusPhrases: Record<string, string> = {
-  "답장을 보냈습니다. 담당 세션의 결과를 기다립니다.": "Reply sent. Waiting for the assigned session’s result.",
+  "답장을 보냈습니다. 작업 세션의 결과를 기다립니다.": "Reply sent. Waiting for the work session’s result.",
   "세션에서 응답 요청 확인": "Review the request in the session",
   "오류 확인 필요": "Error needs review",
   "작업 중": "In progress",

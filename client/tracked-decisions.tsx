@@ -59,12 +59,12 @@ const reasons: Record<TrackedReplyReason, readonly [string, string]> = {
   "queue-stopped": ["자동 전송이 중단됐습니다. 카드와 받는 세션을 확인해 주세요.", "Automatic delivery stopped. Check the card and its recipient."],
 };
 const blocks: Record<TrackedReplyBlock, readonly [string, string]> = {
-  closed: ["담당 세션이 종료되어 원래 세션에는 보낼 수 없습니다.", "The assigned session has ended, so the reply cannot go to it."],
-  error: ["담당 세션이 오류 상태라 원래 세션에는 보낼 수 없습니다.", "The assigned session is in an error state, so the reply cannot go to it."],
-  missing: ["담당 세션을 이 호스트에서 찾지 못해 원래 세션에는 보낼 수 없습니다.", "The assigned session was not found on this host."],
-  "other-project": ["담당 세션이 이 카드와 다른 프로젝트에 있어 바로 보낼 수 없습니다. 설정 → 다른 프로젝트의 세션 하나 연결에서 카드의 프로젝트로 연결하면 바로 보낼 수 있습니다.", "The assigned session belongs to another project. Use Settings → Link a session from another project to link it to this card’s project and reply directly."],
-  "other-host": ["담당 세션이 다른 호스트에 있어 이 보드에서 보낼 수 없습니다.", "The assigned session is on another host and cannot receive replies from this board."],
-  "no-session": ["카드에 담당 세션이 적혀 있지 않습니다.", "The card does not name an assigned session."],
+  closed: ["작업 세션이 종료되어 원래 세션에는 보낼 수 없습니다.", "The work session has ended, so the reply cannot go to it."],
+  error: ["작업 세션이 오류 상태라 원래 세션에는 보낼 수 없습니다.", "The work session is in an error state, so the reply cannot go to it."],
+  missing: ["작업 세션을 이 호스트에서 찾지 못해 원래 세션에는 보낼 수 없습니다.", "The work session was not found on this host."],
+  "other-project": ["작업 세션이 이 카드와 다른 프로젝트에 있어 바로 보낼 수 없습니다. 설정 → 다른 프로젝트의 세션 하나 연결에서 카드의 프로젝트로 연결하면 바로 보낼 수 있습니다.", "The work session belongs to another project. Use Settings → Link a session from another project to link it to this card’s project and reply directly."],
+  "other-host": ["작업 세션이 다른 호스트에 있어 이 보드에서 보낼 수 없습니다.", "The work session is on another host and cannot receive replies from this board."],
+  "no-session": ["카드에 작업 세션이 적혀 있지 않습니다.", "The card does not name a work session."],
   "owner-unverified": ["이 호스트에서 원장의 운영 코디네이터를 확인할 수 없습니다.", "The ledger owner could not be verified on this host."],
   "no-coordinator": ["보드 코디네이터가 지정되지 않았습니다.", "No board coordinator is assigned."],
 };
@@ -117,7 +117,7 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
   const followupTitle = articleChoice ? t("글 작성 선택", "Article writing choice") : t("후속 질문", "Follow-up questions");
   const source = item.projectTitle || item.projectId;
   const where = item.where === "human" ? t("직접 처리", "Your action")
-    : item.where === "session" ? t("담당 세션", "Assigned session")
+    : item.where === "session" ? t("작업 세션", "Work session")
     : item.where === "manager" ? t("코디네이터", "Coordinator") : null;
   const named = (label: string) => ({ label, accessibilityLabel: item.title + " · " + label });
   const recordActions = !item.matchedSessionId || !!item.questions.length;
@@ -156,7 +156,7 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
   const sendLabel = owned
     ? followupOnly ? t("운영 코디네이터에 후속 답장 보내기", "Send follow-up reply to ledger owner") : t("운영 코디네이터에 답장 보내기", "Send reply to ledger owner")
     : item.where === "session"
-    ? followupOnly ? t("담당 세션에 후속 답장 보내기", "Send follow-up reply to assigned session") : t("담당 세션에 답장 보내기", "Send reply to assigned session")
+    ? followupOnly ? t("작업 세션에 후속 답장 보내기", "Send follow-up reply to work session") : t("작업 세션에 답장 보내기", "Send reply to work session")
     : followupOnly ? t("코디네이터에 후속 답장 보내기", "Send follow-up reply to coordinator") : t("코디네이터에 답장 보내기", "Send reply to coordinator");
   const hasPhotos = attachments.photos.length > 0;
   const hasAnswer = Boolean(answer || hasPhotos);
@@ -273,7 +273,7 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
   const ownerLabel = item.sourceCoordinatorId !== undefined ? t("운영 코디네이터 세션 열기", "Open ledger owner session") : t("코디네이터 세션 열기", "Open coordinator session");
   const openSession = coordinatorCard || outcome?.mode === "fallback"
     ? links.owner && { open: links.owner.open, label: ownerLabel }
-    : links.source && { open: links.source, label: t("담당 세션 열기", "Open assigned session") };
+    : links.source && { open: links.source, label: t("작업 세션 열기", "Open work session") };
   const notice = noticeText();
   const unsent = !keepsUnsent && needsRefresh && outcome?.answer;
 

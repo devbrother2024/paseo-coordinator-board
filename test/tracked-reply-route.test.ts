@@ -135,7 +135,7 @@ test("an owner the board cannot find on this host is reported missing, and a rep
   expect(await f.reply(item, {recipientId: "general"})).toEqual({status: "sent"});
 });
 
-test("a closed assigned session is never offered; the reply can go to the verified ledger owner once", async () => {
+test("a closed work session is never offered; the reply can go to the verified ledger owner once", async () => {
   const f = await fixture([card("cleanup", {where: "session", agentId: "worker", recommend: ["Delete"], howToAnswer: "Tell the worker: delete / keep"})]);
   const {item, route} = await f.find("cleanup");
   expect(route).toEqual({targetId: "worker", recipientId: null, fallbackId: "operator", blocked: "closed"});

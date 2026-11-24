@@ -44,7 +44,7 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
   if (content.source !== "permission" && answer?.version === version) {
     row.decisionAnswered = true;
     row.lane = "review";
-    row.detail = "답장을 보냈습니다. 담당 세션의 결과를 기다립니다.";
+    row.detail = "답장을 보냈습니다. 작업 세션의 결과를 기다립니다.";
   } else {
     row.decision = { ...content, version };
     if (content.source === "conversation" && evidence) {
