@@ -13,7 +13,7 @@ import { HistoryMarkdown } from "./history-markdown";
 import { TrackedPullStatus } from "./pull-requests";
 import { useBoardLanguage } from "./language";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
-import { optionId, recommendedChoices, recommendedTrackedReply, trackedReplyBasis } from "./tracked-reply-draft";
+import { nextFailureStreak, optionId, recommendedChoices, recommendedTrackedReply, trackedReplyBasis, type FailureStreak } from "./tracked-reply-draft";
 
 import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session-chips";
 
@@ -93,6 +93,7 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
   const [typed, setTyped] = useState<Record<number, string | undefined>>({});
   const [selected, setSelected] = useState<Record<number, string[]>>({});
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [streak, setStreak] = useState<FailureStreak>(null);
   const result = outcome?.status ?? null;
   useEffect(()=>{
     if (queue && result==="queued") setOutcome(null);
@@ -120,6 +121,8 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
   const isClosed = !!outcome && outcome.fingerprint === item.fingerprint && (result === "sent" || result === "closed" || result === "already-closed");
   const needsRefresh = result === "out-of-scope" || result === "unavailable" || (result === "changed" && !(outcome?.reason && recoverable.has(outcome.reason)));
   const awaitingRevision = outcome?.reason === "revised" && outcome.fingerprint === item.fingerprint;
+  const blocking = result === "changed" && (needsRefresh || awaitingRevision || (outcome?.reason !== "revised" && !!outcome?.reason && recoverable.has(outcome.reason)));
+  const stuck = blocking && (streak?.count ?? 0) >= 2;
   const example = trackedReplyExample(item);
   const template = /<[^>]+>/.test(example);
   const recommendation = recommendedTrackedReply(item);
@@ -199,7 +202,7 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
     pending.current=true; setBusy(true);
     try {
       const {canceled}=await cancel({source:item.source,id:item.id,projectId:item.projectId,fingerprint:item.fingerprint,messageId:queue.messageId});
-      setOutcome(canceled ? null : { status: "changed", fingerprint: item.fingerprint });
+      setOutcome(canceled ? null : { status: "changed", fingerprint: item.fingerprint }); setStreak(null);
       await onResolved({ status: canceled ? "queued" : "changed" });
     } catch { setRefreshFailed(true); }
     finally { pending.current=false; setBusy(false); }
@@ -225,6 +228,7 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
     } catch { response = { status: send ? "unconfirmed" : "unavailable" }; }
     const attempt: TrackedOutcome = { ...response, mode, ...(text.trim() ? { answer: text.trim() } : {}), ...(to ? { recipientId: to } : {}) };
     setOutcome({ ...attempt, fingerprint }); setConfirming(false);
+    setStreak(previous => nextFailureStreak(previous, response, to));
     try { await onResolved(attempt); } catch { setRefreshFailed(true); }
     finally { pending.current = false; setBusy(false); }
   }
@@ -252,6 +256,18 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
     const next = fallbackId ? t(fallbackName + "에게 대신 보내거나 보드에만 저장할 수 있습니다.", "You can send it to the " + fallbackName + " instead, or save it on the board.") : save;
     return t(blocks[blocked][0], blocks[blocked][1]) + " " + next;
   }
+  function nextStep() {
+    const reason = outcome?.reason;
+    return t("새로 고친 뒤에도 같은 이유로 보내지 못했습니다.", "This failed again for the same reason after refreshing.") + " " + (reason === "revised"
+      ? t("카드가 계속 바뀌고 있거나 보드 목록이 아직 최신이 아닙니다. 세션을 열어 직접 답하거나 잠시 뒤 다시 보내 주세요.", "The card keeps changing or the board has not caught up. Answer in the session directly, or try again shortly.")
+      : reason === "conflict" ? t("최근 결정 기록에서 이미 기록된 답을 확인해 주세요.", "Check the reply already recorded in recent decision activity.")
+      : reason === "removed" ? t("세션을 열어 이 카드가 이미 처리됐는지 확인해 주세요.", "Open the session to check whether this card was already handled.")
+      : t("받는 세션을 열어 상태를 확인하거나 그 세션에 직접 답해 주세요. 답은 보드에만 저장할 수도 있습니다.", "Open the receiving session to check it or answer there directly. You can also save the answer on the board."));
+  }
+  const ownerLabel = item.sourceCoordinatorId !== undefined ? t("운영 코디네이터 세션 열기", "Open ledger owner session") : t("코디네이터 세션 열기", "Open coordinator session");
+  const openSession = coordinatorCard || outcome?.mode === "fallback"
+    ? links.owner && { open: links.owner.open, label: ownerLabel }
+    : links.source && { open: links.source, label: t("담당 세션 열기", "Open assigned session") };
   const notice = noticeText();
   const unsent = !keepsUnsent && needsRefresh && outcome?.answer;
 
@@ -402,7 +418,11 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
       <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{t("보내지 못한 답", "Unsent reply")}</Text>
       <Text selectable style={{ color: c.foreground }}>{unsent}</Text>
     </View>}
-    {(needsRefresh || awaitingRevision) && <View style={wrap}><Button theme={theme} {...named(t("결정 기록 새로 고침", "Refresh decision record"))}
+    {stuck && <View style={{ gap: 5 }}>
+      <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{nextStep()}</Text>
+      {openSession && <View style={wrap}><Button theme={theme} {...named(openSession.label)} onPress={openSession.open} /></View>}
+    </View>}
+    {(needsRefresh || awaitingRevision) && !stuck && <View style={wrap}><Button theme={theme} {...named(t("결정 기록 새로 고침", "Refresh decision record"))}
       disabled={busy} onPress={() => void refreshRecord()} /></View>}
     {refreshFailed && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{t("최신 목록을 다시 불러오지 못했습니다. 보드를 새로 고쳐 주세요.", "Could not reload the list. Refresh the board.")}</Text>}
   </View>;

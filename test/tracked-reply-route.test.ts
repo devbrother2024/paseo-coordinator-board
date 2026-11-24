@@ -1,10 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import contribute from "../index.server";
 import { recordActionKey, recordRowKey } from "../client/decision-receipts";
-import { recommendedChoices, recommendedTrackedReply, trackedReplyBasis } from "../client/tracked-reply-draft";
+import { nextFailureStreak, recommendedChoices, recommendedTrackedReply, trackedReplyBasis } from "../client/tracked-reply-draft";
 import { boardSnapshot, boardScope } from "../shared/contract";
 import { linkSession } from "../shared/session-links";
 import { resolveTrackedDecision, trackedDecisionSchema, trackedReplyExample, trackedReplyRoute } from "../shared/tracked-decisions";
@@ -36,13 +36,14 @@ async function fixture(items: Record<string, unknown>[], owner = "operator") {
     ["elsewhere", {project: "studio-copy", status: "idle"}],
   ]);
   const sent: {id: string; text: string}[] = [];
+  const hidden = new Set<string>();
   const actor = (id: string) => ({id, title: id, updatedAt: "1", status: agents.get(id)!.status, pendingPermissions: []});
   const page = (entries: unknown[]) => ({entries, pageInfo: {hasMore: false, nextCursor: null}});
   const sdk = {
     workspaces: {list: async () => page([])},
     projects: {list: async () => ({projects: ["studio", "studio-copy"].map(projectId => ({projectId, projectDisplayName: projectId, projectRootPath: ""}))})},
     agents: {
-      list: async () => page([...agents].map(([id, agent]) => ({agent: actor(id), project: {projectKey: agent.project}}))),
+      list: async () => page([...agents].filter(([id]) => !hidden.has(id)).map(([id, agent]) => ({agent: actor(id), project: {projectKey: agent.project}}))),
       ref: (id: string) => ({
         refresh: async () => agents.has(id) ? {agent: actor(id)} : null,
         timeline: {refetch: async () => ({epoch: id, entries: []})},
@@ -67,8 +68,63 @@ async function fixture(items: Record<string, unknown>[], owner = "operator") {
   });
   const link = (input) => rpc(linkSession, input);
   const context = (index = 0) => JSON.parse(sent[index].text.split("\n")[1]);
-  return {board, find, reply, link, context, agents, sent, ledgerItems, writeLedger, setOwner};
+  // The board created this coordinator in its own workspace, outside the selected projects.
+  const createdBy = (id: string) => {
+    const scopePath = join(data, "scope.json"), scope = JSON.parse(readFileSync(scopePath, "utf8"));
+    writeFileSync(scopePath, JSON.stringify({...scope, createdCoordinator: {id, previous: null, workspaceId: "board-workspace", config: {provider: "claude"}}}));
+    agents.set(id, {project: "board-workspace", status: "idle"});
+  };
+  return {board, find, reply, link, context, agents, hidden, sent, ledgerItems, writeLedger, setOwner, createdBy};
 }
+
+const tenQuestions = Array.from({length: 10}, (_, index) => ({id: "Q" + (index + 1), text: "Question " + (index + 1),
+  options: [{key: "A", text: "Yes", recommended: true}, {key: "B", text: "No"}]}));
+
+test("coordinator cards owned by the board's own coordinator send with no or ten questions", async () => {
+  const f = await fixture([card("icon", {where: "manager", recommend: ["Red"]}), card("plan", {where: "manager", questions: tenQuestions})], "general");
+  f.createdBy("general");
+  const {snapshot} = await f.find("icon");
+  const [icon, plan] = snapshot.trackedDecisions.items;
+  for (const item of [icon, plan]) {
+    expect(trackedReplyRoute(item, snapshot.coordinator, snapshot.sessions)).toEqual({targetId: "general", recipientId: "general", fallbackId: null});
+  }
+  expect(await f.reply(icon, {recipientId: "general"})).toEqual({status: "sent"});
+  expect(await f.reply(plan, {recipientId: "general", questionIndexes: plan.questions.map((_, index) => index)})).toEqual({status: "sent"});
+  expect(f.sent.map(m => m.id)).toEqual(["general", "general"]);
+  expect(f.context(1).questions).toHaveLength(10);
+});
+
+test("an edit between listing and sending says revised, and the same draft sends once the board refreshes", async () => {
+  const f = await fixture([card("icon", {where: "manager", recommend: ["Red"], why: ["First check"]})], "general");
+  f.createdBy("general");
+  const {item} = await f.find("icon");
+  Object.assign(f.ledgerItems.items[0], {why: ["First check", "Checked again"], recommend: ["Red", "It matches the logo"]});
+  f.writeLedger();
+  expect(await f.reply(item, {recipientId: "general"})).toEqual({status: "changed", reason: "revised"});
+  const {item: latest} = await f.find("icon");
+  expect(trackedReplyBasis(latest, null)).toBe(trackedReplyBasis(item, null));
+  expect(await f.reply(latest, {recipientId: "general"})).toEqual({status: "sent"});
+  expect(f.sent).toHaveLength(1);
+});
+
+test("an owner the board cannot find on this host is reported missing, and a repeat asks for another step", async () => {
+  const f = await fixture([card("icon", {where: "manager"})], "general");
+  f.createdBy("general");
+  f.hidden.add("general");
+  const {item, route} = await f.find("icon");
+  expect(route?.recipientId).toBe("general");
+  const first = await f.reply(item, {recipientId: "general"});
+  expect(first).toEqual({status: "changed", reason: "recipient-missing"});
+  const second = await f.reply(item, {recipientId: "general"});
+  expect(f.sent).toBeEmpty();
+  const streak = nextFailureStreak(nextFailureStreak(null, first, "general"), second, "general");
+  expect(streak?.count).toBe(2);
+  expect(nextFailureStreak(streak, {status: "changed", reason: "recipient-missing"}, "operator")?.count).toBe(1);
+  expect(nextFailureStreak(streak, {status: "changed", reason: "revised"}, "general")?.count).toBe(1);
+  expect(nextFailureStreak(streak, {status: "busy"}, "general")).toBeNull();
+  f.hidden.delete("general");
+  expect(await f.reply(item, {recipientId: "general"})).toEqual({status: "sent"});
+});
 
 test("a closed assigned session is never offered; the reply can go to the verified ledger owner once", async () => {
   const f = await fixture([card("cleanup", {where: "session", agentId: "worker", recommend: ["Delete"], howToAnswer: "Tell the worker: delete / keep"})]);

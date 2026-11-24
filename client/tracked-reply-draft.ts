@@ -18,6 +18,15 @@ export function recommendedTrackedReply(item: TrackedDecision) {
   return isLongReply(line) ? "" : line;
 }
 
+export type FailureStreak = { key: string; count: number } | null;
+
+// The same rejection twice in a row, for the same recipient, will not clear with another refresh.
+export function nextFailureStreak(previous: FailureStreak, outcome: { status: string; reason?: string }, recipientId: string | null): FailureStreak {
+  if (outcome.status !== "changed") return null;
+  const key = JSON.stringify([outcome.reason ?? null, recipientId]);
+  return { key, count: previous?.key === key ? previous.count + 1 : 1 };
+}
+
 // Fill only questions the person has not answered or skipped, using the ledger's own recommended options.
 export function recommendedChoices(item: TrackedDecision, answered: (index: number) => boolean) {
   const picks: Record<number, string[]> = {};

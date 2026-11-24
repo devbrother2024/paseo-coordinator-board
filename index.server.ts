@@ -223,7 +223,7 @@ export default function contribute(server: PluginServerContext) {
       const expected = fallback ? trackedFallbackRecipient(item,scope.coordinator,managed) : trackedRecipient(item,scope.coordinator,managed);
       if (expected !== targetId) return owned ? "owner-changed" : expected ? "recipient-changed" : "recipient-missing";
       return !owned || managed.some(row => row.id === targetId) ||
-        (isManagedCoordinator(scope,targetId) && targetId === scope.coordinator && rows.some(row => row.id === targetId)) ? null : "owner-changed";
+        (isManagedCoordinator(scope,targetId) && targetId === scope.coordinator && rows.some(row => row.id === targetId)) ? null : "recipient-missing";
     };
     const current = () => mismatch() === null;
     const before = mismatch();
