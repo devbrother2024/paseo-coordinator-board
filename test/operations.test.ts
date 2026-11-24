@@ -559,3 +559,102 @@ test("usage-aware worker plans and dispatch agree, recheck capacity before creat
   await expect(s.call(setUsageRouting,{enabled:true,expectedRevision:status.revision})).rejects.toThrow();
   expect(await preview()).toEqual(route);
 });
+
+// Replacing with a model the person picked in the replacement box.
+function replacementScenario() {
+  const s = scenario();
+  // Two coordinator-capable providers: the recommended one and the one the person picks instead.
+  s.activity.providers = ["claude", "codex"];
+  s.activity.modes = [{id:"auto",label:"Auto mode"}, {id:"auto-review",label:"Auto-review"}];
+  const picked = {provider:"claude", model:alternate.model, effort:null};
+  const replace = {replace:true, expectedCoordinator:coordinator};
+  return { ...s, picked, replace };
+}
+
+test("a model picked for one replacement is used without changing the saved routing", async () => {
+  const s = replacementScenario();
+  const before = s.store.read();
+  const created = await s.call(setupCoordinator, {...s.replace, expectedRoute:s.picked, expectedModeId:"auto", selection:"once"});
+  expect(s.sessions.get(created.sessionId)?.config).toMatchObject({provider:"claude/" + alternate.model, modeId:"auto"});
+  expect(s.store.read().coordinator).toBe(created.sessionId);
+  expect(s.store.read().routing).toEqual(before.routing);
+  expect(s.store.read().routingRevision).toBe(before.routingRevision);
+});
+
+test("a picked model saved as the default becomes the first M candidate and keeps the earlier ones as fallbacks", async () => {
+  const s = replacementScenario();
+  await s.call(updateRouting, {grade:"M", candidates:[route], expectedRevision:0});
+  const created = await s.call(setupCoordinator, {...s.replace, expectedRoute:s.picked, expectedModeId:"auto", selection:"default"});
+  expect(s.sessions.get(created.sessionId)?.config.provider).toBe("claude/" + alternate.model);
+  expect(s.store.read().routing.M).toEqual([s.picked, route]);
+  expect(s.store.read().routingRevision).toBe(2);
+  // The next replacement without a pick resolves to the remembered model.
+  const state = await s.call(operationState, {});
+  expect(state.routing.M[0]).toEqual(s.picked);
+  const next = await s.call(setupCoordinator, {replace:true, expectedCoordinator:created.sessionId, expectedRoute:s.picked, expectedModeId:"auto"});
+  expect(s.sessions.get(next.sessionId)?.config.provider).toBe("claude/" + alternate.model);
+  // Picking the model that is already first changes nothing.
+  await s.call(setupCoordinator, {replace:true, expectedCoordinator:next.sessionId, expectedRoute:s.picked, expectedModeId:"auto", selection:"default"});
+  expect(s.store.read().routing.M).toEqual([s.picked, route]);
+  expect(s.store.read().routingRevision).toBe(2);
+});
+
+test("a picked model with no saved M routing starts the list, and a full list drops its last fallback", async () => {
+  const s = replacementScenario();
+  await s.call(setupCoordinator, {...s.replace, expectedRoute:s.picked, expectedModeId:"auto", selection:"default"});
+  expect(s.store.read().routing.M).toEqual([s.picked]);
+  const full = replacementScenario();
+  const fallbacks = Array.from({length:12}, (_, index) => ({provider:"codex", model:"fixture-" + index, effort:null}));
+  full.store.change(scope => { scope.routing.M = fallbacks; });
+  await full.call(setupCoordinator, {...full.replace, expectedRoute:full.picked, expectedModeId:"auto", selection:"default"});
+  expect(full.store.read().routing.M).toEqual([full.picked, ...fallbacks.slice(0, 11)]);
+});
+
+test("a picked model outside the catalog, with an unsupported effort or from an excluded provider replaces nobody", async () => {
+  const s = replacementScenario();
+  const attempts = [
+    {...s.picked, model:"not-in-catalog"},
+    {...s.picked, effort:"imaginary"},
+    {provider:"unregistered", model:alternate.model, effort:null},
+  ];
+  for (const expectedRoute of attempts) {
+    for (const selection of ["once", "default"]) {
+      await expect(s.call(setupCoordinator, {...s.replace, expectedRoute, selection})).rejects.toThrow(/사용할 수 있는|권한 모드/);
+    }
+  }
+  const state = await s.call(operationState, {});
+  await s.call(setProviderInclusion, {provider:"claude", included:false, expectedRevision:state.revision});
+  await expect(s.call(setupCoordinator, {...s.replace, expectedRoute:s.picked, expectedModeId:"auto", selection:"default"})).rejects.toThrow(/사용할 수 있는/);
+  expect(s.sessions.size).toBe(0);
+  expect(s.store.read().coordinator).toBe(coordinator);
+  expect(s.store.read().routing.M).toBeUndefined();
+});
+
+test("a picked model needs a verified coordinator mode, and a changed mode stops the replacement", async () => {
+  const s = replacementScenario();
+  await expect(s.call(setupCoordinator, {...s.replace, expectedRoute:s.picked, expectedModeId:"default", selection:"once"})).rejects.toThrow(/권한 모드/);
+  s.activity.providers = ["claude", "custom-agent"];
+  const custom = {provider:"custom-agent", model:"custom/v1", effort:null};
+  await expect(s.call(setupCoordinator, {...s.replace, expectedRoute:custom, selection:"once"})).rejects.toThrow(/사용할 수 있는|권한 모드/);
+  expect(s.sessions.size).toBe(0);
+});
+
+test("a picked model wins over usage-based routing, which still applies when nothing is picked", async () => {
+  const s = replacementScenario();
+  s.activity.quotas = {claude:5, codex:95};
+  const state = await s.call(operationState, {});
+  expect(state.usageRouting).toBe(true);
+  // Left to the board, the provider with more capacity is chosen and a stale expectation is refused.
+  await expect(s.call(setupCoordinator, {...s.replace, expectedRoute:s.picked, expectedModeId:"auto"})).rejects.toThrow(/코디네이터 모델/);
+  const created = await s.call(setupCoordinator, {...s.replace, expectedRoute:s.picked, expectedModeId:"auto", selection:"once"});
+  expect(s.sessions.get(created.sessionId)?.config.provider).toBe("claude/" + alternate.model);
+  expect(s.store.read().routing.M).toBeUndefined();
+});
+
+test("a failed replacement does not remember the picked model", async () => {
+  const s = replacementScenario();
+  s.store.change(scope => { scope.projects = []; });
+  await expect(s.call(setupCoordinator, {...s.replace, expectedRoute:s.picked, expectedModeId:"auto", selection:"default"})).rejects.toThrow(/프로젝트/);
+  expect(s.store.read().routing.M).toBeUndefined();
+  expect(s.store.read().routingRevision).toBe(0);
+});

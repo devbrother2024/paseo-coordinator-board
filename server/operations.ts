@@ -120,10 +120,15 @@ export function createOperations(store: PreferenceStore, workspaceDir: string, f
     });
     server.handle(setupCoordinator, async (input, { paseo }) => {
       const initial = store.read();
-      const checkUsage = initial.usageRouting && !initial.routing.M;
+      // A model the person picked is not second-guessed by the saved order or by account usage.
+      const picked = input.selection !== undefined;
+      const checkUsage = !picked && initial.usageRouting && !initial.routing.M;
       const [catalog,usage] = await Promise.all([readCatalog(paseo, undefined, true),checkUsage ? readAccountUsage(paseo) : []]);
       const verifyRoute = (scope: ReturnType<typeof store.read>) => {
-        const route = resolveRoute("M", scope.routing, includedCatalog(catalog, scope.excludedProviders), false, scope.usageRouting ? usage : []);
+        const allowed = includedCatalog(catalog, scope.excludedProviders);
+        // It still has to pass the rules for a new M candidate: in the catalog, on a provider with a coordinator mode.
+        if (picked) return validateCandidates("M", [input.expectedRoute], allowed);
+        const route = resolveRoute("M", scope.routing, allowed, false, scope.usageRouting ? usage : []);
         if (checkUsage !== (scope.usageRouting && !scope.routing.M) || !route || !sameRoute(route, input.expectedRoute))
           throw new Error("코디네이터 모델 또는 권한 모드가 바뀌었습니다. 설정을 새로 고쳐 주세요.");
       };
@@ -131,11 +136,23 @@ export function createOperations(store: PreferenceStore, workspaceDir: string, f
       const mode = catalog.find(m => m.provider === input.expectedRoute.provider)?.coordinatorMode;
       if (!mode || (input.expectedModeId !== undefined && input.expectedModeId !== mode.id))
         throw new Error("코디네이터 권한 모드를 확인할 수 없거나 바뀌었습니다. 설정에서 실행기·모델을 새로 고쳐 주세요.");
-      return lifecycle.ensure(paseo, {
+      const result = await lifecycle.ensure(paseo, {
         expectedCoordinator: input.expectedCoordinator,
         replace: input.replace,
         config: { ...configForRoute(input.expectedRoute), modeId: mode.id }, verifyRoute,
       });
+      if (input.selection !== "default") return result;
+      // Remembered only after the replacement succeeded. Earlier candidates stay as fallbacks.
+      try {
+        const route = input.expectedRoute, first = store.read().routing.M?.[0];
+        if (!first || !sameRoute(first, route)) store.change(scope => {
+          scope.routing.M = [route, ...(scope.routing.M ?? []).filter(saved => !sameRoute(saved, route))].slice(0, 12);
+          scope.routingRevision++;
+        });
+        return { ...result, defaultSaved: true };
+      } catch {
+        return { ...result, defaultSaved: false };
+      }
     });
     server.handle(askDigest, async (input, { paseo }) => {
       const language = input.language ?? "ko";
