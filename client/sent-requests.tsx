@@ -16,7 +16,7 @@ function SentRequestCard({ request, current, theme, open }: CardProps) {
   const [photoIndex, setPhotoIndex] = useState<number | null>(null);
   const long = request.text.length > 160 || request.text.split("\n").length > 3;
   const status = {
-    pending: t("전송 확인 중", "Delivery unconfirmed"), sent: t("전송됨", "Sent"), delivered: t("전달됨", "Delivered"),
+    pending: t("전송 미확인", "Delivery unconfirmed"), sent: t("전송됨", "Sent"), delivered: t("전달됨", "Delivered"),
   }[request.status];
   const date = new Date(request.at).toLocaleString(language === "ko" ? "ko-KR" : "en-US",
     { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
