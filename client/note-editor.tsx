@@ -88,11 +88,11 @@ export function NoteEditor({ session, note, theme, onClose, onSave, onSetReporti
             <Button theme={theme} label={t("기록 해제", "Clear note")} disabled={busy || conflict} onPress={() => void submit("clear")} />}
           <Button theme={theme} label={t("취소", "Cancel")} disabled={busy} onPress={onClose} />
         </View>
-        <View style={{ gap: 7, borderTopWidth: 1, borderColor: c.border, paddingTop: 10 }}>
+        {!session.serverId && <View style={{ gap: 7, borderTopWidth: 1, borderColor: c.border, paddingTop: 10 }}>
           <Text style={{ color: c.foreground, fontWeight: "600" }}>{t("이 세션의 보드 보고 받기", "Board reports from this session")} · {session.reporting ? t("켬", "On") : t("끔", "Off")}</Text>
           <Text style={{ color: c.foregroundMuted, fontSize: 13 }}>{t("Paseo 도구 연결(MCP)을 허용한 호스트에서 쓸 수 있습니다. 켠 세션은 다음에 대화용으로 열릴 때부터 질문과 확인할 결과를 자기 카드에 올릴 수 있습니다.", "Available on hosts that allow Paseo tools (MCP). The next time you open this session for a conversation, it can add questions and results to its card.")}</Text>
           <Button theme={theme} label={session.reporting ? t("보드 보고 끄기", "Turn off board reports") : t("보드 보고 켜기", "Turn on board reports")} disabled={busy} onPress={() => void toggleReporting()} />
-        </View>
+        </View>}
       </Modal.Content>
     </Modal>
   );

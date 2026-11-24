@@ -14,6 +14,10 @@ export const decisionFields = z.object({
 export const decisionSchema = decisionFields.extend({
   question: z.string().min(1),
   questionMarkdown: z.string().max(2000).optional(),
+  // Display only, outside the version: the text before the question and the options it names.
+  contextMarkdown: z.string().max(2000).optional(),
+  choices: z.array(z.object({ label: z.string().max(40), markdown: z.string().max(700) })).max(8).optional(),
+  missingLabels: z.array(z.string().max(40)).max(9).optional(),
   version: z.string().min(1).max(64),
   source: z.enum(["permission", "conversation", "coordinator", "agent-note", "person-note"]),
 });

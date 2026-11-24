@@ -5,10 +5,13 @@ import { z } from "zod";
 import { sessionLinkSchema } from "../shared/session-links";
 import {clarificationCard, clarificationEntry} from "../shared/clarifications";
 import { decisionSchema, decisionFields } from "../shared/decision-actions";
-import { routePolicySchema, workerModeProvider } from "../shared/dispatch";
+import { dispatchInputSchema, routePolicySchema, workerModeProvider } from "../shared/dispatch";
 import { pullMergeActivity, repositoryOverride } from "../shared/prs";
 import { replyDetails } from "../shared/reply-history";
 import { factSchema } from "../shared/board-facts";
+import { assignmentPolicy, hostIdentity } from "../shared/host-assignment";
+import { assignmentLocation, assignmentNotice } from "../shared/dispatch-hosts";
+import { pullJudgmentSchema } from "../shared/pull-judgments";
 
 export const judgment = z.object({
   content: decisionFields.optional(),
@@ -24,6 +27,9 @@ const schema = z.object({
   projectRepositories: z.record(z.string(), repositoryOverride).default({}),
   autoPinCoordinatorWorkspace: z.boolean().default(true),
   autoReplyToBoardFacts: z.boolean().default(true),
+  // Merge cards need a coordinator verdict on the PR head unless the person turns this off.
+  judgedMergeCards: z.boolean().default(true),
+  pullJudgments: z.record(z.string(), pullJudgmentSchema).default({}),
   lastDigest: z.object({ at: z.iso.datetime(), coordinator: z.string(), turnId: z.string() }).optional(),
   factHistory: z.record(z.string(), factSchema).default({}),
   workRequestIds: z.record(z.string(), z.string().uuid()).default({}),
@@ -38,6 +44,26 @@ const schema = z.object({
   excludedProviders: z.array(z.string().min(1).max(256)).default([]),
   usageRouting: z.boolean().default(true),
   routingRevision: z.number().int().nonnegative().default(0),
+  assignmentHosts: z.record(hostIdentity, assignmentPolicy).default({}),
+  assignmentRevision: z.number().int().nonnegative().default(0),
+  assignmentNotice: assignmentNotice.optional(),
+  dispatchReceipts: z.record(z.string().uuid(), z.object({
+    fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    projectId: z.string(),
+    sourceProjectId: z.string(),
+    workspaceId: z.string(),
+    location: assignmentLocation,
+    remote: z.boolean(),
+    delivered: z.boolean().optional(),
+    createdAt: z.iso.datetime().optional(),
+    requestKey: dispatchInputSchema.shape.requestKey.optional(),
+  })).default({}),
+  dispatchTombstones: z.record(z.string().uuid(), z.object({
+    serverId: hostIdentity,
+    // For earlier receipts, the session ID already derives from the request key.
+    requestKey: dispatchInputSchema.shape.requestKey.optional(),
+    retiredAt: z.iso.datetime(),
+  })).default({}),
   answers: z.record(z.string(), z.object({ version: z.string(), noteRevision: z.number().optional() })).default({}),
   clarifications:z.record(z.string(),clarificationEntry.extend({
     card:clarificationCard,fingerprint:z.string(),bodyHash:z.string(),sourceSessionId:z.string().nullable(),
@@ -61,6 +87,51 @@ const schema = z.object({
   }).optional(),
 });
 export type Preferences = z.infer<typeof schema>;
+export type DispatchReceipt = Preferences["dispatchReceipts"][string];
+
+export const maxDispatchReceipts = 256;
+export const maxDispatchTombstones = 1024;
+const dispatchRetentionMs = 30 * 24 * 60 * 60 * 1000;
+
+export function retireDispatchReceipt(scope: Preferences, id: string, now = Date.now()) {
+  const { location, requestKey } = scope.dispatchReceipts[id];
+  scope.dispatchTombstones[id] = { serverId: location.serverId, requestKey, retiredAt: new Date(now).toISOString() };
+  delete scope.dispatchReceipts[id];
+}
+
+export function pruneDispatchTombstones(scope: Preferences, now = Date.now()) {
+  const retained: [string, Preferences["dispatchTombstones"][string]][] = [];
+  let changed = false;
+  for (const [id, record] of Object.entries(scope.dispatchTombstones)) {
+    if (Date.parse(record.retiredAt) <= now - dispatchRetentionMs) {
+      delete scope.dispatchTombstones[id];
+      changed = true;
+    } else retained.push([id, record]);
+  }
+  if (retained.length > maxDispatchTombstones) {
+    retained.sort(([, a], [, b]) => a.retiredAt.localeCompare(b.retiredAt));
+    for (const [id] of retained.slice(0, retained.length - maxDispatchTombstones)) delete scope.dispatchTombstones[id];
+    changed = true;
+  }
+  return changed;
+}
+
+export function pruneDispatchReceipts(scope: Preferences, now = Date.now()) {
+  const projects = new Set(scope.projects);
+  let changed = false;
+  for (const [id, receipt] of Object.entries(scope.dispatchReceipts)) {
+    if (!projects.has(receipt.projectId) || (receipt.createdAt && Date.parse(receipt.createdAt) <= now - dispatchRetentionMs)) {
+      retireDispatchReceipt(scope, id, now);
+      changed = true;
+      continue;
+    }
+    if (!receipt.createdAt) {
+      receipt.createdAt = new Date(now).toISOString();
+      changed = true;
+    }
+  }
+  return pruneDispatchTombstones(scope, now) || changed;
+}
 
 export function isManagedCoordinator(scope: Preferences, id: string | null) {
   return id !== null && scope.createdCoordinator?.id === id;
@@ -83,6 +154,11 @@ export class PreferenceStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return schema.parse({ projects: [], coordinator: null, judgments: {} });
       throw error;
     }
+  }
+  readDispatchScope() {
+    const scope = this.read();
+    if (pruneDispatchReceipts(scope)) this.change(pruneDispatchReceipts);
+    return scope;
   }
   change(edit: (value: Preferences) => void) {
     const value = this.read();

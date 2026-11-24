@@ -22,7 +22,7 @@ export function laneLabel(lane: Lane, t: Translate) { return t(labels[lane], lan
 export function noteLabel(kind: keyof typeof noteLabels, t: Translate) { return t(noteLabels[kind], noteEnglish[kind]); }
 
 const statusPhrases: Record<string, string> = {
-  "답장을 보냈습니다. 담당 세션의 결과를 기다립니다.": "Reply sent. Waiting for the assigned session’s result.",
+  "답장을 보냈습니다. 작업 세션의 결과를 기다립니다.": "Reply sent. Waiting for the work session’s result.",
   "세션에서 응답 요청 확인": "Review the request in the session",
   "오류 확인 필요": "Error needs review",
   "작업 중": "In progress",
@@ -37,8 +37,9 @@ const statusPhrases: Record<string, string> = {
 
 export function sessionDetail(detail: string, t: Translate) {
   if (Object.hasOwn(statusPhrases, detail)) return t(detail, statusPhrases[detail]);
-  const pending = /^응답을 기다리는 요청 (\d+)건$/.exec(detail);
-  if (pending) return t(detail, `Requests awaiting a response: ${pending[1]}`);
+  // The count may be followed by the titles of the waiting requests.
+  const pending = /^응답을 기다리는 요청 (\d+)건((?: · [\s\S]*)?)$/.exec(detail);
+  if (pending) return t(detail, `Requests awaiting a response: ${pending[1]}${pending[2]}`);
   const tasks = /^대화 대기 · 백그라운드 작업 (\d+)개$/.exec(detail);
   if (tasks) return t(detail, `Conversation idle · Background tasks: ${tasks[1]}`);
   for (const [ko, en] of [["코디네이터 판단 · ", "Coordinator assessment · "], ["세션의 확인 요청 · ", "Session question · "]]) {

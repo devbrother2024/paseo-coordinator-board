@@ -307,6 +307,16 @@ test("a sent work request stays on the board with its text, photos, coordinator 
   expect((await s.call(listSentRequests, {})).requests.map((entry: {text: string}) => entry.text)).toEqual(["Then check the links.", input.text]);
 });
 
+test("a request with a platform and host is kept and confirmed as the text the coordinator received", async () => {
+  const s = scenario();
+  await s.call(requestWork, {coordinator, text: "Run the desktop smoke test.", requestKey: "history-placed-01", platform: "linux", host: "build-host-a"});
+  expect(s.sent.map(m => m.text)).toEqual(['Run the desktop smoke test.\n\nplatform: linux\nhost: "build-host-a"']);
+  const [request] = (await s.call(listSentRequests, {})).requests;
+  expect(request).toMatchObject({text: s.sent[0].text, status: "sent"});
+  s.history.visible = true;
+  expect((await s.call(listSentRequests, {})).requests).toEqual([{...request, status: "delivered"}]);
+});
+
 test("a request whose delivery was lost stays unconfirmed until it is seen or retried; a refused request is never listed", async () => {
   const s = scenario();
   const input = {coordinator, text: "Draft the migration plan.", requestKey: "history-lost-01"};

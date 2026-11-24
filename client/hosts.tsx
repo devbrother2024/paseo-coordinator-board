@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { boardHosts, hiddenAfter, hostVisibility, type BoardHost } from "../shared/hosts";
 import { Button, type Theme } from "./controls";
+import { AssignmentRegistrationHelp, DispatchHostEditor, useDispatchHosts } from "./dispatch-hosts";
 
 const statusText = {
   online: ["연결됨", "Online"], connecting: ["연결 중", "Connecting"], idle: ["연결 대기", "Idle"],
@@ -19,6 +20,9 @@ export function BoardHosts({ current, settings, theme, open }: {
   const registered = useHosts();
   const scope = useSettings(hostVisibility);
   const hosts = boardHosts(current, registered);
+  const assignment = useDispatchHosts(settings, true);
+  const hasAssignmentHosts = assignment.data?.hosts.some(host => !host.local) ?? false;
+  const [registrationHelp, setRegistrationHelp] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [chosen, setChosen] = useState<string | null>(null);
   const pending = useRef(false);
@@ -57,7 +61,19 @@ export function BoardHosts({ current, settings, theme, open }: {
         ? <Text style={{ color: c.foregroundMuted }}>{t(`앱에 등록 ${registered.length}대`, `Registered hosts: ${registered.length}`)}</Text>
         : <Button theme={theme} label={t("기기별 세션 닫기", "Close host sessions")} onPress={() => { setExpanded(false); setChosen(null); }} />}
     </View>
-    {settings && <Text style={{ color: c.foregroundMuted }}>{t("등록한 기기는 기본으로 표시됩니다. 표시한 기기의 세션은 여기에서 찾을 수 있고, 같은 프로젝트에서 진행 중인 작업은 홈에서도 볼 수 있습니다.", "Registered hosts are shown by default. Browse their sessions here and see running work from matching projects on the board.")}</Text>}
+    {settings && <>
+      <View style={wrap}>
+        <Button theme={theme} expanded={registrationHelp} label={t("배정 호스트 등록 안내", "Register an assignment host")} onPress={() => {
+          if (!registrationHelp && !hasAssignmentHosts) void assignment.reload();
+          setRegistrationHelp(open => !open);
+        }} />
+        {(hasAssignmentHosts || registrationHelp) && <Button theme={theme} label={t("배정 연결 새로 고침", "Refresh assignment connections")} disabled={assignment.loading} onPress={() => void assignment.reload()} />}
+      </View>
+      {registrationHelp && <AssignmentRegistrationHelp theme={theme} />}
+      {(hasAssignmentHosts || registrationHelp) && assignment.failed && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>
+        {t("이 보드 데몬의 배정 연결을 확인하지 못했습니다.", "Could not check this board daemon’s assignment connections.")}
+      </Text>}
+    </>}
     {scope.status === "loading" && <Text style={{ color: c.foregroundMuted }}>{t("표시할 호스트를 확인하고 있습니다.", "Loading host visibility…")}</Text>}
     {error && <View style={wrap}>
       <Text accessibilityLiveRegion="polite" style={{ color: c.statusDanger }}>{ready ? t("표시 설정을 저장하지 못했습니다. 최신 설정에서 다시 선택해 주세요.", "Could not save host visibility. Review the latest settings and try again.") : t("호스트 표시 설정을 읽지 못했습니다.", "Could not load host visibility settings.")}</Text>
@@ -65,17 +81,31 @@ export function BoardHosts({ current, settings, theme, open }: {
     </View>}
     {settings && ready && hosts.map(host => {
       const included = !scope.values.hidden.includes(host.serverId);
-      return <View key={host.serverId} style={{ ...wrap, alignItems: "center", justifyContent: "space-between", borderTopWidth: 1, borderColor: c.border, paddingTop: 7 }}>
-        <View style={{ flex: 1, minWidth: 120, gap: 3 }}>
-          <Text style={{ color: c.foreground }}>{host.label}{host.serverId === current.id ? t(" · 현재 보드", " · Current board") : ""} · {t(statusText[host.status][0], statusText[host.status][1])}</Text>
-          <Text accessibilityLiveRegion="polite" style={{ fontSize: 13, color: c.foregroundMuted }}>{included ? t("세션 목록에 표시 중", "Shown in the session list") : t("세션 목록에서 숨김", "Hidden from the session list")}</Text>
+      const dispatch = assignment.data?.hosts.find(item => item.resolved && item.id === host.serverId);
+      return <View key={host.serverId} style={{ gap: 7, borderTopWidth: 1, borderColor: c.border, paddingTop: 7 }}>
+        <View style={{ ...wrap, alignItems: "center", justifyContent: "space-between" }}>
+          <View style={{ flex: 1, minWidth: 120, gap: 3 }}>
+            <Text style={{ color: c.foreground }}>{host.label}{host.serverId === current.id ? t(" · 현재 보드", " · Current board") : ""} · {t(statusText[host.status][0], statusText[host.status][1])}</Text>
+            <Text accessibilityLiveRegion="polite" style={{ fontSize: 13, color: c.foregroundMuted }}>{included ? t("세션 목록에 표시 중", "Shown in the session list") : t("세션 목록에서 숨김", "Hidden from the session list")}</Text>
+          </View>
+          <Button theme={theme} disabled={scope.saving}
+            label={included ? t("숨기기", "Hide") : t("표시하기", "Show")}
+            accessibilityLabel={host.label + (included ? t(" · 기기별 세션에서 숨기기", " · Hide from host sessions") : t(" · 기기별 세션에 표시하기", " · Show in host sessions"))}
+            onPress={() => void change(host.serverId, !included)} />
         </View>
-        <Button theme={theme} disabled={scope.saving}
-          label={included ? t("숨기기", "Hide") : t("표시하기", "Show")}
-          accessibilityLabel={host.label + (included ? t(" · 기기별 세션에서 숨기기", " · Hide from host sessions") : t(" · 기기별 세션에 표시하기", " · Show in host sessions"))}
-          onPress={() => void change(host.serverId, !included)} />
+        {(hasAssignmentHosts || registrationHelp) && dispatch && assignment.data &&
+          <DispatchHostEditor host={dispatch} directory={assignment.data} theme={theme} reload={assignment.reload} />}
+        {!dispatch && assignment.data && !assignment.failed && host.serverId !== current.id && <Text style={{ color: c.statusWarning }}>
+          {t("앱에 연결됨 · 배정에 쓰려면 보드 데몬에 등록", "Added to the app · Register with the board daemon for assignments")}
+        </Text>}
       </View>;
     })}
+    {settings && assignment.data && assignment.data.hosts.filter(item => !hosts.some(host => host.serverId === item.id)).map(item =>
+      <View key={item.id} style={{ gap: 7, borderTopWidth: 1, borderColor: c.border, paddingTop: 7 }}>
+        <Text style={{ color: c.foreground }}>{item.label} · {t("앱에 미등록", "Not added to the app")}</Text>
+        <DispatchHostEditor host={item} directory={assignment.data!} theme={theme} reload={assignment.reload} />
+      </View>
+    )}
     {!settings && ready && <>
       <View style={wrap}>
         {shown.map(host => <Button theme={theme} key={host.serverId} selected={host.serverId === target?.serverId}

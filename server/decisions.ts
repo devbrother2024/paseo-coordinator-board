@@ -1,60 +1,28 @@
-import { restoreClarifiedDecision } from "./clarifications";
+import { decorateDecision, restoreClarifiedDecision } from "./session-decisions";
 import { join } from "node:path";
 import { SessionPhotoStore } from "./session-photos";
 import { describePhotos, photoReceiptId } from "./reply-photos";
 import { sessionReplyMessage } from "./decision-message";
 import { createHash } from "node:crypto";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
-import type { Decision, DecisionInput } from "../shared/decision-actions";
-import type { Note, SessionRow } from "../shared/contract";
-import { classify, ConversationReader, lastConversationQuestion, type Evidence } from "./conversation";
+import type { DecisionInput } from "../shared/decision-actions";
+import type { SessionRow } from "../shared/contract";
+import { classify, ConversationReader } from "./conversation";
 import { isCurrentMembership, managedSessions } from "./session-links";
-import { canReceiveBoardInput, discoverSessions } from "./discovery";
+import { canReceiveBoardInput } from "./discovery";
+import { discoverBoardSessions } from "./board-sessions";
+import { withAssignmentHost } from "./host-assignment";
 import type { NoteStore } from "./notes";
 import { verifiedBoardFact } from "./board-facts";
 import { isManagedCoordinator, type Preferences, type PreferenceStore } from "./preferences";
+
+export { decorateDecision } from "./session-decisions";
 
 type Sdk = PluginHandlerContext["paseo"];
 type Receipt = { ok: true; recipientId: string; messageId: string };
 const changed = "결정 카드 또는 수신자가 바뀌었습니다. 보드를 새로 고쳐 주세요.";
 const blocked = "이 세션의 현재 상태에서는 보낼 수 없습니다. 원래 세션에서 권한 요청과 작업 상태를 확인하세요.";
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-
-export function decorateDecision(row: SessionRow, note: Note | undefined, prefs: Preferences, evidence?: Evidence) {
-  const answer = prefs.answers[row.id];
-  const noteQuestion = note?.kind === "question";
-  const answeredNote = noteQuestion && answer?.noteRevision === note.revision;
-  const dismissed = row.evidenceId && row.evidenceId === note?.evidenceId && note.origin === "person" && note.kind !== "question";
-  let content: Omit<Decision, "version">;
-  if (row.nativePending) {
-    content = { source: "permission", question: row.detail };
-  } else if (row.status === "idle" && row.evidenceId && !dismissed && row.lane === "human") {
-    const judgment = prefs.judgments[row.id];
-    const structured = judgment?.kind === "question" && judgment.evidenceId === row.evidenceId && judgment.projectId === row.projectId;
-    content = structured
-      ? { ...judgment.content, source: "coordinator", question: judgment.content?.question || judgment.text }
-      : { source: "conversation", question: row.detail.replace(/^세션의 확인 요청 · /, "") };
-  } else if (noteQuestion && !answeredNote && row.status === "idle" && row.evidenceId) {
-    content = { source: note.origin === "agent" ? "agent-note" : "person-note", question: note.text };
-  } else {
-    if (answeredNote && !row.nativePending) row.decisionAnswered = true;
-    return;
-  }
-  const version = hash([row.projectId, row.id, row.nativePending ? row.permissionVersion : row.evidenceId, note?.revision ?? 0, content]);
-  if (content.source !== "permission" && answer?.version === version) {
-    row.decisionAnswered = true;
-    row.lane = "review";
-    row.detail = "답장을 보냈습니다. 담당 세션의 결과를 기다립니다.";
-  } else {
-    row.decision = { ...content, version };
-    if (content.source === "conversation" && evidence) {
-      const excerpt = lastConversationQuestion(evidence, row.id === prefs.coordinator);
-      if (excerpt?.question === content.question && excerpt.markdown !== content.question) {
-        row.decision.questionMarkdown = excerpt.markdown;
-      }
-    }
-  }
-}
 
 function requireScope(scope: Preferences, input: DecisionInput) {
   const recipient = input.action === "coordinate" ? scope.coordinator : input.sessionId;
@@ -112,13 +80,22 @@ export class DecisionSender {
     }
     messageId = earlier?.messageId ?? messageId;
     const receipt: Receipt = { ok: true, recipientId: input.recipientId, messageId };
-    const recipient = paseo.agents.ref(input.recipientId);
-    const rows = await discoverSessions(paseo);
+    const rows = await discoverBoardSessions(paseo, this.store, new Set([input.sessionId, input.recipientId]));
     const managed = managedSessions(rows, this.store.read());
     const row = managed.find(r => r.id === input.sessionId && r.projectId === input.projectId);
     const destination = managed.find(r => r.id === input.recipientId) ??
       (isManagedCoordinator(scope, input.recipientId) ? rows.find(r => r.id === input.recipientId) : undefined);
     if (!row || !destination) throw Error(changed);
+    return withAssignmentHost(paseo, destination.serverId, sdk =>
+      this.deliverTo(paseo, sdk, row, destination, scope, input, receipt, requestId, fingerprint, earlier));
+  }
+
+  private async deliverTo(paseo: Sdk, sdk: Sdk, row: SessionRow, destination: SessionRow, scope: Preferences,
+    input: DecisionInput, receipt: Receipt, requestId: string, fingerprint: string,
+    earlier?: Preferences["decisionReceipts"][string],
+  ): Promise<Receipt> {
+    const { messageId } = receipt;
+    const recipient = sdk.agents.ref(input.recipientId);
     if (earlier) {
       if (earlier.fingerprint !== fingerprint) throw Error("같은 전송 키로 다른 답을 보낼 수 없습니다.");
       if (earlier.status === "sent") {
@@ -144,9 +121,11 @@ export class DecisionSender {
     requireScope(this.store.read(), input);
     const evidence = await this.reader.read(paseo, row, true);
     if (!evidence) throw Error(changed);
-    const latest = await Promise.all([...new Set([input.sessionId, input.recipientId])].map(async id => ({
-      id, agent: (await paseo.agents.ref(id).refresh())?.agent,
-    })));
+    const targets = row.id === destination.id ? [destination] : [row, destination];
+    const latest = await Promise.all(targets.map(target => {
+      const refresh = async (client: Sdk) => ({ id: target.id, agent: (await client.agents.ref(target.id).refresh())?.agent });
+      return target.serverId === destination.serverId ? refresh(sdk) : withAssignmentHost(paseo, target.serverId, refresh);
+    }));
     for (const { id, agent } of latest) {
       if (!agent || agent.id !== id || agent.internal || agent.archivedAt || !canReceiveBoardInput(agent,input.action==="coordinate" && id===input.recipientId && id!==input.sessionId)) throw Error(blocked);
       if (id === input.sessionId && row.activityAt !== agent.updatedAt) throw Error(changed);
@@ -167,7 +146,8 @@ export class DecisionSender {
       current.decisionReceipts[messageId] = {
         ...(input.images?.length ? {messageId} : {}),
         messageHash:hash(text),
-        activity: { origin:{sessionId:row.id, cardId:row.id, revision:input.version, questions:[{id:input.version}]},
+        activity: { origin:{sessionId:row.id, sessionHost:row.serverId, sessionProjectId:row.serverId ? row.projectId : undefined,
+          cardId:row.id, revision:input.version, questions:[{id:input.version}]},
           title: row.decision.question || row.title, at: new Date().toISOString(), projectId: input.projectId,
           ...(input.images?.length ? {imageCount:input.images.length} : {}),
           answer: input.text, recipientId: input.recipientId, coordinator: input.action === "coordinate" },

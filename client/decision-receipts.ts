@@ -3,14 +3,17 @@ import type { MergeNotification, PullRequestItem } from "../shared/prs";
 import type { TrackedDecision } from "../shared/tracked-decisions";
 
 export const pullRowKey = (pr: Pick<PullRequestItem, "repo" | "number">) => JSON.stringify(["pull", pr.repo, pr.number]);
-export const recordRowKey = (item: TrackedDecision) => JSON.stringify(["record", item.key, item.fingerprint]);
+// A ledger card keeps its row across revisions so an open draft survives a display-only update.
+export const recordRowKey = (item: TrackedDecision) => JSON.stringify(["record", item.key]);
+export const recordActionKey = (item: Pick<TrackedDecision, "key" | "fingerprint">) => JSON.stringify(["record", item.key, item.fingerprint]);
+export const unsentActionKey = (item: TrackedDecision) => JSON.stringify(["unsent", item.key, item.fingerprint]);
 export const sessionRowKey = (card: Card) => JSON.stringify(["session", card.session.projectId, card.session.id, card.session.decision?.version]);
 
 export type CompletedAction = {
   actionKey: string;
   rowKey: string;
   projectIds: (string | null)[];
-  status: "merged" | "already-merged" | "sent" | "saved" | "reviewed" | "already-closed";
+  status: "merged" | "already-merged" | "sent" | "saved" | "reviewed" | "already-closed" | "unsent";
   title: string;
   detail?: string;
   recipientId?: string;
@@ -20,7 +23,8 @@ export type CompletedAction = {
 export type InlineReceipt = CompletedAction & { order: readonly string[]; hidden?: boolean };
 
 // Reinsert removed rows beside the same neighbors, even when two actions finish out of order.
-// A revision is part of the row key, so a new question can coexist with its earlier receipt.
+// A session revision is part of its row key, so a new question can coexist with its earlier receipt.
+// A ledger card's receipt shares the row with the card's newer revision.
 export function withReceiptPositions(active: readonly string[], receipts: readonly InlineReceipt[]) {
   const rows = [...active];
   for (const { rowKey, order, hidden } of receipts) {

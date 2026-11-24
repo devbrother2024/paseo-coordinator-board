@@ -62,7 +62,7 @@ function HostRunning({ host, rows, failed, projects, theme, open }: RemoteGroup 
       const title = row.title || t(`세션 ${row.sessionId.slice(0,8)}`,`Session ${row.sessionId.slice(0,8)}`);
       return <View key={row.sessionId} style={{flexDirection:"row",flexWrap:"wrap",alignItems:"center",gap:6}}>
         <Text selectable style={{flexGrow:1,flexShrink:1,color:c.foreground}}>{project.title} · {title}</Text>
-        {open && <SessionChip theme={theme} label={t("담당 세션","Task session")}
+        {open && <SessionChip theme={theme} label={t("작업 세션","Work session")}
           accessibilityLabel={t(`${host.label} · ${title} 열기`,`Open ${title} on ${host.label}`)} onPress={() => open(host.serverId,row.sessionId)} />}
       </View>;
     })}

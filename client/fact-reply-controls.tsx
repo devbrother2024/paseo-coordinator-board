@@ -35,7 +35,7 @@ export function FactReplyControls({ theme }: { theme: Theme }) {
   const c = theme.colors;
   return <View style={{ gap: 8, padding: 14, borderRadius: 10, backgroundColor: c.surface1 }}>
     <Text accessibilityRole="header" style={{ color: c.foreground, fontSize: 17, fontWeight: "600" }}>{t("사실 질문 자동 답장", "Automatic replies to factual questions")}</Text>
-    <Text style={{ color: c.foregroundMuted }}>{t("다이제스트를 요청하면 코디네이터가 보드에서 확인한 프로젝트 소속이나 세션 상태를 담당 세션에 알려 줍니다.", "When you request a digest, the coordinator can tell the assigned session its verified project or status.")}</Text>
+    <Text style={{ color: c.foregroundMuted }}>{t("다이제스트를 요청하면 코디네이터가 보드에서 확인한 프로젝트 소속이나 세션 상태를 작업 세션에 알려 줍니다.", "When you request a digest, the coordinator can tell the work session its verified project or status.")}</Text>
     <View style={{ flexDirection: "row", flexWrap: "wrap" }}>
       {failed ? <Button theme={theme} label={t("설정 다시 읽기", "Reload setting")} disabled={busy} onPress={() => void refresh()} />
         : <Button theme={theme} label={enabled === null ? t("설정 조회 중…", "Loading setting…") : enabled ? t("자동 답장 켜짐 · 끄기", "Automatic replies on · Turn off") : t("자동 답장 꺼짐 · 켜기", "Automatic replies off · Turn on")}

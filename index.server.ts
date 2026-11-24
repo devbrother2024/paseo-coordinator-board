@@ -1,5 +1,5 @@
 import type { ReplyEntry } from "./shared/reply-history";
-import { trackedRecipient, usesSourceCoordinator } from "./shared/tracked-decisions";
+import { pullKey, trackedFallbackRecipient, trackedRecipient, trackedReplyRoute, usesSourceCoordinator, type TrackedReplyReason } from "./shared/tracked-decisions";
 import { boardReadiness } from "./shared/readiness";
 import { SnapshotReads } from "./server/snapshot-reads";
 import { readProjectDecisionSources } from "./server/project-decision-sources";
@@ -12,9 +12,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { boardDecisionCount, boardScope, boardSnapshot, reportingKey, saveNote, setReporting } from "./shared/contract";
 import { canReceiveBoardInput, discoverSessions } from "./server/discovery";
+import { projectFolderMap, type ProjectFolders } from "./shared/project-folders";
 import { attachReportTool } from "./server/reporting";
 import { ConversationReader, excerpt } from "./server/conversation";
-import { isManagedCoordinator, setCoordinator, PreferenceStore } from "./server/preferences";
+import { isManagedCoordinator, pruneDispatchReceipts, setCoordinator, PreferenceStore } from "./server/preferences";
 import { trackedReviewTool } from "./server/tracked-review";
 import { attachCoordinatorTools } from "./server/coordinator";
 import { createOperations } from "./server/operations";
@@ -30,6 +31,10 @@ import { BoardFacts } from "./server/board-facts";
 import { ProjectRootReader } from "./server/project-root";
 import { recordDigestCompletion } from "./server/digest";
 import { coordinatorReach, operatingProjects } from "./server/coordinator-reach";
+import { discoverBoardSessions } from "./server/board-sessions";
+import { withAssignmentHost } from "./server/host-assignment";
+import { judgedMergeCardOptions, judgePullTool, registerMergeJudgmentSettings } from "./server/pull-judgments";
+import { applyPullJudgments } from "./shared/pull-judgments";
 import { operatingDirectories, operatingDirectory } from "./server/operating-folders";
 
 export default function contribute(server: PluginServerContext) {
@@ -45,7 +50,7 @@ export default function contribute(server: PluginServerContext) {
   facts.register(server);
   const operatingRoot = join(home, "plugin-workspaces");
   const operatingFolders = operatingDirectories(operatingRoot);
-  const operations = createOperations(prefs, operatingRoot, facts);
+  const operations = createOperations(prefs, operatingRoot, facts, () => invalidateCount());
   operations.register(server);
   registerSessionLinks(server, prefs);
   const decisions = new DecisionSender(prefs, notes, reader);
@@ -70,7 +75,7 @@ export default function contribute(server: PluginServerContext) {
     const catalogRead = paseo.projects.list();
     const [sessionView, fetched] = await Promise.all([
       (async () => {
-        const [catalog, rows] = await Promise.all([catalogRead, discoverSessions(paseo)]);
+        const [catalog, rows] = await Promise.all([catalogRead, discoverBoardSessions(paseo, prefs)]);
         return buildSessionView(paseo, catalog, rows);
       })(),
       catalogRead.then(({ projects }) => prs.read(paseo, { projects, refresh:refreshPulls })),
@@ -98,6 +103,11 @@ export default function contribute(server: PluginServerContext) {
     if (coordinatorRow && coordinatorRow.id === latest.coordinator) targets.set(coordinatorRow.id, coordinatorRow);
     for (const id of evidence.keys()) if (!targets.has(id)) evidence.delete(id);
     const {history = [], ...trackedDecisions} = tracked.read(selected, visible, pullRequests, evidence);
+    // Ledger matching above sees GitHub readiness. Only then may coordinator verdicts move merge cards.
+    pullRequests.items = applyPullJudgments(pullRequests.items, {
+      ...judgedMergeCardOptions(latest), judgments: latest.pullJudgments,
+      ledgerPulls: new Set(trackedDecisions.items.flatMap(item => item.matchedPull ? [pullKey(item.matchedPull.repo, item.matchedPull.number)] : [])),
+    });
     if (tracked.hasWaitingReplies()) {
       void resumeReplies({paseo}).catch(()=>console.warn("Could not check waiting board replies."));
     }
@@ -137,7 +147,9 @@ export default function contribute(server: PluginServerContext) {
     const missingProjects = latest.projects.filter(id => !selected.has(id)).map(id => ({
       id, title: id, path: "", selected: true, missing: true as const, temporary: false,
     }));
+    const notice = latest.assignmentNotice;
     return { sessions: visible, notes: visibleNotes, pullRequests, trackedDecisions, replyHistory, ...(clarifications.length ? { clarifications } : {}),
+      ...(notice && selected.has(notice.projectId) && { assignmentNotice: notice }),
       projects: [...knownProjects, ...missingProjects], coordinator: latest.coordinator, lastDigestAt: latest.lastDigest?.at, ...(reach ? { coordinatorReach: reach } : {}) };
   }
   async function buildSessionView(paseo: PluginHandlerContext["paseo"],
@@ -147,7 +159,7 @@ export default function contribute(server: PluginServerContext) {
       id: p.projectId, title: p.projectCustomName || p.projectDisplayName || p.projectId, path: p.projectRootPath || "",
     }]));
     for (const row of rows) {
-      if (!known.has(row.projectId)) known.set(row.projectId, { id: row.projectId, title: row.projectTitle, path: "" });
+      if (!row.serverId && !known.has(row.projectId)) known.set(row.projectId, { id: row.projectId, title: row.projectTitle, path: "" });
     }
     const saved = prefs.read();
     const scope = { ...saved, projects: saved.projects.filter(id => known.has(id)) };
@@ -159,7 +171,7 @@ export default function contribute(server: PluginServerContext) {
       projectRoots.describe(projects, new Set(scope.projects)),
     ]);
     const choices = new Map(projects.map((project, i) => [project.id, { ...project, ...roots[i] }]));
-    const coordinatorRow = rows.find(row => row.id === scope.coordinator);
+    const coordinatorRow = rows.find(row => row.id === scope.coordinator && !row.serverId);
     if (coordinatorRow && !sessions.some(row => row.id === coordinatorRow.id)) {
       const observed = await reader.read(paseo, coordinatorRow).catch(() => null);
       if (observed) evidence.set(coordinatorRow.id, observed);
@@ -179,7 +191,8 @@ export default function contribute(server: PluginServerContext) {
     for (const row of recipients) {
       if (!clarifying.has(row.id) || evidence.has(row.id) || row.nativePending || row.status === "closed") continue;
       try {
-        const page = await paseo.agents.ref(row.id).timeline.refetch({ direction: "tail", projection: "projected", limit: 48 });
+        const page = await withAssignmentHost(paseo, row.serverId, client =>
+          client.agents.ref(row.id).timeline.refetch({ direction: "tail", projection: "projected", limit: 48 }));
         evidence.set(row.id, excerpt(page));
       } catch {
         // Fall back to Paseo's current state when the timeline is unavailable.
@@ -215,6 +228,7 @@ export default function contribute(server: PluginServerContext) {
     }
   });
   prs.register(server, invalidateCount,mergeNotifications);
+  registerMergeJudgmentSettings(server, prefs, invalidateCount);
   const onRecipientAvailable = async (event: {agent?: {id:string}}, context: PluginHandlerContext) => {
     if (!event.agent?.id) return;
     const id=event.agent.id;
@@ -237,35 +251,76 @@ export default function contribute(server: PluginServerContext) {
   const removeReplyClose = server.addHook("agent.close.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });
   const removeReplyArchive = server.addHook("agent.archive.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });
   const removeMergePermission = server.addHook("agent.permission.after",onRecipientAvailable);
-  const resumeReplies = tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, async (item,targetId,{paseo}) => {
+  // The board's own same-folder judgment, read again when a reply goes out. Only selected projects get a key.
+  // `unread` says a project's folder, or the project list itself, could not be read just now.
+  async function currentFolders(paseo: PluginHandlerContext["paseo"]): Promise<{ folders: ProjectFolders; unread: (id: string | null) => boolean }> {
+    try {
+      const projects = (await paseo.projects.list()).projects.map(p => ({ id: p.projectId, path: p.projectRootPath || "" }));
+      const roots = await projectRoots.describe(projects, new Set(prefs.read().projects));
+      const unread = new Set(projects.filter((_, i) => roots[i].unread).map(project => project.id));
+      return { folders: projectFolderMap(projects.map((project, i) => ({ ...project, ...roots[i] }))), unread: (id: string | null) => !!id && unread.has(id) };
+    } catch {
+      return { folders: {}, unread: () => true };
+    }
+  }
+  // Looks for a reply the board sent in the recent conversation of the session that took it.
+  async function arrived(handle: ReturnType<PluginHandlerContext["paseo"]["agents"]["ref"]>, messageId: string, matches: (text: string) => boolean) {
+    const page=await handle.timeline.refetch({direction:"tail",projection:"projected",limit:128});
+    return !page.error && !page.gap && !page.staleCursor && page.entries.some(({item:m})=>m.type==="user_message" &&
+      (m.messageId===messageId || m.clientMessageId===messageId) && matches(m.text));
+  }
+  const resumeReplies = tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, async (item,targetId,{paseo},route) => {
     let rows = await discoverSessions(paseo);
-    const owned = usesSourceCoordinator(item);
-    const current = () => {
+    // Only a card's own local session may sit in another project on the same folder.
+    const {folders, unread} = item.where === "session" && item.sessionId && !item.sessionHost ? await currentFolders(paseo) : {folders: {}, unread: () => false};
+    const fallback = route === "coordinator";
+    const owned = fallback ? item.sourceCoordinatorId !== undefined : usesSourceCoordinator(item);
+    const mismatch = (): TrackedReplyReason | null => {
       const scope = prefs.read();
       const managed = managedSessions(rows,scope);
-      if (!scope.projects.length || (item.projectId && !scope.projects.includes(item.projectId))) return false;
-      if (trackedRecipient(item,scope.coordinator,managed) !== targetId) return false;
+      if (!scope.projects.length || (item.projectId && !scope.projects.includes(item.projectId))) return "recipient-changed";
+      const expected = fallback ? trackedFallbackRecipient(item,scope.coordinator,managed) : trackedRecipient(item,scope.coordinator,managed,folders);
+      if (expected !== targetId) {
+        // An owner that is still the ledger's owner but no longer listed is missing, not replaced.
+        if (owned) return item.sourceCoordinatorId === targetId ? "recipient-missing" : "owner-changed";
+        if (expected) return "recipient-changed";
+        // The card's own session in another project is not ruled out while either folder could not be read.
+        const own = !fallback && targetId === item.sessionId ? managed.find(row => row.id === targetId) : undefined;
+        return own && own.projectId !== item.projectId && (unread(own.projectId) || unread(item.projectId)) ? "recipient-unchecked" : "recipient-missing";
+      }
       return !owned || managed.some(row => row.id === targetId) ||
-        (isManagedCoordinator(scope,targetId) && targetId === scope.coordinator && rows.some(row => row.id === targetId));
+        (isManagedCoordinator(scope,targetId) && targetId === scope.coordinator && rows.some(row => row.id === targetId)) ? null : "recipient-missing";
     };
-    if (!current()) return null;
+    const current = () => mismatch() === null;
+    const before = mismatch();
+    if (before) return {blocked:before};
     const handle=paseo.agents.ref(targetId);
     if (owned) rows = await discoverSessions(paseo);
     const agent=(await handle.refresh())?.agent;
-    if (!current() || !agent || agent.id!==targetId || agent.internal || agent.archivedAt || agent.status==="closed" || agent.status==="error") return null;
+    if (!agent || agent.id!==targetId || agent.internal || agent.archivedAt) return {blocked:"recipient-missing"};
+    if (agent.status==="closed" || agent.status==="error") return {blocked:agent.status==="closed" ? "recipient-closed" : "recipient-error"};
+    const after = mismatch();
+    if (after) return {blocked:after};
     return {
       stillCurrent:current,
+      // A new redirected reply goes out only while the card's own session still cannot take it.
+      redirectable:()=>{
+        const scope = prefs.read();
+        return !trackedReplyRoute(item,scope.coordinator,managedSessions(rows,scope),folders).recipientId;
+      },
       send:async (answer,messageId,images)=>{
         await handle.send(answer,{messageId,activeTurnBehavior:"steer",...(images?.length ? {images} : {})});
       },
-      accepted:async (answer,messageId)=>{
-        const page=await handle.timeline.refetch({direction:"tail",projection:"projected",limit:128});
-        return !page.error && !page.gap && !page.staleCursor && page.entries.some(({item:m})=>m.type==="user_message" &&
-          (m.messageId===messageId || m.clientMessageId===messageId) && m.text===answer);
-      },
-      ready:canReceiveBoardInput(agent,owned || targetId===prefs.read().coordinator),
+      accepted:(messageId,matches)=>arrived(handle,messageId,matches),
+      ready:canReceiveBoardInput(agent,owned || fallback || targetId===prefs.read().coordinator),
     };
-  });
+  }, ({paseo}) => ({
+    arrived:(recipientId,messageId,matches)=>arrived(paseo.agents.ref(recipientId),messageId,matches),
+    gone:async recipientId=>{
+      const agent=(await paseo.agents.ref(recipientId).refresh())?.agent;
+      return !agent || !!agent.archivedAt;
+    },
+  }));
   server.handle(boardSnapshot, (input, { paseo }) => reads.read(() => buildSnapshot(paseo), input.fresh));
   server.handle(boardDecisionCount, async (_input, { paseo }) => ({
     count: await reads.count(() => buildSnapshot(paseo)),
@@ -282,6 +337,8 @@ export default function contribute(server: PluginServerContext) {
         scope.projects = scope.projects.filter(id => id !== change.projectId);
         if (change.enabled) scope.projects.push(change.projectId);
         else {
+          pruneDispatchReceipts(scope);
+          if (scope.assignmentNotice?.projectId === change.projectId) delete scope.assignmentNotice;
           for (const link of Object.values(scope.sessionLinks)) {
             if (link.targetProjectId === change.projectId) delete scope.sessionLinks[link.sessionId];
           }
@@ -300,7 +357,7 @@ export default function contribute(server: PluginServerContext) {
     return { ok: true };
   });
   server.handle(saveNote, async (input, { paseo }) => {
-    const sessions = await discoverSessions(paseo);
+    const sessions = await discoverBoardSessions(paseo, prefs, new Set([input.sessionId]));
     if (!managedSessions(sessions, prefs.read()).some(session => session.id === input.sessionId)) {
       throw new Error("이 호스트에서 해당 세션을 찾지 못했습니다. 보드를 새로 고쳐 주세요.");
     }
@@ -317,6 +374,6 @@ export default function contribute(server: PluginServerContext) {
     return { ok: true };
   });
   const removeReport = attachReportTool(server, notes);
-  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount)]);
+  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount), judgePullTool(prefs, prs, invalidateCount)]);
   return () => { removeMergeTurn(); removeMergePermission(); removeReplyClose(); removeReplyArchive(); removeCoordinator(); removeReport(); };
 }

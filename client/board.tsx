@@ -1,25 +1,32 @@
 import type { BoardReadiness } from "../shared/readiness";
 import { historySessionLinks, type HistoryLinks } from "./history-sessions";
 import { ReplyHistory } from "./reply-history";
+import { followupKind, hostWideVisible } from "./reply-followup";
 import { createRemoteWorkSessionLookup, trackedSessionOwner, trackedWorkSession } from "./tracked-session-targets";
 import type { TrackedSessionLinks } from "./tracked-session-chips";
 import { TrackedDecisionCard } from "./tracked-decisions";
-import { mentionsSecurityGate, trackedCoverage, trackedRecipient, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
+import { closedRevision } from "./tracked-reply-draft";
+import { mentionsSecurityGate, trackedCoverage, trackedReplyRoute, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
+import { projectFolderMap } from "../shared/project-folders";
 import { MergeFeedback, PullRequestCard, PullRequestSettings, type MergeNotice, type WorkSessionLink } from "./pull-requests";
-import { pullRowKey, recordRowKey, sessionRowKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
+import { pullRowKey, recordActionKey, sessionRowKey, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
 import { rankDecisionRows, priorityLabel } from "./decision-priority";
 import { DecisionEditingRow, keepEditingPositions, useDecisionEditing } from "./decision-editing";
 import { InlineDecisionReceipt } from "./inline-receipt";
 import { latestMergeNotification } from "./merge-notification";
 import { decisionSummary } from "./decision-summary";
 import { matchesWorkspace } from "../shared/workspace-pull";
+import { ownerRunning } from "../shared/pull-judgments";
 import type { PullRequestItem } from "../shared/prs";
 import { getPaseoClient, type PluginScreenProps } from "@getpaseo/plugin/client";
 import { remoteScope, readRemoteHistorySession } from "./remote-sessions";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { DecisionActions, type DecisionReceipt } from "./decision-actions";
+import { PendingRequests } from "./pending-request-forms";
 import { Clarification } from "./clarification";
+import { cardChoiceNotice, choiceRequest, decisionChoiceNotice, type ChoiceNotice } from "./choice-display";
+import { ledgerChoiceGaps } from "../shared/choice-gaps";
 import { clarificationKey, clarificationRecipient, sessionClarificationCard, trackedClarificationCard, type ClarificationCard } from "../shared/clarifications";
 import { SessionLinks } from "./session-links";
 import { useRemoteRunning, RemoteRunning } from "./remote-running";
@@ -37,6 +44,7 @@ import { groupProjects, selectedProjectIds, toggleProjectFilter, type ProjectFil
 import { ProjectFilterBar } from "./project-filter-bar";
 import { shouldRefreshDigest } from "./digest-freshness";
 import { DigestFeedback, useDigestRequest } from "./digest-request";
+import { assignmentFailures, platformLabels } from "../shared/host-assignment";
 import { LedgerWarnings } from "./ledger-warnings";
 
 type Actions = { sessionHostLabel?: string; coordinator?: string | null; onCoordinator?: (id: string | null) => void; changing?: boolean; onOpen?: (id: string) => void; onEdit: (id: string) => void };
@@ -59,6 +67,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     return [...snapshot?.trackedDecisions?.items ?? []].sort((a,b) => priority(a.urgency) - priority(b.urgency) ||
       (a.where === "human" ? 0 : 1) - (b.where === "human" ? 0 : 1) || (a.since ?? "~").localeCompare(b.since ?? "~"));
   }, [snapshot?.trackedDecisions]);
+  const folders = useMemo(() => projectFolderMap(snapshot?.projects ?? []), [snapshot?.projects]);
   const [inlineReceipts, setInlineReceipts] = useState<InlineReceipt[]>([]);
   const completed = new Set(inlineReceipts.map(receipt => receipt.actionKey));
   const names = new Map(snapshot?.projects.map(project => [project.id, project.title]));
@@ -67,7 +76,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     if (!displayed.has(id)) displayed.set(id, {id,title:names.get(id) ?? id,cards:[]});
   }
   function decisionsFor(inScope:(id:string|null)=>boolean) {
-    const visibleRecords=records.filter(item=>inScope(item.projectId) && !completed.has(recordRowKey(item)));
+    const visibleRecords=records.filter(item=>inScope(item.projectId) && !completed.has(recordActionKey(item)));
     const covered=trackedCoverage(visibleRecords);
     return {
       records:visibleRecords,
@@ -83,6 +92,20 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     projectIds.add(item.projectId);
     if (item.projectId && !displayed.has(item.projectId)) displayed.set(item.projectId,{id:item.projectId,title:names.get(item.projectId) ?? item.projectTitle ?? item.projectId,cards:[]});
   }
+  const [settings, setSettings] = useState(false);
+  const {groups: peers, hosts: peerHosts, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
+  const peerKey = JSON.stringify(peerHosts.map(host => host.serverId));
+  const lookupWorkSession = useMemo(() => createRemoteWorkSessionLookup(getPaseoClient), [hostId, updatedAt, peerKey]);
+  const historyRepos = useMemo(() => new Map(pullRequests?.projects.flatMap(p =>
+    p.repo && p.mode !== "off" ? [[p.projectId,p.repo] as const] : [])), [pullRequests?.projects]);
+  const historyScope = useMemo(() => remoteScope(activeProjects,pullRequests?.projects ?? []), [activeProjects,pullRequests?.projects]);
+  const scopeKey = JSON.stringify([hostId, historyScope, peers.map(p=>p.host.serverId).sort()]);
+  const currentHistoryScope = useRef(scopeKey);
+  currentHistoryScope.current = scopeKey;
+  const historyLinks:HistoryLinks = entry => historySessionLinks(entry, {
+    hostId, sessions:snapshot?.sessions ?? [], peers, repos:historyRepos,
+    verifyRemote:(host,id,project) => readRemoteHistorySession(getPaseoClient(host),id,project,historyScope,()=>currentHistoryScope.current===scopeKey),
+  });
   const history = snapshot?.replyHistory ?? [];
   useEffect(() => {
     const stored = new Map(snapshot?.replyHistory?.flatMap(entry => entry.pullMerge?.status === "merged" && entry.pullMerge.notification
@@ -97,7 +120,13 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       return next.some((receipt, index) => receipt !== previous[index]) ? next : previous;
     });
   }, [snapshot?.replyHistory, inlineReceipts.length]);
-  for (const entry of history) {
+  const now = Date.now();
+  // Only replies still waiting on a session's result appear in the project kanban.
+  const followups = history.flatMap(entry => {
+    const kind = followupKind(entry, historyLinks(entry), now);
+    return kind ? [{entry, kind}] : [];
+  });
+  for (const {entry} of followups) {
     projectIds.add(entry.projectId);
     if (entry.projectId && !displayed.has(entry.projectId)) displayed.set(entry.projectId,{id:entry.projectId,title:names.get(entry.projectId) ?? entry.projectId,cards:[]});
   }
@@ -116,7 +145,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const filters = selectedProjectIds(filterGroups, chosenProjects);
   const inFilter = (id: string | null) => !filters.size || filters.has(id);
   const visibleProjects = [...displayed.values()].filter(project => inFilter(project.id));
-  const showHostWide = byProject.has(null) && inFilter(null);
+  const hostWideRecords = records.filter(item=>item.projectId === null);
+  const hostWideFollowups = followups.filter(item=>item.entry.projectId === null);
+  const showHostWide = inFilter(null) && hostWideVisible({records:hostWideRecords.length, followups:hostWideFollowups.length});
   const {records:filteredRecords,sessions:filteredSessions,prs:filteredPrs}=decisionsFor(inFilter);
   const filteredTotal=filteredRecords.length+filteredSessions.length+filteredPrs.length;
   const filteredHistory=history.filter(entry=>inFilter(entry.projectId));
@@ -124,21 +155,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const filterNames = new Map(filterGroups.flatMap(group => group.ids.map(id => [id, group.label] as const)));
   const projectName=(id:string|null)=>filterNames.get(id) ?? displayed.get(id ?? "")?.title ?? id ?? t("공통","Host-wide");
   const incomplete = snapshot?.trackedDecisions && ["partial","unavailable","invalid"].includes(snapshot.trackedDecisions.status);
-  const [settings, setSettings] = useState(false);
-  const {groups: peers, hosts: peerHosts, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
-  const peerKey = JSON.stringify(peerHosts.map(host => host.serverId));
-  const lookupWorkSession = useMemo(() => createRemoteWorkSessionLookup(getPaseoClient), [hostId, updatedAt, peerKey]);
-  const visiblePeers = peers.map(group => ({...group, rows: group.rows.filter(row => inFilter(row.projectId))}));
-  const historyRepos = useMemo(() => new Map(pullRequests?.projects.flatMap(p =>
-    p.repo && p.mode !== "off" ? [[p.projectId,p.repo] as const] : [])), [pullRequests?.projects]);
-  const historyScope = useMemo(() => remoteScope(activeProjects,pullRequests?.projects ?? []), [activeProjects,pullRequests?.projects]);
-  const scopeKey = JSON.stringify([hostId, historyScope, peers.map(p=>p.host.serverId).sort()]);
-  const currentHistoryScope = useRef(scopeKey);
-  currentHistoryScope.current = scopeKey;
-  const historyLinks:HistoryLinks = entry => historySessionLinks(entry, {
-    hostId, sessions:snapshot?.sessions ?? [], peers, repos:historyRepos,
-    verifyRemote:(host,id,project) => readRemoteHistorySession(getPaseoClient(host),id,project,historyScope,()=>currentHistoryScope.current===scopeKey),
-  });
+  const assigned = new Set(snapshot?.sessions.filter(row => row.serverId).map(row => JSON.stringify([row.serverId, row.id])));
+  const visiblePeers = peers.map(group => ({ ...group, rows: group.rows.filter(row =>
+    inFilter(row.projectId) && !assigned.has(JSON.stringify([group.host.serverId, row.sessionId]))) }));
   const [showError, setShowError] = useState(false);
   const [manage, setManage] = useState(false);
   const [pickSession, setPickSession] = useState(false);
@@ -172,7 +191,6 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
 
   const [receipts, setReceipts] = useState<DecisionReceipt[]>([]);
   const matches = (r: DecisionReceipt, card: Card) => r.projectId === card.session.projectId && r.sessionId === card.session.id && r.version === card.session.decision?.version;
-  const now = Date.now();
   const showDigestRefresh = shouldRefreshDigest(lastDigest, allPending.sessions, coordinatorId ?? null, now);
   const ranked = rankDecisionRows({ prs: filteredPrs, records: filteredRecords, sessions: filteredSessions }, now);
   const rankedKeys = ranked.map(row => row.key);
@@ -187,18 +205,26 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     setInlineReceipts(previous => previous.some(entry => entry.actionKey === action.actionKey && entry.rowKey === action.rowKey)
       ? previous : [...previous, { ...action, order: orderedKeys }]);
   }
-  function questionFor(card: ClarificationCard | null, title: string, prior?: TrackedDecision["qa"], onDraftChange?: (active:boolean) => void, ownerId?: string | null) {
+  function questionFor(card: ClarificationCard | null, title: string, prior?: TrackedDecision["qa"], onDraftChange?: (active:boolean) => void, ownerId?: string | null, notice?: ChoiceNotice | null) {
     if (!snapshot) return null;
     const recipientId = card ? clarificationRecipient(card, snapshot) : null;
     const recipientTitle = ownerId && ownerId === recipientId ? t("운영 코디네이터", "Ledger owner") + " · " + ownerId
       : snapshot.sessions.find(row => row.id === recipientId)?.title;
-    return <Clarification key={card ? clarificationKey(card) : title} title={title} card={card} theme={theme}
+    const toCoordinator = !!recipientId && (recipientId === snapshot.coordinator || recipientId === ownerId);
+    return <Clarification key={card ? clarificationKey(card) : title} title={title} card={card} theme={theme} suggestion={choiceRequest(notice ?? null, toCoordinator)}
       recipientId={recipientId} recipientTitle={recipientTitle} entries={snapshot.clarifications ?? []} prior={prior} onRefresh={onRefresh} onDraftChange={onDraftChange} />;
   }
   const renderDecision = (card: Card, embedded = false, rowKey?: string, priority?: string) => <DecisionActions key={JSON.stringify([card.session.projectId, card.session.id, card.session.decision?.version])}
-          clarification={!embedded && questionFor(sessionClarificationCard(card.session,card.note),card.session.title)}
-          embedded={embedded} priorityLabel={priority} card={card} hostLabel={hostLabel} theme={theme} coordinator={snapshot!.coordinator} coordinatorTitle={snapshot!.sessions.find(s => s.id === snapshot!.coordinator)?.title}
+          clarification={!embedded && questionFor(sessionClarificationCard(card.session,card.note),card.session.title,undefined,undefined,undefined,
+            card.session.decision?.source === "conversation" ? decisionChoiceNotice(card.session.decision) : null)}
+          embedded={embedded} priorityLabel={priority} card={card} hostLabel={card.session.assignment?.label ?? hostLabel} theme={theme} coordinator={snapshot!.coordinator} coordinatorTitle={snapshot!.sessions.find(s => s.id === snapshot!.coordinator)?.title}
           open={actions.onOpen} receipt={receipts.find(r => matches(r, card))}
+          pendingRequests={card.session.nativePending && !card.session.serverId && hostId ? <PendingRequests key={JSON.stringify([hostId, card.session.id])} hostId={hostId}
+            sessionId={card.session.id} sessionTitle={card.session.title} version={card.session.permissionVersion} theme={theme} open={actions.onOpen} onRefresh={onRefresh}
+            onAnswered={result => {
+              if (rowKey) remember({ rowKey, actionKey: sessionRowKey(card), projectIds: [card.session.projectId], status: result.handled ? "already-closed" : "sent", recipientId: card.session.id,
+                title: card.session.title + " · " + result.title, detail: result.detail || undefined });
+            }} /> : undefined}
           onSent={result => {
             if (rowKey && result.action === "reply") remember({
               rowKey, actionKey: sessionRowKey(card), projectIds: [result.projectId], status: "sent", recipientId: result.recipientId,
@@ -221,7 +247,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         : !listed && hostId ? { check: () => readSessionReach(getPaseoClient(hostId), ownerId) } : undefined,
     } : undefined;
     const target = showSource ? trackedWorkSession(item, {
-      hostId, hostLabel, sessions: snapshot.sessions, hosts: peerHosts, repos: historyRepos,
+      hostId, hostLabel, sessions: snapshot.sessions, hosts: peerHosts, folders,
     }) : undefined;
     if (target?.kind === "local" && owner?.id === target.id) return { owner };
     if (target?.kind === "local" && open) return { owner, source: { kind: "local", open: () => open(target.id) } };
@@ -235,11 +261,18 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     for (const s of snapshot?.sessions ?? []) {
       if (!inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !actions.onOpen || !matchesWorkspace(pr,s.workspacePull)) continue;
       const state = s.status === "closed" ? t("대화 종료","Closed") : s.lane === "running" ? t("진행 중","Running") : s.status === "idle" ? t("대기","Idle") : t("상태 확인 필요","Check status");
-      workSessions.push({key:JSON.stringify([hostId,s.id]),label:[s.title,hostLabel,state].join(" · "),open:()=>actions.onOpen!(s.id)});
+      workSessions.push({key:JSON.stringify([s.serverId ?? hostId,s.id]),label:[s.title,s.assignment?.label ?? hostLabel,state].join(" · "),open:()=>actions.onOpen!(s.id),running:s.lane === "running"});
     }
     if (onOpenHostSession) for (const {host,rows} of peers) for (const s of rows) {
-      if (!inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !matchesWorkspace(pr,s.workspacePull)) continue;
-      workSessions.push({key:JSON.stringify([host.serverId,s.sessionId]),label:[s.title || t("작업 세션","Work session"),host.label,t("진행 중","Running")].join(" · "),open:()=>onOpenHostSession(host.serverId,s.sessionId)});
+      if (assigned.has(JSON.stringify([host.serverId, s.sessionId])) || !inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !matchesWorkspace(pr,s.workspacePull)) continue;
+      workSessions.push({key:JSON.stringify([host.serverId,s.sessionId]),label:[s.title || t("작업 세션","Work session"),host.label,t("진행 중","Running")].join(" · "),open:()=>onOpenHostSession(host.serverId,s.sessionId),running:true});
+    }
+    // The coordinator can name the work session that owns the PR when no workspace matches it.
+    const owner = pr.judgment?.ownerSessionId && snapshot?.sessions.find(s => s.id === pr.judgment?.ownerSessionId);
+    if (owner && actions.onOpen && !workSessions.some(link => link.key === JSON.stringify([owner.serverId ?? hostId,owner.id]))) {
+      const running = ownerRunning(pr, [owner]);
+      workSessions.push({key:JSON.stringify([owner.serverId ?? hostId,owner.id]),label:[owner.title,owner.assignment?.label ?? hostLabel,running ? t("진행 중","Running") : t("작업 세션","Work session")].join(" · "),
+        open:()=>actions.onOpen!(owner.id),running});
     }
     return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions}
       clarification={decision && !embedded && questionFor({kind:"pull",projectId,repo:pr.repo,number:pr.number,updatedAt:pr.updatedAt},pr.repo + " #" + pr.number)}
@@ -259,19 +292,26 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           const pr = item.kind === "merge" && item.mergeTarget && pullRequests?.items.find(pr =>
             pr.repo === item.mergeTarget?.repo && pr.number === item.mergeTarget.number &&
             (!item.projectId || pr.projectIds.includes(item.projectId)) && (pr.reason !== "ready" || item.matchedPull));
-          const recipient = trackedRecipient(item,snapshot!.coordinator,snapshot!.sessions);
-          const replyRecipient = native && !item.questions.length ? undefined : recipient;
+          const route = native && !item.questions.length ? undefined : trackedReplyRoute(item,snapshot!.coordinator,snapshot!.sessions,folders);
+          // A card offers its fallback only when it has no recipient.
+          const reaches = route?.recipientId ?? route?.fallbackId;
           return <TrackedDecisionCard links={recordLinks(item, !native)} key={item.key} item={item} theme={theme} priorityLabel={priority}
-            renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined)}
+            renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined,
+              item.kind === "merge" ? null : cardChoiceNotice(ledgerChoiceGaps(item)))}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
               : pr && renderPull(pr, pr.projectIds.includes(item.projectId ?? "") ? item.projectId! : pr.projectIds[0], true, mentionsSecurityGate(item), true, rowKey, [item.projectId])}
-            recipientId={replyRecipient} blockedNote={replyRecipient && replyRecipient === snapshot!.coordinator ? unreachableNote : undefined}
-            onResolved={(status,mode,answer)=>{
+            route={route} keepsUnsent={!!rowKey}
+            blockedNote={reaches && reaches === snapshot!.coordinator ? unreachableNote : undefined}
+            onResolved={outcome=>{
+              const {status,reason,mode,answer,recipientId}=outcome;
               if (rowKey && mode && (status === "sent" || status === "closed" || status === "already-closed")) {
-                remember({ rowKey, actionKey: recordRowKey(item), projectIds: [item.projectId],
+                remember({ rowKey, actionKey: recordActionKey({key: item.key, fingerprint: closedRevision(outcome) ?? item.fingerprint}), projectIds: [item.projectId],
                   status: status === "closed" ? (mode === "save" ? "saved" : "reviewed") : status,
-                  recipientId: status === "sent" && mode === "send" ? replyRecipient ?? undefined : undefined,
+                  recipientId: status === "sent" ? recipientId : undefined,
                   title: item.title, detail: answer || item.projectTitle || projectName(item.projectId) });
+              }
+              if (rowKey && mode && answer && (reason === "removed" || reason === "conflict")) {
+                remember({ rowKey, actionKey: unsentActionKey(item), projectIds: [item.projectId], status: "unsent", title: item.title, detail: answer });
               }
               onRefresh();
             }}>
@@ -298,6 +338,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     activeRows.set(key, <DecisionEditingRow rowKey={key} position={position} onEditing={onEditing}>{content}</DecisionEditingRow>);
   });
   const c = theme.colors;
+  const assignmentNotice = !settings && snapshot?.assignmentNotice;
   return (
     <ScrollView ref={scroll} style={{ flex: 1, backgroundColor: c.surface0 }} contentContainerStyle={{ gap: 20, padding: layout.compact ? 12 : 22 }}>
       <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
@@ -355,11 +396,18 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       </>}
       <OperationsPanel settings={operationsReady && settings} theme={theme} coordinator={operationsReady ? coordinatorId ?? null : null} configured={operationsReady && !!configured}
         refreshBoard={onRefresh} openCoordinator={coordinatorOpens ? actions.onOpen : undefined} action={coordinatorAction} digest={digest} />
+      {assignmentNotice && inFilter(assignmentNotice.projectId) && <View style={{ gap: 4, padding: 10, borderLeftWidth: 3, borderColor: c.statusWarning, backgroundColor: c.surface1 }}>
+        <Text style={{ color: c.foreground, fontWeight: "600" }}>{t("작업 배정 실패", "Assignment failed")} · {projectName(assignmentNotice.projectId)}</Text>
+        <Text accessibilityLiveRegion="polite" style={{ color: c.foreground }}>
+          {[assignmentNotice.host, assignmentNotice.platform !== "any" && t(...platformLabels[assignmentNotice.platform]),
+            t(...assignmentFailures[assignmentNotice.failure])].filter(Boolean).join(" · ")}
+        </Text>
+      </View>}
       {settings && snapshot && actions.onCoordinator && <View style={{ gap: 8 }}>
         <Button theme={theme} label={pickSession ? t("기존 세션 목록 닫기", "Close session list") : t("기존 세션에서 코디네이터 지정", "Choose an existing coordinator session")} onPress={() => setPickSession(!pickSession)} />
         {pickSession && <>
           {snapshot.coordinator && <Button theme={theme} disabled={actions.changing} label={t("현재 코디네이터 지정 해제", "Clear current coordinator")} onPress={() => actions.onCoordinator?.(null)} />}
-          {snapshot.sessions.filter(s => s.id !== snapshot.coordinator).map(s => <Button key={s.id} theme={theme} disabled={actions.changing}
+          {snapshot.sessions.filter(s => !s.serverId && s.id !== snapshot.coordinator).map(s => <Button key={s.id} theme={theme} disabled={actions.changing}
             label={`${s.projectTitle} · ${s.title} · ${t("지정", "Assign")}`} onPress={() => actions.onCoordinator?.(s.id)} />)}
           {!snapshot.sessions.length && <Text style={{ color: c.foregroundMuted }}>{t("관리할 프로젝트를 선택하면 지정할 수 있는 세션이 표시됩니다.", "Select a project to see its available sessions.")}</Text>}
         </>}
@@ -400,10 +448,10 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       {!settings && configured && snapshot && <SessionProgress theme={theme} cards={visibleProjects.flatMap(project => project.cards)}
         peers={visiblePeers} peersLoading={peersLoading} hostLabel={hostLabel} projectName={projectName} open={actions.onOpen} openRemote={onOpenHostSession}>
         {!visibleProjects.length && !showHostWide && <Text style={{ color: c.foregroundMuted }}>{t("표시할 세션이 없습니다.", "No sessions to show.")}</Text>}
-        {showHostWide && <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId="" title={t("공통","Host-wide")} cards={[]} requests={[]} history={history.filter(entry=>entry.projectId === null)}
-          records={records.filter(item=>item.projectId === null)} decisions={byProject.get(null) ?? 0} renderRecord={renderRecord} renderPull={renderPull}
+        {showHostWide && <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId="" title={t("공통","Host-wide")} cards={[]} requests={[]} followups={hostWideFollowups} now={now}
+          records={hostWideRecords} decisions={byProject.get(null) ?? 0} renderRecord={renderRecord} renderPull={renderPull}
           recordLinks={recordLinks} compact={layout.compact} theme={theme} {...actions} />}
-        {visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} history={history.filter(entry=>entry.projectId===p.id)} records={records.filter(r => r.projectId === p.id)} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={pullRequests?.items.filter(pr => pr.projectIds.includes(p.id)) ?? []} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
+        {visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} followups={followups.filter(item=>item.entry.projectId===p.id)} now={now} records={records.filter(r => r.projectId === p.id)} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={pullRequests?.items.filter(pr => pr.projectIds.includes(p.id)) ?? []} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
         <RemoteRunning groups={visiblePeers} projects={activeProjects} open={onOpenHostSession} theme={theme} />
       </SessionProgress>}
     </ScrollView>

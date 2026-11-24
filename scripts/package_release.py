@@ -21,6 +21,8 @@ required = {
     "shared/dispatch.ts", "shared/operations.ts", "server/dispatch.ts", "server/operations.ts", "server/lifecycle.ts",
     "server/digest.ts", "client/coordinator-pin.tsx", "client/operations.tsx", "client/photo-composer.tsx", "client/work-photos.ts", "client/route-editor.tsx", "client/providers.tsx",
     "client/hosts.tsx", "shared/hosts.ts", "client/route-options.ts",
+    "client/dispatch-hosts.tsx", "shared/dispatch-hosts.ts", "shared/host-assignment.ts",
+    "server/board-sessions.ts", "server/host-assignment.ts", "server/session-decisions.ts", "server/worker-assignment.ts",
     "server/decisions.ts", "shared/decision-actions.ts", "client/decision-actions.tsx", "client/decision-reply.tsx", "client/decision-reply-state.ts",
     "client/session-photos.tsx", "server/session-photos.ts", "shared/session-photos.ts",
     "server/board-facts.ts", "shared/board-facts.ts", "client/fact-reply-controls.tsx",

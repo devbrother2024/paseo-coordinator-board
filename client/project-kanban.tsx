@@ -4,15 +4,20 @@ import { Button, SessionChip, type Theme } from "./controls";
 import { useBoardLanguage } from "./language";
 import { columnWidth, COLUMN_GAP } from "./lane-width";
 import type { PullRequestItem } from "../shared/prs";
+import { pullColumn } from "../shared/pull-judgments";
 import type { TrackedDecision } from "../shared/tracked-decisions";
 import { factStatus, laneLabel, noteLabel, sessionDetail, type Card, type Lane } from "./model";
 import type { ReplyEntry } from "../shared/reply-history";
 import type { HistoryLinks } from "./history-sessions";
+import { KANBAN_ORDER, type FollowupKind } from "./reply-followup";
+import { ReplyFollowupCard } from "./reply-followup-card";
 import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session-chips";
 import { plainDecisionTitle } from "./decision-summary";
 import { HistoryMarkdown } from "./history-markdown";
-import { ReplyCard } from "./reply-history";
-type ColumnKind = Lane | "history";
+import { assignmentReasons } from "../shared/host-assignment";
+import { QuestionContext } from "./question-context";
+import { decisionChoiceNotice } from "./choice-display";
+type ColumnKind = Lane;
 type Actions = { sessionHostLabel?: string; onOpen?: (id:string) => void; onEdit:(id:string) => void };
 
 function accent(lane: ColumnKind, theme: Theme) {
@@ -49,7 +54,8 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
             : session.detail ? sessionDetail(session.detail, t) : laneLabel(card.lane, t)}
         </Text>
         {!!sessionHostLabel && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
-          {t("실행 호스트", "Host")} · {sessionHostLabel}
+          {t("실행 호스트", "Host")} · {session.assignment?.label ?? sessionHostLabel}
+          {session.assignment ? " · " + t(...assignmentReasons[session.assignment.reason]) : ""}
         </Text>}
       </Pressable>
       {onOpen && <SessionChip theme={theme} label={t("세션", "Session")} accessibilityLabel={t(`세션 열기 · ${session.title}`, `Open session · ${session.title}`)} onPress={() => onOpen(session.id)} />}
@@ -64,6 +70,8 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
         <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[session.sourceProjectTitle && t(`원래 소속 ${session.sourceProjectTitle}`, `From ${session.sourceProjectTitle}`), session.workspaceTitle, runtime].filter(Boolean).join(" · ")}</Text>
         {!!session.detail && !detailIsQuestion && <HistoryMarkdown theme={theme} source={sessionDetail(session.detail, t)} muted />}
         {!!displayedQuestion && note?.text !== question && <HistoryMarkdown theme={theme} source={displayedQuestion} />}
+        {session.decision && session.decision.source !== "permission" && <QuestionContext theme={theme} title={session.title}
+          choices={session.decision.choices} context={session.decision.contextMarkdown} notice={decisionChoiceNotice(session.decision)} />}
         {noteTitle && note && <View style={{ gap: 3 }}>
           <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{noteTitle}</Text>
           <HistoryMarkdown theme={theme} source={note.text} />
@@ -99,7 +107,7 @@ function Column({lane,entries,theme}: {lane:ColumnKind;entries:Entry[];theme:The
   return <View style={{padding:8,borderRadius:8,backgroundColor:c.surface1,borderColor:c.border,borderWidth:1,gap:7}}>
     <View style={{flexDirection:"row",alignItems:"center",gap:6}}>
       <View style={{width:7,height:7,borderRadius:4,backgroundColor:accent(lane,theme)}} />
-      <Text accessibilityRole="header" style={{color:c.foreground,flex:1,fontWeight:"600"}}>{lane === "history" ? t("결정 후속","Decision follow-up") : laneLabel(lane,t)}</Text>
+      <Text accessibilityRole="header" style={{color:c.foreground,flex:1,fontWeight:"600"}}>{laneLabel(lane,t)}</Text>
       <Text style={{color:c.foregroundMuted}}>{entries.length}</Text>
     </View>
     {entries.slice(0,limit).map(entry=><View key={entry.key}>{entry.content}</View>)}
@@ -107,14 +115,14 @@ function Column({lane,entries,theme}: {lane:ColumnKind;entries:Entry[];theme:The
   </View>;
 }
 
-type Props = Actions & {projectId:string; title:string; history?:ReplyEntry[]; historyLinks:HistoryLinks; openRemote?:(host:string,id:string)=>void; decisions:number; cards:Card[]; records:TrackedDecision[]; requests:PullRequestItem[];
+export type Followup = {entry:ReplyEntry; kind:FollowupKind};
+type Props = Actions & {projectId:string; title:string; followups?:Followup[]; now:number; historyLinks:HistoryLinks; openRemote?:(host:string,id:string)=>void; decisions:number; cards:Card[]; records:TrackedDecision[]; requests:PullRequestItem[];
   renderRecord:(item:TrackedDecision)=>ReactNode; theme:Theme; compact:boolean; recordLinks:(item:TrackedDecision)=>TrackedSessionLinks; renderPull:(pr:PullRequestItem,projectId:string)=>ReactNode};
-const order:ColumnKind[] = ["running","review","human","history","idle","done","unknown"];
 
-export function Project({projectId,title,decisions,cards,records,history=[],historyLinks,openRemote,requests,renderRecord,theme,compact,recordLinks,renderPull,...actions}:Props) {
+export function Project({projectId,title,decisions,cards,records,followups=[],now,historyLinks,openRemote,requests,renderRecord,theme,compact,recordLinks,renderPull,...actions}:Props) {
   const {t} = useBoardLanguage();
   const [width,setWidth] = useState(0);
-  const groups:Record<ColumnKind,Entry[]> = {history: history.map(entry=>({key:entry.key,content:<ReplyCard links={historyLinks} openRemote={openRemote} entry={entry} theme={theme} open={actions.onOpen} />})),running:[],review:[],human:[],idle:[],done:[],unknown:[]};
+  const groups:Record<ColumnKind,Entry[]> = {running:[],review:[],human:[],idle:[],done:[],unknown:[]};
   for(const item of records) {
     const since = Date.parse(item.since ?? "");
     const answered = item.replyHistory.some(reply => Date.parse(reply.at ?? "") >= since);
@@ -127,10 +135,12 @@ export function Project({projectId,title,decisions,cards,records,history=[],hist
   }
   for(const pr of requests) {
     if(records.some(item=>item.matchedPull?.repo===pr.repo && item.matchedPull.number===pr.number)) continue;
-    const lane = pr.lane==="review" ? "human" : ["conflict","checks-failed","changes-requested","blocked","unknown"].includes(pr.reason) ? "review" : "running";
+    const lane = pullColumn(pr);
     groups[lane].push({key:pr.url,content:renderPull(pr,projectId)});
   }
-  const lanes=order.filter(lane=>groups[lane].length);
+  for(const {entry,kind} of followups) groups.review.push({key:"reply:"+entry.key,content:<ReplyFollowupCard entry={entry} kind={kind}
+    links={historyLinks(entry)} now={now} theme={theme} open={actions.onOpen} openRemote={openRemote} />});
+  const lanes=KANBAN_ORDER.filter(lane=>groups[lane].length);
   const stacked = width ? width<490 : compact;
   const running=cards.filter(card=>card.lane==="running").length;
   const columns=lanes.map(lane=><View key={lane} style={stacked ? {width:"100%"} : {width:columnWidth(width,lanes.length)}}>

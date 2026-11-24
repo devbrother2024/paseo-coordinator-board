@@ -9,13 +9,16 @@ import { Button, type Theme } from "./controls";
 import { HistoryMarkdown } from "./history-markdown";
 import { useBoardLanguage } from "./language";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
+import type { ChoiceRequest } from "./choice-display";
 
 type Props = {
   card: ClarificationCard | null; title: string; theme: Theme; recipientId: string | null; recipientTitle?: string;
   entries: ClarificationEntry[]; prior?: TrackedDecision["qa"]; onRefresh: () => void; onDraftChange?: (active:boolean) => void;
+  /** A ready question this card suggests. The button only fills the box; the person sends it. */
+  suggestion?: ChoiceRequest | null;
 };
 
-export function Clarification({card,title,theme,recipientId,recipientTitle,entries,prior = [],onRefresh,onDraftChange}:Props) {
+export function Clarification({card,title,theme,recipientId,recipientTitle,entries,prior = [],onRefresh,onDraftChange,suggestion}:Props) {
   const {t} = useBoardLanguage();
   const ask = useRpc(askClarification);
   const photos = usePhotoDraft();
@@ -47,6 +50,13 @@ export function Clarification({card,title,theme,recipientId,recipientTitle,entri
     if (!expanded && !hasDraft) setDraftTarget(target);
     setExpanded(!expanded);
   }
+  function draftSuggestion() {
+    if (!suggestion || sending.current || photos.readPending.current) return;
+    const request = t(...suggestion.text);
+    setDraftTarget(target); setError(false); setExpanded(true);
+    // Keep anything the person already wrote and add the request once.
+    setText(current => !current.trim() ? request : current.includes(request) ? current : current.trimEnd() + "\n\n" + request);
+  }
   async function submit() {
     if (!card || !recipientId || changed || sending.current || photos.blocksSubmit()) return;
     const attachments = photos.latest.current;
@@ -67,6 +77,8 @@ export function Clarification({card,title,theme,recipientId,recipientTitle,entri
   return <>
     <Button theme={theme} label={t("질문하기", "Ask a question")} accessibilityLabel={label("질문하기", "Ask a question")}
       expanded={expanded} disabled={busy || photos.reading} onPress={toggle} />
+    {suggestion && card && recipientId && <Button theme={theme} label={t(...suggestion.label)} accessibilityLabel={label(...suggestion.label)}
+      disabled={busy || photos.reading} onPress={draftSuggestion} />}
     {expanded && <View style={{width:"100%",gap:6}}>
       {!card || !recipientId ? <Text style={{color:c.foregroundMuted}}>{t("질문을 보낼 세션을 확인할 수 없습니다.", "No verified session is available for this question.")}</Text> : <>
         <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>{t("질문 받을 세션", "Question recipient")} · {recipientTitle || recipientId}</Text>

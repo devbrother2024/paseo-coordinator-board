@@ -2,6 +2,7 @@ import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import { accountUsage } from "./usage-routing";
 import { workImages } from "./work-images";
+import { placementFields, type TaskPlatform } from "./host-assignment";
 export { WORK_IMAGE_MIME_TYPES, MAX_WORK_IMAGES, MAX_WORK_IMAGE_BYTES, MAX_WORK_IMAGES_BYTES, type WorkImage } from "./work-images";
 import { catalogModelSchema, providerEntrySchema, workerModeProvider, gradeSchema, routeChoiceSchema, routePolicySchema } from "./dispatch";
 
@@ -85,7 +86,12 @@ export const requestWork = defineRpc({
     ...messageFields,
     text: z.string().trim().max(24000),
     images: workImages.optional(),
+    ...placementFields,
   }).refine(({text, images}) => !!text || !!images?.length, "Provide text or a photo."),
   output: z.object({ ok: z.boolean() }),
 });
+
+export function workPlacementText(platform?: TaskPlatform, host?: string) {
+  return [platform && `platform: ${platform}`, host && `host: ${JSON.stringify(host)}`].filter(Boolean).join("\n");
+}
 export type Operations = z.output<typeof operationState.output>;
