@@ -14,17 +14,20 @@ import { TrackedPullStatus } from "./pull-requests";
 import { useBoardLanguage } from "./language";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
 import {
-  nextFailureStreak, optionId, recommendedChoices, recommendedTrackedReply, trackedBasisRecipient, trackedDraftLayout, trackedReplyBasis, trackedRetryFingerprint,
-  type FailureStreak,
+  closedRevision, nextFailureStreak, optionId, recommendedChoices, recommendedTrackedReply, trackedBasisRecipient, trackedDraftLayout, trackedReplyBasis,
+  trackedRetryFingerprint, type FailureStreak,
 } from "./tracked-reply-draft";
 
 import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session-chips";
 
 type Resolution = ReturnType<typeof resolveTrackedDecision.output.parse>["status"];
 type ResolutionMode = "send" | "fallback" | "save" | "review";
-export type TrackedOutcome = { status: Resolution; reason?: TrackedReplyReason; mode?: ResolutionMode; answer?: string; recipientId?: string };
-// `fingerprint` is the revision on screen at the attempt; `requested` is the revision the board was asked to answer.
-type Outcome = TrackedOutcome & { fingerprint: string; requested?: string };
+// `requested` is the revision the board was asked to answer; `revision` is an earlier one it confirmed instead.
+export type TrackedOutcome = {
+  status: Resolution; reason?: TrackedReplyReason; requested?: string; revision?: string; mode?: ResolutionMode; answer?: string; recipientId?: string;
+};
+// `fingerprint` is the revision on screen at the attempt.
+type Outcome = TrackedOutcome & { fingerprint: string };
 type Props = {
   item: TrackedDecision; theme: Theme; priorityLabel?: string; route?: TrackedReplyRoute; links: TrackedSessionLinks; children?: ReactNode; pull?: ReactNode;
   renderClarification?: (onDraftChange:(active:boolean) => void) => ReactNode;
@@ -122,7 +125,7 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
   const named = (label: string) => ({ label, accessibilityLabel: item.title + " · " + label });
   const recordActions = !item.matchedSessionId || !!item.questions.length;
   // A receipt belongs to the revision it answered, so a newer revision of the same card opens again.
-  const isClosed = !!outcome && outcome.fingerprint === item.fingerprint && (result === "sent" || result === "closed" || result === "already-closed");
+  const isClosed = closedRevision(outcome) === item.fingerprint;
   const needsRefresh = result === "out-of-scope" || result === "unavailable" || (result === "changed" && !(outcome?.reason && recoverable.has(outcome.reason)));
   const awaitingRevision = outcome?.reason === "revised" && (outcome.requested ?? outcome.fingerprint) === item.fingerprint;
   const blocking = result === "changed" && (needsRefresh || awaitingRevision || (outcome?.reason !== "revised" && !!outcome?.reason && recoverable.has(outcome.reason)));
@@ -223,7 +226,7 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
     pending.current = true; setBusy(true);
     const fingerprint = item.fingerprint;
     const requested = send ? trackedRetryFingerprint(outcome, fingerprint, text, to) : fingerprint;
-    let response: { status: Resolution; reason?: TrackedReplyReason };
+    let response: { status: Resolution; reason?: TrackedReplyReason; revision?: string };
     try {
       const images = attachments.latest.current.map(photo => photo.image);
       response = await resolve({ source: item.source, projectId: item.projectId, id: item.id, fingerprint: requested,
@@ -232,8 +235,8 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
         ...(send && to ? { recipientId: to } : {}), ...(mode === "fallback" ? { route: "coordinator" as const } : {}) });
       if (response.status === "sent" || response.status === "closed" || response.status === "already-closed") clearDraft();
     } catch { response = { status: send ? "unconfirmed" : "unavailable" }; }
-    const attempt: TrackedOutcome = { ...response, mode, ...(text.trim() ? { answer: text.trim() } : {}), ...(to ? { recipientId: to } : {}) };
-    setOutcome({ ...attempt, fingerprint, requested }); setConfirming(false);
+    const attempt: TrackedOutcome = { ...response, requested, mode, ...(text.trim() ? { answer: text.trim() } : {}), ...(to ? { recipientId: to } : {}) };
+    setOutcome({ ...attempt, fingerprint }); setConfirming(false);
     setStreak(previous => nextFailureStreak(previous, response, to));
     try { await onResolved(attempt); } catch { setRefreshFailed(true); }
     finally { pending.current = false; setBusy(false); }
@@ -241,6 +244,10 @@ export function TrackedDecisionCard({ item, theme, links, route, onResolved, chi
   function noticeText() {
     if (!outcome || (outcome.status === "queued" && queue)) return null;
     const status = outcome.status;
+    // An answer to an earlier revision went through, and the board still lists the card as it is now.
+    if (closedRevision(outcome) && !isClosed) return status === "sent"
+      ? t("앞서 보낸 답은 전달됐습니다. 그 뒤 카드 내용이 바뀌어 이 카드는 아직 열려 있습니다.", "Your earlier reply was delivered. The card has changed since, so it stays open.")
+      : t("앞서 한 처리는 기록됐습니다. 그 뒤 카드 내용이 바뀌어 이 카드는 아직 열려 있습니다.", "Your earlier action was recorded. The card has changed since, so it stays open.");
     if ((status === "sent" || status === "closed" || status === "already-closed") && !isClosed) return null;
     if (status !== "changed") return t(messages[status][0], messages[status][1]);
     const reason = outcome.reason;

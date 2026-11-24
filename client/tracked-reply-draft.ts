@@ -25,6 +25,13 @@ export function trackedRetryFingerprint(previous: { status: string; requested?: 
   return previous?.status === "unconfirmed" && previous.requested && same ? previous.requested : fingerprint;
 }
 
+const finished = new Set(["sent", "closed", "already-closed"]);
+// The revision a finished reply closed: the earlier one the board confirmed, or the one it was asked to answer.
+// A newer revision on screen stays open, as the board still lists it.
+export function closedRevision(outcome: { status: string; requested?: string; revision?: string } | null) {
+  return outcome && finished.has(outcome.status) ? outcome.revision ?? outcome.requested ?? null : null;
+}
+
 // Merge cards use the PR action, and long explanations are not answers to send as they are.
 export function recommendedTrackedReply(item: TrackedDecision) {
   if (item.kind === "merge" || item.questions.length || item.matchedSessionId) return "";

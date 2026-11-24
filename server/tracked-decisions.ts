@@ -359,9 +359,10 @@ export class TrackedDecisionStore {
   private async confirmEarlier(input:TrackedResolution, version:string, item:RoutedTrackedDecision, prepare:(row:RoutedTrackedDecision)=>Promise<Prepared>):Promise<Attempt> {
     const earlier=this.recorded()?.get(version);
     if (!input.recipientId || !earlier || earlier.queue || !sameReply(earlier,input,describePhotos(input.images))) return changed("revised");
-    return earlier.pending ? this.confirm(version,earlier,await prepare(item)) : {status:"sent"};
+    return earlier.pending ? this.confirm(version,earlier,await prepare(item)) : {status:"sent",revision:earlier.fingerprint};
   }
 
+  // Confirms a reply sent for an earlier revision of the card. Only that revision closes.
   private async confirm(version:string, receipt:Receipt, target:Prepared):Promise<Attempt> {
     const {messageId}=receipt;
     if (!messageId || !target || "blocked" in target) return {status:"unconfirmed"};
@@ -370,7 +371,7 @@ export class TrackedDecisionStore {
     const latest=this.recorded(), recorded=latest?.get(version);
     if (!latest || !recorded || recorded.messageId!==messageId) return {status:"unconfirmed"};
     latest.set(version,{...recorded,pending:false});
-    return {status:this.save(latest) ? "sent" : "unconfirmed"};
+    return this.save(latest) ? {status:"sent",revision:recorded.fingerprint} : {status:"unconfirmed"};
   }
 
   cancelQueued(input:z.output<typeof cancelQueuedReply.input>, scope:Set<string>) {
@@ -479,7 +480,7 @@ export class TrackedDecisionStore {
         else if (!receipt.queue) result.status=receipt.pending ? "unconfirmed" : "sent";
       }
       if(result.status==="closed" || result.status==="sent" || result.status==="queued")onChange?.();
-      return {status:result.status, ...(result.reason ? {reason:result.reason} : {})};
+      return {status:result.status, ...(result.reason ? {reason:result.reason} : {}), ...(result.status==="sent" && result.revision ? {revision:result.revision} : {})};
     });
     return async (ctx:import("@getpaseo/plugin/server").PluginHandlerContext,id?:string)=>{
       if (prepare && await this.resumeQueued(getScope,(row,target)=>prepare(row,target,ctx),id)) onChange?.();

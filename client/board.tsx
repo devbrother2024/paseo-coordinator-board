@@ -4,6 +4,7 @@ import { ReplyHistory } from "./reply-history";
 import { trackedSessionTargets } from "./tracked-session-targets";
 import type { TrackedSessionLinks } from "./tracked-session-chips";
 import { TrackedDecisionCard } from "./tracked-decisions";
+import { closedRevision } from "./tracked-reply-draft";
 import { mentionsSecurityGate, trackedCoverage, trackedReplyRoute, trackedSession, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
 import { projectFolderMap } from "../shared/project-folders";
 import { MergeFeedback, PullRequestCard, PullRequestSettings, type MergeNotice, type WorkSessionLink } from "./pull-requests";
@@ -236,9 +237,10 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined)}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
               : pr && renderPull(pr, pr.projectIds.includes(item.projectId ?? "") ? item.projectId! : pr.projectIds[0], true, mentionsSecurityGate(item), true, rowKey, [item.projectId])}
-            route={route} keepsUnsent={!!rowKey} onResolved={({status,reason,mode,answer,recipientId})=>{
+            route={route} keepsUnsent={!!rowKey} onResolved={outcome=>{
+              const {status,reason,mode,answer,recipientId}=outcome;
               if (rowKey && mode && (status === "sent" || status === "closed" || status === "already-closed")) {
-                remember({ rowKey, actionKey: recordActionKey(item), projectIds: [item.projectId],
+                remember({ rowKey, actionKey: recordActionKey({key: item.key, fingerprint: closedRevision(outcome) ?? item.fingerprint}), projectIds: [item.projectId],
                   status: status === "closed" ? (mode === "save" ? "saved" : "reviewed") : status,
                   recipientId: status === "sent" ? recipientId : undefined,
                   title: item.title, detail: answer || item.projectTitle || projectName(item.projectId) });

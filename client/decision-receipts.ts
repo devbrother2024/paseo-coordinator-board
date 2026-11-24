@@ -5,7 +5,7 @@ import type { TrackedDecision } from "../shared/tracked-decisions";
 export const pullRowKey = (pr: Pick<PullRequestItem, "repo" | "number">) => JSON.stringify(["pull", pr.repo, pr.number]);
 // A ledger card keeps its row across revisions so an open draft survives a display-only update.
 export const recordRowKey = (item: TrackedDecision) => JSON.stringify(["record", item.key]);
-export const recordActionKey = (item: TrackedDecision) => JSON.stringify(["record", item.key, item.fingerprint]);
+export const recordActionKey = (item: Pick<TrackedDecision, "key" | "fingerprint">) => JSON.stringify(["record", item.key, item.fingerprint]);
 export const unsentActionKey = (item: TrackedDecision) => JSON.stringify(["unsent", item.key, item.fingerprint]);
 export const sessionRowKey = (card: Card) => JSON.stringify(["session", card.session.projectId, card.session.id, card.session.decision?.version]);
 

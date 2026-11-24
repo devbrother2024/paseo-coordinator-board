@@ -142,7 +142,8 @@ export const resolveTrackedDecision = defineRpc({
   name:"board.resolve-tracked-decision",
   input: reference.extend({fingerprint,answer:z.string().max(4000).optional(),recipientId:id.optional(),route:z.literal("coordinator").optional(),images:workImages.optional(),questionIndexes:z.array(z.number().int().min(0).max(127)).max(128).optional()}).strict()
     .refine(v => !v.recipientId || !!v.answer?.trim() || !!v.images?.length).refine(v => !v.route || !!v.recipientId),
-  output:z.object({status:z.enum(["closed","already-closed","changed","out-of-scope","unavailable","sent","queued","busy","unconfirmed"]),reason:z.enum(trackedReplyReasons).optional()}),
+  // `revision` names the earlier revision whose reply was confirmed. The card's newer revision stays open.
+  output:z.object({status:z.enum(["closed","already-closed","changed","out-of-scope","unavailable","sent","queued","busy","unconfirmed"]),reason:z.enum(trackedReplyReasons).optional(),revision:fingerprint.optional()}),
 });
 export const cancelQueuedReply = defineRpc({
   name:"board.cancel-queued-reply",

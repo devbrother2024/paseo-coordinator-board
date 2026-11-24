@@ -5,7 +5,8 @@ import { join } from "node:path";
 import contribute from "../index.server";
 import { recordActionKey, recordRowKey } from "../client/decision-receipts";
 import {
-  nextFailureStreak, recommendedChoices, recommendedTrackedReply, trackedBasisRecipient, trackedDraftLayout, trackedReplyBasis, trackedRetryFingerprint,
+  closedRevision, nextFailureStreak, recommendedChoices, recommendedTrackedReply, trackedBasisRecipient, trackedDraftLayout, trackedReplyBasis,
+  trackedRetryFingerprint,
 } from "../client/tracked-reply-draft";
 import { boardSnapshot, boardScope } from "../shared/contract";
 import { projectFolderMap } from "../shared/project-folders";
@@ -338,11 +339,22 @@ test("an unconfirmed reply is only checked, never sent again, after its card cha
   expect(await f.reply(revised, {recipientId: "operator"})).toEqual({status: "unconfirmed"});
   expect(await f.reply(revised, {recipientId: "operator", answer: "Keep it"})).toEqual({status: "changed", reason: "conflict"});
   f.history.visible = true;
-  expect(await f.reply({...revised, fingerprint: retry}, {recipientId: "operator"})).toEqual({status: "sent"});
-  expect(await f.reply({...revised, fingerprint: retry}, {recipientId: "operator"})).toEqual({status: "sent"});
-  expect(await f.reply(otherRevised, {recipientId: "operator"})).toEqual({status: "sent"});
+  expect(await f.reply({...revised, fingerprint: retry}, {recipientId: "operator"})).toEqual({status: "sent", revision: first.fingerprint});
+  expect(await f.reply({...revised, fingerprint: retry}, {recipientId: "operator"})).toEqual({status: "sent", revision: first.fingerprint});
+  const reloaded = await f.reply(otherRevised, {recipientId: "operator"});
+  expect(reloaded).toEqual({status: "sent", revision: other.fingerprint});
   expect(f.sent).toHaveLength(2);
-  expect((await f.board()).replyHistory.map(entry => entry.status)).toEqual(["sent", "sent"]);
+  // Each confirmed reply closes the revision it answered. The board still lists both cards as they are now.
+  const after = await f.board();
+  expect(new Set(after.trackedDecisions.items.map(item => item.fingerprint))).toEqual(new Set([revised.fingerprint, otherRevised.fingerprint]));
+  for (const [item, outcome] of [[revised, {status: "sent", requested: retry}], [otherRevised, {...reloaded, requested: otherRevised.fingerprint}]] as const) {
+    const closed = closedRevision(outcome);
+    expect(closed).not.toBeNull();
+    expect(recordActionKey({key: item.key, fingerprint: closed!})).not.toBe(recordActionKey(item));
+  }
+  expect(closedRevision({status: "sent", requested: revised.fingerprint})).toBe(revised.fingerprint);
+  expect(closedRevision({status: "unconfirmed", requested: retry})).toBeNull();
+  expect(after.replyHistory.map(entry => entry.status)).toEqual(["sent", "sent"]);
 });
 
 test("a reply or photo kept from before the card had questions stays on screen until it is removed", () => {
