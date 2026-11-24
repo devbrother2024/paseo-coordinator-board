@@ -305,7 +305,7 @@ export class PullMerges {
     }
   }
 
-  async preview(target: MergeTarget, scope: () => Promise<() => boolean>): Promise<MergePreview> {
+  async preview(target: MergeTarget, scope: () => Promise<() => boolean>, expectedHeadSha?: string): Promise<MergePreview> {
     let current: () => boolean;
     try {
       current = await scope();
@@ -321,6 +321,11 @@ export class PullMerges {
     }
     if (!current()) return blank("scope");
     const result = view(state);
+    // The board raised this card for the head the coordinator checked. A newer head needs a new review.
+    if (expectedHeadSha && result.status === "ready" && result.headSha !== expectedHeadSha) {
+      this.invalidate(target.repo);
+      return { ...result, status: "blocked", reason: "changed" };
+    }
     if (result.status !== "ready") {
       if (result.status === "merged") {
         this.recordMerge(target, result.title, "already-merged", state.repo.pullRequest.mergeCommit?.oid ?? null);

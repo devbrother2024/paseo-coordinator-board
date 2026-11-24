@@ -2,7 +2,7 @@ import { execCommand, type PluginHandlerContext, type PluginServerContext } from
 import { stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
-import { confirmPullRequestMerge, previewPullRequestMerge, pullLifecycle, pullReason, pullUrl, readPullLifecycle, repositorySlug, setProjectRepository,
+import { commitSha, confirmPullRequestMerge, previewPullRequestMerge, pullLifecycle, pullReason, pullUrl, readPullLifecycle, repositorySlug, setProjectRepository,
   type MergeTarget, type PullRequestItem, type PullRequestView } from "../shared/prs";
 import { mergeHistoryKey, type MergeNotifications } from "./merge-notifications";
 import { githubMergeApi, PullMerges } from "./pr-merge";
@@ -23,11 +23,11 @@ const check = z.object({ status:z.string().nullish(), conclusion:z.string().null
 const rawPull = z.object({
   number:z.number().int().positive(), title:z.string(), state:z.literal("OPEN"), updatedAt:z.string().datetime({offset:true}),
   isDraft:z.boolean(), mergeable:z.string().nullable(), mergeStateStatus:z.string().nullable(), reviewDecision:z.string().nullable(),
-  headRepo:z.string().nullish(), headBranch:z.string().nullish(),
+  headRepo:z.string().nullish(), headBranch:z.string().nullish(), headSha:z.string().nullish(),
   checks:z.array(check), autoMerge:z.boolean(),
 });
-const fields = "number,title,state,updatedAt,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest,headRepository,headRefName";
-const projection = "[.[] | {number,title,state,updatedAt,isDraft,mergeable,mergeStateStatus,reviewDecision,headRepo:.headRepository.nameWithOwner,headBranch:.headRefName,checks:[.statusCheckRollup[]? | {status,conclusion,state}],autoMerge:(.autoMergeRequest != null)}]";
+const fields = "number,title,state,updatedAt,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest,headRepository,headRefName,headRefOid";
+const projection = "[.[] | {number,title,state,updatedAt,isDraft,mergeable,mergeStateStatus,reviewDecision,headRepo:.headRepository.nameWithOwner,headBranch:.headRefName,headSha:.headRefOid,checks:[.statusCheckRollup[]? | {status,conclusion,state}],autoMerge:(.autoMergeRequest != null)}]";
 const ttl = 60_000;
 
 function reason(p: z.output<typeof rawPull>):Reason {
@@ -53,7 +53,9 @@ export function parseOpenPulls(repo:string, json:string):Source {
     if (seen.has(p.number)) continue;
     const why = reason(p);
     const head = repositorySlug.safeParse(p.headRepo);
-    items.push({repo, number:p.number, ...(head.success && p.headBranch ? {headRepo:head.data,headBranch:p.headBranch} : {}), title:p.title.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g," ").slice(0,512),
+    const headSha = commitSha.safeParse(p.headSha);
+    items.push({repo, number:p.number, ...(head.success && p.headBranch ? {headRepo:head.data,headBranch:p.headBranch} : {}),
+      ...(headSha.success ? {headSha:headSha.data} : {}), title:p.title.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g," ").slice(0,512),
       url:pullUrl(repo,p.number), lane:why==="ready"?"review":"progress",reason:why,updatedAt:p.updatedAt});
     seen.add(p.number);
   }
@@ -157,7 +159,8 @@ export class ProjectPullRequests {
       });
     });
     server.handle(readPullLifecycle, async (input, {paseo}) => ({state: await this.lifecycle(paseo, input)}));
-    server.handle(previewPullRequestMerge,(input,{paseo})=>merges.preview(input,()=>this.mergeScope(paseo,input)));
+    server.handle(previewPullRequestMerge,({expectedHeadSha,...target},{paseo})=>
+      merges.preview(target,()=>this.mergeScope(paseo,target),expectedHeadSha));
     server.handle(confirmPullRequestMerge,(input,{paseo})=>{
       const owner = notifications?.owner(input);
       return merges.confirm(input,()=>this.mergeScope(paseo,input),notifications && owner

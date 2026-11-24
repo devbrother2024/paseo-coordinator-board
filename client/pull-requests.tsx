@@ -7,15 +7,9 @@ import { Button, SessionChip, type Theme } from "./controls";
 import { GitHubPullLink } from "./github-pull-link";
 import { mergeNotificationLabel } from "./merge-notification";
 import { useBoardLanguage, type Translate } from "./language";
+import { githubStatusWords, needsRunningConfirmation, pullStatusWords } from "../shared/pull-judgments";
 
 type PullRequest = PullRequestView["items"][number];
-const labels = {
-  ready: ["병합 검토 가능", "Ready for merge review"], draft: ["초안", "Draft"],
-  conflict: ["충돌 해결 필요", "Conflicts to resolve"], "checks-failed": ["검사 실패", "Checks failed"],
-  "checks-pending": ["검사 중", "Checks pending"], "changes-requested": ["수정 요청", "Changes requested"],
-  blocked: ["병합 조건 대기", "Merge requirements pending"], unknown: ["상태 미확인", "Status unknown"],
-  "auto-merge": ["자동 병합 대기", "Auto-merge enabled"],
-} as const;
 
 export type MergeNotice = { projectId: string; target: string; status: MergeResult["status"]; reason?: MergeReason; mergeSha?: string | null; notification?: MergeResult["notification"] };
 const wrap = { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 6 };
@@ -31,7 +25,8 @@ const resultWords = {
 function reasonText(reason: MergeReason | undefined, t: Translate) {
   if (!reason) return null;
   const reasons: Partial<Record<MergeReason, readonly [string, string]>> = {
-    ...labels,
+    ...githubStatusWords,
+    changed: ["검토한 뒤 PR이 바뀜", "The PR changed after the review"],
     closed: ["닫힌 PR", "Pull request closed"],
     queue: ["GitHub 병합 대기열 사용", "The repository uses a merge queue"],
     permission: ["GitHub 병합 권한 확인 필요", "Check GitHub merge permissions"],
@@ -58,7 +53,7 @@ export function MergeFeedback({ notice, theme }: { notice: MergeNotice; theme: T
   </Text>;
 }
 
-export type WorkSessionLink = { key: string; label: string; open: () => void };
+export type WorkSessionLink = { key: string; label: string; open: () => void; running: boolean };
 
 type Lifecycle = ReturnType<typeof readPullLifecycle.output.parse>["state"];
 const referenceStates = { OPEN: ["열림", "Open"], DRAFT: ["초안", "Draft"], MERGED: ["병합됨", "Merged"], CLOSED: ["닫힘", "Closed"] } as const;
@@ -108,19 +103,25 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   const [notice, setNotice] = useState<MergeNotice | null>(null);
   const [lookupError, setLookupError] = useState(false);
   const [busy, setBusy] = useState<"read" | "merge" | null>(null);
+  const [runningPrompt, setRunningPrompt] = useState(false);
   const locked = useRef(false);
   const target = pr.repo + " #" + pr.number;
   const named = (label: string) => ({label, accessibilityLabel: target + " · " + label});
   const ready = !securityGate && !!projectId && pr.lane === "review" && pr.reason === "ready" && notice?.status !== "merged" && notice?.status !== "already-merged";
-  useDecisionInteraction(!!busy || (ready && !!preview));
-  const status = securityGate && pr.reason === "ready" ? t("열린 PR · 보안 게이트 통과 여부 확인 필요", "Open · Security gate unverified") : t(labels[pr.reason][0], labels[pr.reason][1]);
+  useDecisionInteraction(!!busy || runningPrompt || (ready && !!preview));
+  const words = pullStatusWords(pr);
+  const status = securityGate && pr.reason === "ready" ? t("열린 PR · 보안 게이트 통과 여부 확인 필요", "Open · Security gate unverified") : t(words[0], words[1]);
+  const working = ready && needsRunningConfirmation(workSessions);
   const args = { projectId, repo: pr.repo, number: pr.number };
 
-  async function inspect() {
+  async function inspect(confirmedRunning = false) {
     if (locked.current || !ready) return;
+    // A running work session may still push. Ask once more before showing the merge preview.
+    if (working && !confirmedRunning) { setRunningPrompt(true); return; }
+    setRunningPrompt(false);
     locked.current = true; setBusy("read"); setNotice(null); setLookupError(false);
     try {
-      const next = await read(args);
+      const next = await read({ ...args, ...(pr.headSha ? { expectedHeadSha: pr.headSha } : {}) });
       if (next.status === "ready" && next.token && next.methods.length) {
         setPreview(next); setMethod(next.defaultMethod && next.methods.includes(next.defaultMethod) ? next.defaultMethod : null);
       } else {
@@ -151,6 +152,20 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
       {decision && openCoordinator && <SessionChip theme={theme} label={t("코디네이터 세션", "Coordinator session")} accessibilityLabel={named(t("코디네이터 세션 열기", "Open coordinator session")).accessibilityLabel} onPress={openCoordinator} />}
     </View>
     <Text selectable style={{color: c.foreground, fontSize: 15, fontWeight: "600"}}>{preview?.title || pr.title}</Text>
+    {decision && pr.gate === "judged" && pr.judgment && <Text selectable style={{color: c.foregroundMuted, fontSize: 13}}>
+      {t("코디네이터 확인", "Coordinator check")} · {pr.judgment.reason}
+    </Text>}
+    {working && <Text accessibilityLiveRegion="polite" style={{color: c.statusWarning, fontSize: 13}}>
+      {t("작업 세션이 아직 진행 중입니다.", "A work session is still running.")}
+    </Text>}
+    {runningPrompt && working && !preview && <View style={{gap: 7, padding: 10, borderWidth: 1, borderRadius: 7, borderColor: c.statusWarning, backgroundColor: c.surface0}}>
+      <Text style={{color: c.foreground}}>{t("작업 세션이 끝나기 전에 병합하면 그 뒤에 올라올 변경이 빠질 수 있습니다. 그래도 병합 정보를 볼까요?",
+        "Merging before the work session finishes can leave out changes it is still making. Review the merge anyway?")}</Text>
+      <View style={wrap}>
+        <Button theme={theme} {...named(t("그래도 병합 검토", "Review merge anyway"))} disabled={!!busy} onPress={() => void inspect(true)} />
+        <Button theme={theme} {...named(t("취소", "Cancel"))} disabled={!!busy} onPress={() => setRunningPrompt(false)} />
+      </View>
+    </View>}
     {preview && ready && <View style={{gap: 7, padding: 10, borderWidth: 1, borderRadius: 7, borderColor: c.border, backgroundColor: c.surface0}}>
       <Text selectable style={{color: c.foreground, fontWeight: "600"}}>{preview.baseRef} ← {preview.headRef}</Text>
       <Text selectable style={{color: c.foregroundMuted, fontSize: 12}}>{t("검토한 HEAD", "Reviewed HEAD")} · {preview.headSha}</Text>
@@ -167,7 +182,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
       </View>
     </View>}
     {((ready && !preview) || clarification) && <View style={wrap}>
-      {ready && !preview && <Button theme={theme} {...named(busy === "read" ? t("병합 정보 조회 중…", "Loading merge details…") : t("보드에서 병합", "Merge on board"))} selected={decision} disabled={!!busy} onPress={() => void inspect()} />}
+      {ready && !preview && !runningPrompt && <Button theme={theme} {...named(busy === "read" ? t("병합 정보 조회 중…", "Loading merge details…") : t("보드에서 병합", "Merge on board"))} selected={decision} disabled={!!busy} onPress={() => void inspect()} />}
       {clarification}
     </View>}
     {lookupError && <Text accessibilityLiveRegion="polite" style={{color:c.statusWarning}}>{t("병합 정보를 불러오지 못했습니다. 다시 조회하거나 GitHub에서 확인하세요.", "Could not load merge details. Try again or open GitHub.")}</Text>}
