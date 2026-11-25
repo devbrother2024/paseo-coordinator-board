@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { classify, conversationQuestionDetails, excerpt } from "../server/conversation";
 import { decorateDecision } from "../server/session-decisions";
-import { questionParts } from "../client/decision-summary";
+import { questionFolds, questionParts } from "../client/decision-summary";
 import { asksForDecision, unquoted } from "../shared/question-request";
 
 const row = { id: "worker", status: "idle", projectId: "p", projectTitle: "Studio", workspaceTitle: "w", model: null, title: "Edit", lane: "idle", detail: "Waiting", activityAt: "1" } as const;
@@ -79,4 +79,16 @@ test("the split stays out of the decision identity", () => {
   expect(session.decision.version).toBe(legacy.decision.version);
   expect(session.decision.question).toBe("편집본을 올렸습니다. 이대로 공개해도 될까요? - 원본 보관");
   expect(session.decision.questionMarkdown).toBe("편집본을 올렸습니다. 이대로 공개해도 될까요?\n\n- 원본 보관");
+});
+
+test("More appears when the two-line title is cut off, whatever its length", () => {
+  // A short title that wraps past two lines on a narrow screen or with a large font is cut off.
+  expect(questionFolds({ bodyFolds: false, fullHeight: 63, shownHeight: 42 })).toBe(true);
+  // A long title that fits two lines on a wide screen is not.
+  expect(questionFolds({ bodyFolds: false, fullHeight: 42, shownHeight: 42 })).toBe(false);
+  // Sub-pixel rounding is not a cut-off line.
+  expect(questionFolds({ bodyFolds: false, fullHeight: 42.4, shownHeight: 42 })).toBe(false);
+  // Before the first layout nothing is known to be cut off; a long body still folds.
+  expect(questionFolds({ bodyFolds: false })).toBe(false);
+  expect(questionFolds({ bodyFolds: true })).toBe(true);
 });

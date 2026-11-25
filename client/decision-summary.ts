@@ -63,6 +63,15 @@ export function questionParts(markdown: string) {
   return { lead, title, body: [tail, after].filter(Boolean).join("\n\n") };
 }
 
+/**
+ * The question title shows two lines, so "More" must appear whenever that cuts it off: on a narrow screen or with a
+ * large font even a short title can. `fullHeight` is the title laid out in full and `shownHeight` the two-line title.
+ */
+export function questionFolds(input: { bodyFolds: boolean; fullHeight?: number; shownHeight?: number }) {
+  const { bodyFolds, fullHeight, shownHeight } = input;
+  return bodyFolds || (fullHeight !== undefined && shownHeight !== undefined && fullHeight > shownHeight + 1);
+}
+
 export function decisionSummary({ session, note }: Card, t: Translate) {
   const decision = session.decision;
   const question = decision?.question || (note?.kind === "question" && note.text) || session.detail;

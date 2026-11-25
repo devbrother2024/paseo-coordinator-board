@@ -1,14 +1,14 @@
 import { useDecisionInteraction } from "./decision-editing";
 import { useRpc } from "@getpaseo/plugin/client";
 import { useRef, useState, type ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, Text, View, type LayoutChangeEvent } from "react-native";
 import { sendDecision, type DecisionInput } from "../shared/decision-actions";
 import { requestRecommendation } from "../shared/recommendation";
 import { HistoryMarkdown } from "./history-markdown";
 import { DecisionReplyInput } from "./decision-reply";
 import { SendButton } from "./send-input";
 import { sessionReplyDraft } from "./decision-reply-state";
-import { decisionSummary, questionParts } from "./decision-summary";
+import { decisionSummary, questionFolds as titleFolds, questionParts } from "./decision-summary";
 import { Button, CardHeader, SessionChip, type Theme } from "./controls";
 import { useBoardLanguage } from "./language";
 import type { Card } from "./model";
@@ -50,6 +50,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   const [showEvidence, setShowEvidence] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
   const [questionOpen, setQuestionOpen] = useState(false);
+  const [titleHeights, setTitleHeights] = useState<{ fullHeight?: number; shownHeight?: number }>({});
   const [requestedFrom, setRequestedFrom] = useState<string | null>(null);
   const recommendationKey = useRef({ recipient: "", key: "" });
   const [selection, setSelection] = useState<number | null>(null);
@@ -138,8 +139,12 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   const split = !formal && decision?.source === "conversation";
   const parts = split ? questionParts(headline) : { lead: "", title: headline, body: "" };
   const bodyFolds = foldsAsk([parts.body]);
-  // The title keeps two lines. A longer request sentence opens with the body.
-  const questionFolds = bodyFolds || (split && parts.title.length > 60);
+  // The title keeps two lines. When that cuts it off, it opens with the body.
+  const questionFolds = titleFolds({ bodyFolds, ...(split ? titleHeights : {}) });
+  const measureTitle = (key: "fullHeight" | "shownHeight") => (event: LayoutChangeEvent) => {
+    const height = event.nativeEvent.layout.height;
+    setTitleHeights(prior => prior[key] === height ? prior : { ...prior, [key]: height });
+  };
   const context = [parts.lead, decision?.contextMarkdown].filter(Boolean).join("\n\n") || undefined;
   const adviceSent = !!coordinator && requestedFrom === coordinator;
   const disclose = (label: string, expanded: boolean, onPress: () => void) =>
@@ -151,7 +156,17 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
     <CardHeader theme={theme} text={marker}>
       {open && <SessionChip theme={theme} label={t("작업 세션 열기", "Open work session")} accessibilityLabel={named(t("작업 세션 열기", "Open work session")).accessibilityLabel} onPress={() => open(session.id)} />}
     </CardHeader>
-    <HistoryMarkdown theme={theme} source={parts.title} heading preview={split && !questionOpen} />
+    {split ? <View>
+      {/* The full title, laid out unseen at the same width, tells whether two lines cut it off. */}
+      <View pointerEvents="none" aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
+        style={{ position: "absolute", left: 0, right: 0, top: 0, opacity: 0 }} onLayout={measureTitle("fullHeight")}>
+        <HistoryMarkdown theme={theme} source={parts.title} heading />
+      </View>
+      {/* While open the title is shown in full, so keep the height measured with two lines. */}
+      <View onLayout={questionOpen ? undefined : measureTitle("shownHeight")}>
+        <HistoryMarkdown theme={theme} source={parts.title} heading preview={!questionOpen} />
+      </View>
+    </View> : <HistoryMarkdown theme={theme} source={parts.title} heading />}
     {(!!parts.body || questionFolds) && <View style={{ alignItems: "flex-start", gap: 2 }}>
       {!!parts.body && <HistoryMarkdown theme={theme} source={parts.body} preview={bodyFolds && !questionOpen} />}
       {questionFolds && disclose(questionOpen ? t("접기", "Less") : t("더 보기", "More"), questionOpen, () => setQuestionOpen(v => !v))}
