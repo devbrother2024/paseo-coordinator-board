@@ -9,6 +9,8 @@ export type RepositoryIndex = {
   /** Only the repository part of owner/repository, without project titles. */
   readonly repoNames: ReadonlyMap<string, readonly string[]>;
   readonly repos: ReadonlySet<string>;
+  /** Names that are not one word (spaces, Korean and other letters), lowercased and longest first, matched whole before splitting text into words. */
+  readonly phrases: readonly string[];
 };
 
 /** Which repository a PR number belongs to, or that it must not be linked (unknown or ambiguous name). */
@@ -39,7 +41,8 @@ export function repositoryIndex(entries: Iterable<Entry>): RepositoryIndex {
     for (const name of entry.names ?? []) add(name, repo);
   }
   const sorted = (map: Map<string, Set<string>>) => new Map([...map].map(([name, set]) => [name, [...set].sort()]));
-  return { names: sorted(names), repoNames: sorted(repoNames), repos };
+  const phrases = [...names.keys()].filter(name => !/^[\w.-]+(?:\/[\w.-]+)?$/.test(name)).sort((a, b) => b.length - a.length || a.localeCompare(b));
+  return { names: sorted(names), repoNames: sorted(repoNames), repos, phrases };
 }
 
 /**

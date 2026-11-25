@@ -162,3 +162,29 @@ test("the board knows repositories only from settings, ledger cards, PR lists an
     { repo: "studio/beta", number: 4 }, { repo: "labs/delta", number: 5 },
   ]);
 });
+
+test("project titles with spaces or Korean are matched whole before splitting into words", () => {
+  const titled = repositoryIndex([
+    { repo: "studio/alpha", names: ["Alpha Web"] },
+    { repo: "studio/alpha-tools", names: ["Alpha Web Tools"] },
+    { repo: "studio/web" },
+    { repo: "studio/kr", names: ["알파 웹"] },
+    { repo: "studio/one", names: ["알파"] },
+  ]);
+  const link = (markdown: string, repository?: string) => references(pullReferenceTokens((lexBoardMarkdown(markdown)[0] as Tokens.Paragraph).tokens, { repository, known: titled }));
+  expect(link("Alpha Web #12")).toEqual([{ repo: "studio/alpha", number: 12 }]);
+  expect(link("alpha web의 #13")).toEqual([{ repo: "studio/alpha", number: 13 }]);
+  expect(link("alpha web 에서 #13")).toEqual([{ repo: "studio/alpha", number: 13 }]);
+  // 겹치는 이름은 가장 긴 것 먼저.
+  expect(link("Alpha Web Tools #14")).toEqual([{ repo: "studio/alpha-tools", number: 14 }]);
+  expect(link("알파 웹 #15")).toEqual([{ repo: "studio/kr", number: 15 }]);
+  expect(link("알파 웹에서 #16")).toEqual([{ repo: "studio/kr", number: 16 }]);
+  expect(link("알파 #17", "studio/card")).toEqual([{ repo: "studio/one", number: 17 }]);
+  expect(link("#18 (Alpha Web)")).toEqual([{ repo: "studio/alpha", number: 18 }]);
+  expect(link("Web #19")).toEqual([{ repo: "studio/web", number: 19 }]);
+  // 이름 안의 낱말은 다른 단서로 쓰지 않는다. 줄 다른 곳의 프로젝트 이름은 카드 저장소만 막는다.
+  expect(link("Alpha Web 정리 후 #20", "studio/card")).toEqual([]);
+  expect(link("알파 웹 정리 후 #21", "studio/card")).toEqual([]);
+  // 이름이 더 긴 낱말의 일부이면 그 이름이 아니다.
+  expect(link("Alpha Webby #22", "studio/card")).toEqual([]);
+});

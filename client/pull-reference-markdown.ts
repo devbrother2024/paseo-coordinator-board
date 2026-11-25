@@ -9,10 +9,16 @@ const word = "(?=[\\w.-]*[A-Za-z0-9])[\\w.-]+(?:\\/[\\w.-]+)?";
 const names = new RegExp(word, "g");
 // Korean particles after a name: "alpha-web의 #12", "Alpha에서는 #12", longest first.
 // Agents often put a space before it ("alpha-web 의 #12"), so a space between the name and the particle is allowed.
-const particle = "(?:[ \\t]*(?:에서는|에서|으로는|으로|이랑|하고|까지|부터|에는|랑|의|은|는|이|가|을|를|에|와|과|도|로|만))?";
+const particles = "(?:에서는|에서|으로는|으로|이랑|하고|까지|부터|에는|랑|의|은|는|이|가|을|를|에|와|과|도|로|만)";
+const particle = "(?:[ \\t]*" + particles + ")?";
+const particleAtEnd = new RegExp("[ \\t]*" + particles + "$");
+const particleAtStart = new RegExp("^" + particles);
+// What is left before a number once "PR" and the spaces before it are taken off: "Alpha Web PR #12" → "Alpha Web".
+const gapBeforeNumber = /[ \t]+(?:PR[ \t]*)?$/i;
 // The name right before a number ("alpha-web #12", "alpha-web PR #12", "alpha-web의 #12") or in brackets right after it ("#12 (alpha-web)").
 const before = new RegExp("(" + word + ")" + particle + "[ \\t]+(?:PR[ \\t]*)?$", "i");
-const after = new RegExp("^[ \\t]*\\((" + word + ")\\)");
+const after = /^[ \t]*\(([^()\n]{1,100})\)/;
+const oneWord = new RegExp("^" + word + "$");
 const plainText = (text: string): Tokens.Text => ({ type: "text", raw: text, text });
 
 export type PullLinkContext = {
@@ -103,10 +109,55 @@ function nameBefore(text: string | undefined, known: RepositoryIndex | undefined
   return lookup(known, text) ?? (neutral(text) ? null : { blocked: true });
 }
 
-/** The name in brackets after a number: a known name, or a repository-like one the board does not know. */
+/** A whole project title right before a number, with or without a particle after it ("Alpha Web #12", "알파 웹에서 #12"). */
+function phraseBefore(head: string, known: RepositoryIndex | undefined): RepositoryClue | null {
+  const gap = gapBeforeNumber.exec(head);
+  if (!gap) return null;
+  const stem = head.slice(0, gap.index);
+  const phrase = phraseEnding(stem, known) ?? phraseEnding(stem.replace(particleAtEnd, ""), known);
+  return phrase ? lookup(known, phrase) : null;
+}
+
+/** The name in brackets after a number: a known name (a project title may have spaces), or a repository-like word the board does not know. */
 function nameAfter(text: string | undefined, known: RepositoryIndex | undefined): RepositoryClue | null {
-  if (!text) return null;
-  return lookup(known, text) ?? (looksLikeRepository(text) ? { blocked: true } : null);
+  const name = text?.trim();
+  if (!name) return null;
+  return lookup(known, name) ?? (oneWord.test(name) && looksLikeRepository(name) ? { blocked: true } : null);
+}
+
+// Letters, digits and name punctuation continue a name; any other letter (Korean included) counts as a letter too.
+const nameChar = (char: string | undefined) => !!char && (/[\w.-]/.test(char) || char.charCodeAt(0) >= 0xc0);
+
+/** The project title (see {@link RepositoryIndex.phrases}) that `text` ends with, as a whole name. */
+function phraseEnding(text: string, known: RepositoryIndex | undefined): string | null {
+  const lower = text.toLowerCase();
+  if (!known || lower.length !== text.length) return null;
+  return known.phrases.find(phrase => lower.endsWith(phrase) && !nameChar(text[text.length - phrase.length - 1])) ?? null;
+}
+
+/** True when a name ending at `end` stops there: nothing name-like follows, or only a Korean particle does ("알파 웹에서"). */
+function nameEndsAt(line: string, end: number) {
+  if (!nameChar(line[end])) return true;
+  const particle = particleAtStart.exec(line.slice(end))?.[0];
+  return !!particle && !nameChar(line[end + particle.length]);
+}
+
+/** Whole project titles in a line (longest first), and the line with them blanked out so their words are not read again. */
+function phrasesIn(line: string, known: RepositoryIndex | undefined) {
+  const found: string[] = [];
+  const lower = line.toLowerCase();
+  if (!known?.phrases.length || lower.length !== line.length) return { found, rest: line };
+  let rest = line;
+  for (const phrase of known.phrases) {
+    for (let at = lower.indexOf(phrase); at >= 0; at = lower.indexOf(phrase, at + 1)) {
+      const end = at + phrase.length;
+      // An earlier, longer title already covers part of this one.
+      if (rest.slice(at, end) !== line.slice(at, end) || nameChar(line[at - 1]) || !nameEndsAt(line, end)) continue;
+      found.push(phrase);
+      rest = rest.slice(0, at) + " ".repeat(phrase.length) + rest.slice(end);
+    }
+  }
+  return { found, rest };
 }
 
 /**
@@ -116,6 +167,13 @@ function nameAfter(text: string | undefined, known: RepositoryIndex | undefined)
 function lineTarget(line: string, known: RepositoryIndex | undefined): RepositoryClue | null {
   const repos = new Set<string>();
   const projects = new Set<string>();
+  const { found, rest } = phrasesIn(line, known);
+  for (const phrase of found) {
+    const clue = lookup(known, phrase);
+    if (clue && !("repo" in clue)) return { blocked: true };
+    if (clue) projects.add(clue.repo);
+  }
+  line = rest;
   for (const match of line.matchAll(names)) {
     if (line[match.index - 1] === "#" || /^[\d._-]+$/.test(match[0])) continue;
     const repository = lookup(known, match[0], true);
@@ -138,7 +196,8 @@ function resolve(flat: string, ref: { at: number; length: number }, context: Pul
   let from = Math.max(start, ref.at - 200);
   // Never start the slice inside a name, or its tail could read as another repository.
   while (from > start && /[\w.\/-]/.test(flat[from - 1])) from--;
-  const left = nameBefore(before.exec(flat.slice(from, ref.at))?.[1], context.known);
+  const head = flat.slice(from, ref.at);
+  const left = phraseBefore(head, context.known) ?? nameBefore(before.exec(head)?.[1], context.known);
   if (left) return chosen(left);
   const right = nameAfter(after.exec(flat.slice(ref.at + ref.length, Math.min(end, ref.at + ref.length + 200)))?.[1], context.known);
   if (right) return chosen(right);
