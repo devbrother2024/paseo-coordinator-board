@@ -33,3 +33,15 @@ export function mergeGate(localRunning: boolean, remote: { pending: boolean; run
   if (remote?.pending) return "wait";
   return localRunning || remote?.running ? "confirm" : "open";
 }
+
+// A remote lookup answer belongs to the lookup that produced it. A board refresh starts a new lookup:
+// the old answer still shows the chip, but the safety check waits for the new one.
+export type RemoteAnswer<S, L> = { key: string; lookup: L; state: S | null };
+export function remoteSessionView<S, L>(answer: RemoteAnswer<S, L> | undefined, key: string, lookup: L) {
+  const same = !!answer && answer.key === key;
+  return {
+    // undefined: nothing known yet for this session.
+    shown: same ? answer!.state : undefined,
+    pending: !same || answer!.lookup !== lookup,
+  };
+}

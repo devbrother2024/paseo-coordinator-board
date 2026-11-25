@@ -9,8 +9,8 @@ import { mergeNotificationLabel } from "./merge-notification";
 import { useBoardLanguage, type Translate } from "./language";
 import { githubStatusWords, needsRunningConfirmation, pullStatusWords, unknownStatusWords } from "../shared/pull-judgments";
 import { findRemoteWorkSessionState, type RemoteWorkSession, type WorkSessionHost, type WorkSessionStates } from "./tracked-session-targets";
-import { mergeGate, pullSessionNote } from "./pull-work-session";
-import { afterConfirm, afterReopen, announceBoardMerge, onBoardMerge, reopenDelayMs, reopenedWords } from "./merge-flow";
+import { mergeGate, pullSessionNote, remoteSessionView, type RemoteAnswer } from "./pull-work-session";
+import { afterConfirm, announceBoardMerge, onBoardMerge, reopenPreview, reopensAfterMerge } from "./merge-flow";
 import type { MergeWaitReason } from "../shared/merge-card-place";
 
 type PullRequest = PullRequestView["items"][number];
@@ -60,21 +60,21 @@ export function MergeFeedback({ notice, theme }: { notice: MergeNotice; theme: T
 
 export type WorkSessionLink = { id: string; key: string; label: string; open: () => void; running: boolean };
 export type RemotePullSession = RemoteWorkSession & { states: WorkSessionStates; open: (host: string, id: string) => void };
-type RemoteState = { host: WorkSessionHost; running: boolean } | null;
 
 // A work session on another host is shown only after a real lookup finds it there.
-// Each board refresh brings a new lookup. The last answer for the same session stays until it returns.
+// Each board refresh brings a new lookup. The chip keeps the last answer, but the running check waits for the new one.
 function useRemotePullSession(source: RemotePullSession | undefined) {
-  const [found, setFound] = useState<{ key: string; state: RemoteState }>();
+  const [found, setFound] = useState<RemoteAnswer<{ host: WorkSessionHost; running: boolean }, WorkSessionStates>>();
   const key = source && JSON.stringify([source.id, source.hosts.map(host => host.serverId)]);
   useEffect(() => {
     if (!source || !key) return;
     let active = true;
-    void findRemoteWorkSessionState(source, source.states).then(state => { if (active) setFound({ key, state: state ?? null }); });
+    const lookup = source.states;
+    void findRemoteWorkSessionState(source, lookup).then(state => { if (active) setFound({ key, lookup, state: state ?? null }); });
     return () => { active = false; };
   }, [key, source?.states]);
-  if (!source) return null;
-  return found && found.key === key ? found.state : undefined;
+  if (!source || !key) return null;
+  return remoteSessionView(found, key, source.states);
 }
 
 type Lifecycle = ReturnType<typeof readPullLifecycle.output.parse>["state"];
@@ -158,8 +158,9 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   useDecisionInteraction(!!busy || runningPrompt || (ready && !!preview));
   const words = pullStatusWords(pr);
   const status = securityGate && pr.reason === "ready" ? t("열린 PR · 보안 게이트 통과 여부 확인 필요", "Open · Security gate unverified") : t(words[0], words[1]);
-  const remote = useRemotePullSession(remoteSession);
-  const gate = mergeGate(needsRunningConfirmation(workSessions), remoteSession ? { pending: remote === undefined, running: !!remote?.running } : undefined);
+  const lookup = useRemotePullSession(remoteSession);
+  const remote = lookup?.shown;
+  const gate = mergeGate(needsRunningConfirmation(workSessions), lookup ? { pending: lookup.pending, running: !!remote?.running } : undefined);
   const working = ready && gate === "confirm";
   const sessionNote = pullSessionNote(workSessions.length, remoteSession ? { checking: remote === undefined, found: !!remote } : undefined);
   const remoteLabel = remote && [t("작업 세션", "Work session"), remote.host.label, ...(remote.running ? [t("진행 중", "Running")] : [])].join(" · ");
@@ -187,19 +188,19 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
     if (locked.current) return;
     locked.current = true; setBusy("read"); setNotice(null); setLookupError(false); setRecheck(false); setReopened(null);
     try {
-      for (let attempt = 0; ; attempt++) {
-        const next = await read({ ...args, ...(pr.headSha ? { expectedHeadSha: pr.headSha } : {}) });
-        if (!alive.current) return;
-        const step = afterReopen(next, attempt);
-        if (step === "show") {
-          setPreview(next); setMethod(next.defaultMethod && next.methods.includes(next.defaultMethod) ? next.defaultMethod : null);
-          setReopened(reopenedWords(previousBase, next.baseSha));
-          return;
-        }
-        if (step === "wait") { await new Promise(resolve => setTimeout(resolve, reopenDelayMs)); if (!alive.current) return; continue; }
+      const outcome = await reopenPreview({
+        read: () => read({ ...args, ...(pr.headSha ? { expectedHeadSha: pr.headSha } : {}) }),
+        delay: ms => new Promise(resolve => setTimeout(resolve, ms)),
+        alive: () => alive.current,
+      }, previousBase);
+      if (outcome.kind === "show") {
+        const next = outcome.preview;
+        setPreview(next); setMethod(next.defaultMethod && next.methods.includes(next.defaultMethod) ? next.defaultMethod : null);
+        setReopened(outcome.words);
+      } else if (outcome.kind === "stop") {
+        const next = outcome.preview;
         const feedback: MergeNotice = { projectId, target, status: next.status === "merged" ? "already-merged" : "blocked", reason: next.reason };
         setNotice(feedback); setRecheck(next.status !== "merged"); onResult(feedback);
-        return;
       }
     } catch { setLookupError(true); }
     finally { locked.current = false; setBusy(null); }
@@ -211,7 +212,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   // Another PR in the same repository merged on the board, so this open preview may be out of date.
   useEffect(() => onBoardMerge((repo, number) => {
     const open = previewRef.current;
-    if (repo !== pr.repo || number === pr.number || !open || locked.current) return;
+    if (!open || !reopensAfterMerge({ repo, number }, pr, true, locked.current)) return;
     setPreview(null); setMethod(null);
     void reopenRef.current(open.baseSha);
   }), [pr.repo, pr.number]);

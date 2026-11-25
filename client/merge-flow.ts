@@ -37,3 +37,31 @@ export function onBoardMerge(listener: Listener) {
 export function announceBoardMerge(repo: string, number: number) {
   for (const listener of [...listeners]) listener(repo, number);
 }
+
+export type ReopenOutcome =
+  | { kind: "show"; preview: MergePreview; words: readonly [string, string] }
+  | { kind: "stop"; preview: MergePreview }
+  | { kind: "gone" };
+type ReopenDeps = { read: () => Promise<MergePreview>; delay: (ms: number) => Promise<void>; alive: () => boolean };
+
+// Read the merge preview again after a confirmation stopped on moved details. GitHub may still be
+// recomputing, so wait a little a few times. It never merges; the person presses Confirm merge again.
+// gone: the card went away while waiting. A failed read rejects, and the card shows the lookup error.
+export async function reopenPreview(deps: ReopenDeps, previousBase: string | undefined): Promise<ReopenOutcome> {
+  for (let attempt = 0; ; attempt++) {
+    const preview = await deps.read();
+    if (!deps.alive()) return { kind: "gone" };
+    const step = afterReopen(preview, attempt);
+    if (step === "show") return { kind: "show", preview, words: reopenedWords(previousBase, preview.baseSha) };
+    if (step === "recheck") return { kind: "stop", preview };
+    await deps.delay(reopenDelayMs);
+    if (!deps.alive()) return { kind: "gone" };
+  }
+}
+
+// Another PR merged on the board. An open preview of a different PR in the same repository reads again,
+// unless the card is already busy.
+export function reopensAfterMerge(merged: { repo: string; number: number }, card: { repo: string; number: number },
+  previewOpen: boolean, busy: boolean) {
+  return merged.repo === card.repo && merged.number !== card.number && previewOpen && !busy;
+}
