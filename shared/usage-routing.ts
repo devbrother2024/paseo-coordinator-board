@@ -19,6 +19,9 @@ export const accountUsage = z.object({
   issue:z.enum(["login","rate-limit"]).optional(),
   status:z.enum(["available","unavailable","error"]), windows:z.array(quotaWindow), balances:z.array(balance),
   resetPasses:z.array(resetPass).optional(),
+  // When the passes came from a host report on an account Paseo measures, the time that report was taken.
+  // Paseo's own fetchedAt says nothing about how fresh the passes are.
+  resetPassesFetchedAt:z.string().optional(),
 });
 export type AccountUsage = z.infer<typeof accountUsage>;
 
@@ -29,7 +32,11 @@ export const setUsageRouting = defineRpc({
 });
 
 export function recentUsage(report:AccountUsage, now=Date.now()) {
-  const fetched = report.fetchedAt ? Date.parse(report.fetchedAt) : NaN;
+  return recentReading(report.fetchedAt, now);
+}
+
+export function recentReading(fetchedAt:string|null|undefined, now=Date.now()) {
+  const fetched = fetchedAt ? Date.parse(fetchedAt) : NaN;
   return Number.isFinite(fetched) && fetched <= now + 60000 && now - fetched <= 15 * 60000;
 }
 

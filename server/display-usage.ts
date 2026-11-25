@@ -18,7 +18,8 @@ const resetPass = z.object({
   label: z.string().trim().min(1).max(64),
   left: z.number().int().nonnegative().max(9999),
   expiresAt: z.array(timestamp).max(16),
-  note: z.string().trim().min(1).max(200).optional(),
+  // A blank note is the same as no note, so it does not cost the pass.
+  note: z.preprocess(value => typeof value === "string" && !value.trim() ? undefined : value, z.string().trim().max(200).optional()),
 });
 const feed = z.object({version:z.literal(1),reports:z.array(z.unknown()).max(128)});
 const maxBytes = 128 * 1024;
@@ -78,8 +79,9 @@ export function mergeHostUsage(reports: readonly AccountUsage[], providers: read
   const usage = native.map(entry => {
     if (!installed.has(entry.providerId) || !measured.has(entry.providerId)) return entry;
     const accounts = native.filter(own => own.providerId === entry.providerId);
-    const passes = pairedReport(entry, accounts, reports.filter(host => host.providerId === entry.providerId))?.resetPasses;
-    return passes ? { ...entry, resetPasses: passes } : entry;
+    const host = pairedReport(entry, accounts, reports.filter(own => own.providerId === entry.providerId));
+    // The passes keep the time of the host report they came from, so an old file never looks as fresh as Paseo's reading.
+    return host?.resetPasses ? { ...entry, resetPasses: host.resetPasses, resetPassesFetchedAt: host.fetchedAt ?? undefined } : entry;
   });
   return { display, usage };
 }

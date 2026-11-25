@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { mergeHostUsage, readDisplayUsage } from "../server/display-usage";
-import { nearestExpiry, resetPassRows } from "../client/reset-passes";
+import { nearestExpiry, resetPassFreshness, resetPassRows } from "../client/reset-passes";
 import type { AccountUsage, ResetPass } from "../shared/usage-routing";
 
 const now = Date.parse("2026-11-25T07:00:00Z");
@@ -32,13 +32,18 @@ test("a malformed reset pass is dropped and the rest of the report is kept", asy
     { id: "date", label: "Bad date", left: 1, expiresAt: ["next week"] },
     { id: "dates", label: "Too many", left: 1, expiresAt: Array(17).fill("2026-12-11T07:00:00Z") },
     { id: "note", label: "Long note", left: 1, expiresAt: [], note: "x".repeat(201) },
+    { id: "blank", label: "Blank note", left: 1, expiresAt: [], note: "" },
+    { id: "spaces", label: "Spaces note", left: 3, expiresAt: [], note: "   " },
     "not a pass",
   ];
   const host = report("studio", { resetPasses: passes as ResetPass[] });
   const { display } = await withFile([host], folder => readDisplayUsage(folder, [{ id: "studio" }], []));
   expect(display).toHaveLength(1);
   expect(display[0].windows).toEqual(host.windows);
-  expect(display[0].resetPasses).toEqual([weekly, { id: "model", label: "Model reset", left: 0, expiresAt: [] }]);
+  expect(display[0].resetPasses).toEqual([weekly, { id: "model", label: "Model reset", left: 0, expiresAt: [] },
+    { id: "blank", label: "Blank note", left: 1, expiresAt: [] }, { id: "spaces", label: "Spaces note", left: 3, expiresAt: [] }]);
+  // A blank note is left out rather than costing the pass.
+  expect(display[0].resetPasses?.slice(2).map(pass => "note" in pass && pass.note !== undefined)).toEqual([false, false]);
   // Passes that are not a list, or a list with nothing valid, leave the report without passes rather than dropping it.
   for (const resetPasses of ["two", [{ id: "x" }]]) {
     const { display: kept } = await withFile([{ ...host, resetPasses }], folder => readDisplayUsage(folder, [{ id: "studio" }], []));
@@ -49,11 +54,12 @@ test("a malformed reset pass is dropped and the rest of the report is kept", asy
 
 test("passes reach a provider Paseo measures without the file replacing its measurements", async () => {
   const native = report("runner", { label: "Runner account" });
-  const file = report("runner", { label: "Runner account", windows: [{ id: "weekly", label: "Weekly", remainingPct: 99, resetsAt: null, summary: true }],
+  const file = report("runner", { label: "Runner account", fetchedAt: "2026-11-20T03:00:00Z", windows: [{ id: "weekly", label: "Weekly", remainingPct: 99, resetsAt: null, summary: true }],
     balances: [{ id: "credits", label: "Credits", remaining: 5, limit: null, unit: "credits", resetsAt: null }], resetPasses: [weekly] });
   const { display, usage } = await withFile([file], folder => readDisplayUsage(folder, [{ id: "runner" }], [native]));
   expect(display).toEqual([]);
-  expect(usage).toEqual([{ ...native, resetPasses: [weekly] }]);
+  // The passes carry the host report's own time, not Paseo's newer one.
+  expect(usage).toEqual([{ ...native, resetPasses: [weekly], resetPassesFetchedAt: "2026-11-20T03:00:00Z" }]);
 });
 
 test("passes are attached only when the account they belong to is clear", () => {
@@ -93,4 +99,16 @@ test("the card shows the count and the nearest expiry still ahead", () => {
   expect(nearestExpiry(passes[0], now)).toBe("2026-12-11T09:00:00Z");
   expect(nearestExpiry(passes[2], now)).toBeNull();
   expect(resetPassRows(undefined, now, "ko", ko, date)).toEqual([]);
+});
+
+test("passes on a measured account show their own report time and turn old with it", () => {
+  const measured = report("runner", { fetchedAt: "2026-11-25T06:59:00Z", resetPasses: [weekly] });
+  expect(resetPassFreshness({ ...measured, resetPassesFetchedAt: "2026-11-25T06:50:00Z" }, now))
+    .toEqual({ fetchedAt: "2026-11-25T06:50:00Z", separate: true, stale: false });
+  // Older than the card's own "last known reading" limit, even though Paseo's reading is a minute old.
+  expect(resetPassFreshness({ ...measured, resetPassesFetchedAt: "2026-11-20T03:00:00Z" }, now))
+    .toEqual({ fetchedAt: "2026-11-20T03:00:00Z", separate: true, stale: true });
+  // Passes on a host report card share the card's time and its footer.
+  expect(resetPassFreshness(measured, now)).toEqual({ fetchedAt: "2026-11-25T06:59:00Z", separate: false, stale: false });
+  expect(resetPassFreshness(report("runner", { fetchedAt: "2026-11-25T06:40:00Z" }), now).stale).toBe(true);
 });

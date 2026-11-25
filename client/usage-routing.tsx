@@ -7,7 +7,7 @@ import type { Theme } from "./controls";
 import { useBoardLanguage } from "./language";
 import { countdownClock, type ClockHost } from "./countdown-clock";
 import { resetCountdown } from "./reset-countdown";
-import { nearestExpiry, resetPassRows } from "./reset-passes";
+import { nearestExpiry, resetPassFreshness, resetPassRows } from "./reset-passes";
 
 function AccountCard({label,report,supplemental,issue,provider,busy,now,onInclude,theme}: AccountCardData & {busy:boolean;now:number;onInclude:(provider:string,included:boolean)=>void;theme:Theme}) {
   const {t,language} = useBoardLanguage();
@@ -24,6 +24,7 @@ function AccountCard({label,report,supplemental,issue,provider,busy,now,onInclud
   ] : [];
   const stale = report && !recentUsage(report);
   const passes = resetPassRows(report?.resetPasses, now, language, t, date);
+  const passTime = report && resetPassFreshness(report, now);
   return <View style={{gap:7,padding:10,borderWidth:1,borderColor:c.border,borderRadius:8,backgroundColor:c.surface0}}>
     <Text selectable style={{color:c.foreground,fontWeight:"600"}}>{[label,report?.plan].filter(Boolean).join(" · ")}</Text>
     {provider && <View style={{gap:3}}>
@@ -63,11 +64,14 @@ function AccountCard({label,report,supplemental,issue,provider,busy,now,onInclud
       {passes.map(pass => <View key={pass.key} style={{gap:2}}>
         <View style={{flexDirection:"row",gap:8,alignItems:"baseline",justifyContent:"space-between",flexWrap:"wrap"}}>
           <Text style={{fontSize:13,color:c.foregroundMuted}}>{pass.name}</Text>
-          <Text selectable style={{fontSize:13,fontWeight:pass.empty ? "400" : "600",color:pass.empty ? c.foregroundMuted : c.foreground}}>{pass.value}</Text>
+          <Text selectable style={{fontSize:13,fontWeight:pass.empty || passTime?.stale ? "400" : "600",color:pass.empty || passTime?.stale ? c.foregroundMuted : c.foreground}}>{pass.value}</Text>
         </View>
         {pass.expiry && <Text style={{fontSize:12,color:c.foregroundMuted}}>{pass.expiry}</Text>}
         {pass.note && <Text style={{fontSize:12,color:c.foregroundMuted}}>{pass.note}</Text>}
       </View>)}
+      {passTime?.separate && <Text style={{fontSize:12,color:c.foregroundMuted}}>{!passTime.fetchedAt ? t("초기화권 조회 시각 미확인","Reset passes: check time unknown")
+        : passTime.stale ? t("초기화권 이전 보고 "+date(passTime.fetchedAt),"Reset passes last known "+date(passTime.fetchedAt))
+        : t("초기화권 조회 "+date(passTime.fetchedAt),"Reset passes checked "+date(passTime.fetchedAt))}</Text>}
       <Text style={{fontSize:12,color:c.foregroundMuted}}>{t("초기화권은 호스트 추가 보고에서 오며 표시 전용입니다. 배정에는 쓰지 않습니다.","Reset passes come from a host report and are display only. They are not used for assignment.")}</Text>
     </View>}
     {issue && <Text style={{fontSize:12,color:c.foregroundMuted}}>{issue === "login" ? t("Paseo 사용량 조회에 다시 로그인이 필요합니다.","Sign in again for Paseo usage reports.")

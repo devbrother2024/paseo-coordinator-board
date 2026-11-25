@@ -1,7 +1,16 @@
-import type { ResetPass } from "../shared/usage-routing";
+import { recentReading, type AccountUsage, type ResetPass } from "../shared/usage-routing";
 import { resetCountdown } from "./reset-countdown";
 
 export type ResetPassRow = { key: string; name: string; value: string; empty: boolean; expiry: string | null; note?: string };
+
+// When the passes on a card were read and whether that is old. Passes added to an account Paseo measures carry
+// their own host report time, shown on its own line; otherwise they share the card's time and its footer.
+// Old uses the same limit as the card's "last known reading".
+export function resetPassFreshness(report: AccountUsage, now: number) {
+  const own = report.resetPassesFetchedAt;
+  const fetchedAt = own ?? report.fetchedAt;
+  return { fetchedAt, separate: own !== undefined, stale: !recentReading(fetchedAt, now) };
+}
 
 // The soonest expiry still ahead. Passed dates are not shown, while the count left stays as the host reported it.
 export function nearestExpiry(pass: ResetPass, now: number) {
