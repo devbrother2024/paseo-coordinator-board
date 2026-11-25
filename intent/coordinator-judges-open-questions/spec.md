@@ -38,7 +38,7 @@ Intent: [intent.md](intent.md)
 - 보내기 전에 질문 기록에 `notified`(코디네이터 ID)와 `notifiedAt`(시도 시각)을 남긴다. 전송이 실패해도 같은 알림을 다시 보내지 않는다(출처 붙인 전송의 자동 재시도 금지).
 - 판단이 오지 않은 질문은 머리 `[Coordinator Board · 아직 판단 안 됨 / Still not judged]`의 새 알림으로 다시 알린다. 첫 시도 30분 뒤, 그 뒤로는 앞 간격의 두 배씩(60분, 120분, …), 8시간을 넘지 않는다(질문별 `notices`). 재시도가 아니라 새 알림이다.
 - 코디네이터가 바뀌면 새 코디네이터에게 처음 알림으로 보낸다.
-- 글: 머리 `[Coordinator Board · 판단 필요 / Judgment needed]`, 질문마다 JSON 한 줄(`sessionId`, `questionKey`, `question`(340자까지), `askedAt`, `why`), 두 언어 안내 한 줄과 "이 알림은 승인이 아닙니다".
+- 글: 머리 `[Coordinator Board · 판단 필요 / Judgment needed]`, 질문마다 JSON 한 줄(`sessionId`, `questionKey`, `why`, `askedAt`, `seq`: 보드가 만든 값만), 두 언어 안내 한 줄과 "이 알림은 승인이 아닙니다". 작업 세션이 쓴 질문 글은 싣지 않는다. 출처 붙인 알림이 코디네이터 차례를 시작하므로, 세션 글이 보드의 말처럼 들어가지 않게 하기 위해서다. 코디네이터는 세션 기록(`read_board_conversation` 또는 세션 로그의 `seq` 위치)에서 질문을 근거로 읽는다.
 
 ### 2.4 action `judge_open_question`
 
