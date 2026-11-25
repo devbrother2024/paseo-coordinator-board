@@ -92,3 +92,72 @@ test("More appears when the two-line title is cut off, whatever its length", () 
   expect(questionFolds({ bodyFolds: false })).toBe(false);
   expect(questionFolds({ bodyFolds: true })).toBe(true);
 });
+
+const decisionText = [
+  "## 정리",
+  "",
+  "편집본 두 개를 비교했습니다.",
+  "",
+  "**결정할 것:** 세 번째 장면을 앞으로 옮길지 정해야 합니다. 답을 받고 바꾸겠습니다.",
+  "- **\"옮겨\"**라고 하면 앞으로 옮깁니다.",
+  "- **\"그대로\"**라고 하면 지금 순서를 둡니다.",
+  "- **\"합쳐\"**라고 하면 두 장면을 하나로 합칩니다. 정해지지 않으면 **\"보류\"**라고 하면 됩니다.",
+].join("\n");
+
+test("a decision heading and a reply guide are requests", () => {
+  for (const line of [
+    "**결정할 것:** 세 번째 장면 위치. 답을 받고 바꾸겠습니다.",
+    "결정할 것：자막 언어",
+    "결정이 필요합니다. 어느 컷을 쓸지 알려 주세요.",
+    "이 장면은 결정이 필요한 것입니다.",
+    "답이 필요합니다.",
+    "**\"옮겨\"**라고 하면, **\"그대로\"**라고 하면 됩니다.",
+    "'합쳐'라고 말씀하시면 됩니다.",
+    "“보류”라고 해 주시면 됩니다.",
+    "답을 받고 바꾸겠습니다.",
+    "답을 받고 진행하겠습니다.",
+    "Decision needed: which cut to use.",
+    "This one needs your decision.",
+    "Reply \"merge\" or \"keep\".",
+    "Just reply with \"ship\" to go ahead.",
+  ]) expect([line, asksForDecision(line)]).toEqual([line, true]);
+});
+
+test("reports, offers, quotes and empty decisions are not requests", () => {
+  for (const line of [
+    "결정할 것은 없습니다.",
+    "**결정할 것:** 없음",
+    "결정할 것: 없습니다.",
+    "결정이 필요한 것은 없습니다.",
+    "답이 필요하면 알려 주세요.",
+    "결정이 필요하시면 말씀해 주세요.",
+    "답을 받고 반영했습니다.",
+    "답을 받고 바꿨습니다.",
+    "진행자가 \"결정할 것:\"이라고 적어 둔 메모는 지웠습니다.",
+    "메모에 \"결정이 필요합니다\"라고 적혀 있었습니다.",
+    "그렇게 하라고 하면 됩니다.",
+    "No decision needed: everything merged.",
+    "Nothing needs your decision right now.",
+    "If anything needs your decision, I will say so.",
+    "I'll reply \"done\" when the upload ends.",
+    "The log says \"Decision needed: none\" in the header.",
+  ]) expect([line, asksForDecision(line)]).toEqual([line, false]);
+  expect(classify(evidence("편집본을 정리했습니다.\n\n결정할 것은 없습니다. 답을 받고 반영했습니다."), row).lane).toBe("idle");
+  expect(classify(evidence(["```", "결정할 것: 예시", "Reply \"yes\"", "```", "코드 예시만 있습니다."].join("\n")), row).lane).toBe("idle");
+});
+
+test("the card shows the decision heading to the end of the message", () => {
+  expect(classify(evidence(decisionText), row).lane).toBe("human");
+  const details = conversationQuestionDetails(evidence(decisionText));
+  expect(details?.markdown.split("\n")[0]).toStartWith("**결정할 것:**");
+  expect(details?.markdown).toContain("**\"합쳐\"**라고 하면");
+  expect(details?.context).toContain("편집본 두 개를 비교했습니다.");
+  // The same shape on one line starts at that line too.
+  const oneLine = "편집본을 올렸습니다.\n\n**결정할 것:** 장면 위치. 답을 받고 바꾸겠습니다. **\"옮겨\"**라고 하면 옮기고 **\"그대로\"**라고 하면 됩니다.";
+  expect(conversationQuestionDetails(evidence(oneLine))?.markdown.startsWith("**결정할 것:**")).toBe(true);
+});
+
+test("a list with no request line above it keeps its own start", () => {
+  const details = conversationQuestionDetails(evidence(["정리했습니다.", "- 원본 보관", "- **\"옮겨\"**라고 하면 됩니다."].join("\n")));
+  expect(details?.markdown.split("\n")[0]).toBe("- **\"옮겨\"**라고 하면 됩니다.");
+});

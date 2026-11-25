@@ -102,6 +102,13 @@ function questionIn(text: string, coordinatorDigest = false) {
   const quotedRow = (line: string) => coordinatorDigest && /^\|[^|]+\|\s*(?:question|질문)\s*(?:\+[^|]*)?\|/i.test(line);
   for (let i = lines.length - 1; i >= 0; i--) {
     if (quotedRow(lines[i]) || lines[i].startsWith(">") || !asksForDecision(lines[i])) continue;
+    // A request inside a list belongs to the line right above that opens the list ("결정할 것: …" and its answer options), so the card starts there. A list with no request line above it keeps its own start.
+    const listItem = /^(?:[-*+]|\d+[.)])\s/;
+    let start = i;
+    while (listItem.test(lines[start]) && start > 0 && lines[start - 1] && !lines[start - 1].startsWith(">") && !quotedRow(lines[start - 1])) {
+      start--;
+      if (!listItem.test(lines[start])) { if (asksForDecision(lines[start])) i = start; break; }
+    }
     // Include the checklist or options after a request heading.
     const included = (line: string) => !line.startsWith(">") && !quotedRow(line);
     return {
