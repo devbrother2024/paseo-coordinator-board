@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { isBoardPhotoMessage, readSessionPhoto } from "../shared/session-photos";
+import { listSentRequests } from "../shared/sent-requests";
 import { photoDigest } from "../server/reply-photos";
 import { createPaseoApi } from "@getpaseo/client";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -45,6 +46,8 @@ function scenario(facts?: Parameters<typeof createOperations>[2]) {
   const nativePins = new Map<string, string>();
   const sessions = new Map<string, CreateInput>();
   const sent: { agentId: string; text: string; messageId: string }[] = [];
+  // Sent messages show up in a session's conversation only once `visible` is set.
+  const history = { visible: false };
   const events: string[] = [];
   const activity = { quotas: {} as Record<string,number>, modes: [{id:"auto",label:"Default Permissions"}, {id:"auto-review",label:"Auto-review"}], beforeModelList: () => {}, providers: ["codex", "cursor"] };
   const runtime = { supportsToolInvocations:true, supportsMcpServers:true };
@@ -75,7 +78,9 @@ function scenario(facts?: Parameters<typeof createOperations>[2]) {
         const existing = sessions.get(id);
         return existing ? {agent: {id, workspaceId, provider:existing.config.provider.split("/", 1)[0], options:existing.config.options,
           capabilities:runtime, currentModeId: existing.config.modeId, status:"idle", pendingPermissions:[], metadata: existing.metadata}} : null;
-      }, send: async (text: string, options: {messageId: string}) => { sent.push({agentId:id, text, messageId:options.messageId}); } }),
+      }, send: async (text: string, options: {messageId: string}) => { sent.push({agentId:id, text, messageId:options.messageId}); },
+      timeline: { refetch: async () => page(history.visible ? sent.filter(m => m.agentId === id)
+        .map(m => ({item: {type: "user_message", messageId: m.messageId, text: m.text}})) : []) } }),
     },
     providers: {
       listUsage: async () => ({requestId:"usage",fetchedAt:new Date().toISOString(),providers:Object.entries(activity.quotas).map(([providerId,remainingPct])=>({
@@ -106,7 +111,7 @@ function scenario(facts?: Parameters<typeof createOperations>[2]) {
     const output = await t.execute(t.input.parse(input) as never, { paseo, agent: { id: caller } } as unknown as PluginHandlerContext & {agent: {id: string}});
     return JSON.parse(output.text);
   }
-  return { handlers, events, sessions, sent, activity, runtime, store, call, tool, dir, paseo };
+  return { handlers, events, sessions, sent, history, activity, runtime, store, call, tool, dir, paseo };
 }
 
 test("initial setup requests only the diagnostics needed for its coordinator preview", async () => {
@@ -283,6 +288,60 @@ test("competing photo drafts cannot reuse a coordinator work request key",async(
   const results=await Promise.allSettled([s.call(requestWork,{...input,images:[png]}),s.call(requestWork,{...input,images:[webp]})]);
   expect(results.map(r=>r.status).sort()).toEqual(["fulfilled","rejected"]);
   expect(s.sent).toHaveLength(1);
+  expect((await s.call(listSentRequests, {})).requests.map((request: {messageId: string}) => request.messageId)).toEqual([s.sent[0].messageId]);
+});
+
+test("a sent work request stays on the board with its text, photos, coordinator and delivery", async () => {
+  const s = scenario();
+  const input = {coordinator, text: "Review the release notes and split the work.", requestKey: "history-request-01", images: [png]};
+  await s.call(requestWork, input);
+  const [request] = (await s.call(listSentRequests, {})).requests;
+  expect(request).toMatchObject({coordinatorId: coordinator, messageId: s.sent[0].messageId, text: input.text, photoCount: 1, status: "sent"});
+  expect(await s.call(readSessionPhoto, {sessionId: coordinator, messageId: request.messageId, index: 0})).toEqual({count: 1, image: png});
+  s.history.visible = true;
+  expect((await s.call(listSentRequests, {})).requests).toEqual([{...request, status: "delivered"}]);
+  // A retry of the same request is the same entry, at the time it was first sent.
+  await s.call(requestWork, input);
+  expect((await s.call(listSentRequests, {})).requests).toEqual([{...request, status: "delivered"}]);
+  await s.call(requestWork, {coordinator, text: "Then check the links.", requestKey: "history-request-02"});
+  expect((await s.call(listSentRequests, {})).requests.map((entry: {text: string}) => entry.text)).toEqual(["Then check the links.", input.text]);
+});
+
+test("a request with a platform and host is kept and confirmed as the text the coordinator received", async () => {
+  const s = scenario();
+  await s.call(requestWork, {coordinator, text: "Run the desktop smoke test.", requestKey: "history-placed-01", platform: "linux", host: "build-host-a"});
+  expect(s.sent.map(m => m.text)).toEqual(['Run the desktop smoke test.\n\nplatform: linux\nhost: "build-host-a"']);
+  const [request] = (await s.call(listSentRequests, {})).requests;
+  expect(request).toMatchObject({text: s.sent[0].text, status: "sent"});
+  s.history.visible = true;
+  expect((await s.call(listSentRequests, {})).requests).toEqual([{...request, status: "delivered"}]);
+});
+
+test("a request whose delivery was lost stays unconfirmed until it is seen or retried; a refused request is never listed", async () => {
+  const s = scenario();
+  const input = {coordinator, text: "Draft the migration plan.", requestKey: "history-lost-01"};
+  const ref = s.paseo.agents.ref;
+  const lost = {...s.paseo, agents: {...s.paseo.agents, ref: (id: string) => ({...ref(id), send: async (text: string, options: {messageId: string}) => {
+    s.sent.push({agentId: id, text, messageId: options.messageId});
+    throw Error("lost acknowledgment");
+  }})}};
+  await expect(s.call(requestWork, input, lost)).rejects.toThrow("lost acknowledgment");
+  expect((await s.call(listSentRequests, {})).requests.map((entry: {status: string}) => entry.status)).toEqual(["pending"]);
+  s.history.visible = true;
+  expect((await s.call(listSentRequests, {})).requests.map((entry: {status: string}) => entry.status)).toEqual(["delivered"]);
+  s.history.visible = false;
+  await expect(s.call(requestWork, {...input, requestKey: "history-lost-02"}, lost)).rejects.toThrow("lost acknowledgment");
+  await s.call(requestWork, {...input, requestKey: "history-lost-02"});
+  expect((await s.call(listSentRequests, {})).requests.map((entry: {status: string}) => entry.status)).toEqual(["sent", "delivered"]);
+  await expect(s.call(requestWork, {...input, coordinator: "different-session", requestKey: "history-refused"})).rejects.toThrow(/코디네이터/);
+  expect((await s.call(listSentRequests, {})).requests).toHaveLength(2);
+});
+
+test("a history that cannot be written never stops a work request", async () => {
+  const s = scenario();
+  mkdirSync(join(s.store.directory, "sent-requests.json"));
+  await s.call(requestWork, {coordinator, text: "Still deliver this.", requestKey: "history-unwritable"});
+  expect(s.sent.map(m => m.text)).toEqual(["Still deliver this."]);
 });
 
 test("coordinator previews its managed workspaces and live route; no worker-create RPC is exposed to a card", async () => {

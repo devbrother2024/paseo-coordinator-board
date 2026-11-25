@@ -4,9 +4,14 @@ import { linkSession, listSessionLinks, type SessionLink } from "../shared/sessi
 import { discoverSessions } from "./discovery";
 import { isManagedCoordinator, setCoordinator, type Preferences, type PreferenceStore } from "./preferences";
 
-type Scope = Pick<Preferences, "projects" | "sessionLinks">;
+type Scope = Pick<Preferences, "projects" | "sessionLinks"> & Partial<Pick<Preferences, "dispatchReceipts">>;
 
 function membership(row: SessionRow, scope: Scope) {
+  if (row.serverId) {
+    const receipt = scope.dispatchReceipts?.[row.id];
+    return receipt?.remote && receipt.location.serverId === row.serverId && receipt.sourceProjectId === row.sourceProjectId &&
+      scope.projects.includes(receipt.projectId) ? receipt.projectId : null;
+  }
   const source = row.sourceProjectId ?? row.projectId;
   const link = scope.sessionLinks?.[row.id];
   if (link?.sourceProjectId === source && scope.projects.includes(link.targetProjectId)) return link.targetProjectId;
@@ -22,7 +27,10 @@ export function managedSessions(rows: SessionRow[], scope: Scope, titles?: Reado
   return rows.flatMap(row => {
     const projectId = membership(row, scope);
     if (!projectId) return [];
-    if (projectId === row.projectId) return [row];
+    if (projectId === row.projectId) {
+      const title = row.serverId && titles?.get(projectId);
+      return [title ? { ...row, projectTitle: title } : row];
+    }
     const link = scope.sessionLinks[row.id];
     return [{ ...row, sourceProjectId: row.projectId, sourceProjectTitle: row.projectTitle,
       projectId, projectTitle: titles?.get(projectId) || link.targetProjectTitle }];

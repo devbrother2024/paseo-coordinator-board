@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { preferCapacity, type AccountUsage } from "./usage-routing";
+import { hostIdentity, placementFields } from "./host-assignment";
 
 const identifier = z.string().min(1).max(256);
-const projectId = z.string().min(1).max(4096);
+export const dispatchProjectId = z.string().min(1).max(4096);
 export const gradeSchema = z.enum(["A", "B", "C", "D", "M"]);
 export const workerGradeSchema = z.enum(["A", "B", "C", "D"]);
 export const routeChoiceSchema = z.object({
@@ -32,12 +33,13 @@ export const catalogModelSchema = z.object({
   coordinatorMode: z.object({ id: identifier, label: z.string() }).nullable().optional(),
 });
 export const routePolicySchema = z.partialRecord(gradeSchema, z.array(routeChoiceSchema).min(1).max(12));
-export const workspaceChoiceSchema = z.object({ id: identifier, projectId, title: z.string() });
+export const workspaceChoiceSchema = z.object({ id: identifier, projectId: dispatchProjectId, title: z.string() });
 export const dispatchInputSchema = z.strictObject({
-  projectId, workspaceId: identifier, grade: workerGradeSchema,
+  projectId: dispatchProjectId, workspaceId: identifier, grade: workerGradeSchema,
   title: z.string().trim().min(1).max(160), prompt: z.string().trim().min(1).max(24000),
   requestKey: z.string().min(12).max(96).regex(/^[a-zA-Z0-9_-]+$/),
   expectedRoute: routeChoiceSchema, expectedModeId: identifier.optional(), needsHooks: z.boolean().optional(),
+  ...placementFields, expectedHostId: hostIdentity.optional(),
 });
 
 export type Grade = z.infer<typeof gradeSchema>;

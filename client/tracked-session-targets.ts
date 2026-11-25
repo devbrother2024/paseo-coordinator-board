@@ -1,5 +1,5 @@
 import type { TrackedDecision } from "../shared/tracked-decisions";
-import { matchesProject } from "./history-sessions";
+import { sameProject, type ProjectFolders } from "../shared/project-folders";
 
 export function trackedSessionOwner(item: TrackedDecision, coordinator: string | null) {
   // Older board-owned records predate the explicit ledger owner.
@@ -12,18 +12,19 @@ export type RemoteWorkSession = { kind: "remote"; id: string; hosts: readonly Wo
 export type WorkSessionTarget = RemoteWorkSession | { kind: "local"; id: string } | { kind: "unavailable" };
 type WorkSessionDirectory = {
   hostId?: string; hostLabel: string; sessions: readonly { id: string; projectId: string }[];
-  hosts: readonly WorkSessionHost[]; repos: ReadonlyMap<string, string>;
+  hosts: readonly WorkSessionHost[]; folders?: ProjectFolders;
 };
 
 export function trackedWorkSession(item: TrackedDecision, directory: WorkSessionDirectory): WorkSessionTarget | undefined {
   const id = item.matchedSessionId || item.sessionId;
   if (!id) return;
-  const { hostId, hostLabel, sessions, hosts, repos } = directory;
+  const { hostId, hostLabel, sessions, hosts, folders = {} } = directory;
   const hint = item.sessionHost;
   const exact = hosts.find(host => host.serverId === hint);
   const localHint = !hint || hint === hostId || (!exact && hint.toLowerCase() === hostLabel.toLowerCase());
+  // A project card's own session is judged as its reply is: by project, or by a project on the same folder.
   if (localHint && sessions.some(row => row.id === id &&
-    (item.projectId === null || row.id === item.matchedSessionId || matchesProject(row.projectId, item.projectId, repos)))) {
+    (item.projectId === null || row.id === item.matchedSessionId || sameProject(row.projectId, item.projectId, folders)))) {
     return { kind: "local", id };
   }
   const candidates = exact ? [exact]

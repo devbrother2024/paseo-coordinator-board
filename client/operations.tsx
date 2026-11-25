@@ -18,12 +18,16 @@ import { setUsageRouting } from "../shared/usage-routing";
 import { UsageRouting } from "./usage-routing";
 import { ProviderSettings } from "./providers";
 import { FactReplyControls } from "./fact-reply-controls";
+import { MergeJudgmentControls } from "./merge-judgment-controls";
 import { CoordinatorPinControls } from "./coordinator-pin";
 import { CoordinatorReplace } from "./coordinator-replace";
 import { RouteEditor, routeName, wrap, type RoutingSave } from "./route-editor";
 import { useBoardLanguage } from "./language";
 import { explainEmptyRoute } from "./route-options";
 import { DigestFeedback, type CoordinatorAction, type DigestRequest } from "./digest-request";
+import { SentRequestHistory } from "./sent-requests";
+import { WorkPlacement } from "./dispatch-hosts";
+import type { TaskPlatform } from "../shared/host-assignment";
 
 type Props = {
   theme: Theme;
@@ -50,6 +54,9 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   const [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [text, setText] = useState("");
+  const [sendAttempts, setSendAttempts] = useState(0);
+  const [platform, setPlatform] = useState<TaskPlatform>();
+  const [host, setHost] = useState<string>();
   const [editorExpanded, setEditorExpanded] = useState(false);
   const { height: windowHeight } = useWindowDimensions();
   const photoDraft = usePhotoDraft();
@@ -98,6 +105,8 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   }, [needsModels, settings, refresh]);
   useEffect(() => {
     delivery.current = { payload: "", key: "" };
+    setPlatform(undefined);
+    setHost(undefined);
   }, [coordinator]);
   useEffect(() => {
     setNotice("");
@@ -147,14 +156,14 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
     const images = photoDraft.latest.current;
     const message = text.trim();
     if (!message && !images.length) return;
-    const payload = JSON.stringify([coordinator, message, images.map(photo => photo.id)]);
+    const payload = JSON.stringify([coordinator, message, images.map(photo => photo.id), platform, host]);
     if (delivery.current.payload !== payload) delivery.current = {
       payload,
       key: "board-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2),
     };
     const receipt = await act(
       async () => {
-        const result = await sendWork({ coordinator, requestKey: delivery.current.key, text: message,
+        const result = await sendWork({ coordinator, requestKey: delivery.current.key, text: message, platform, host,
           ...(images.length > 0 && { images: images.map(photo => photo.image) }) });
         if (!result.ok) throw Error(t("전송을 확인하지 못했습니다. 다시 시도해 주세요.", "Delivery was not confirmed. Please retry."));
         return result;
@@ -163,9 +172,12 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
         ? t(`사진 ${images.length}장과 함께 코디네이터에게 요청을 보냈습니다.`, `Sent the request to the coordinator with ${images.length} photo${images.length === 1 ? "" : "s"}.`)
         : t("첨부 없이 코디네이터에게 요청을 보냈습니다.", "Sent the request to the coordinator without attachments."),
     );
+    if (live.current) setSendAttempts(n => n + 1);
     if (receipt && live.current) {
       delivery.current = { payload: "", key: "" };
       setText("");
+      setPlatform(undefined);
+      setHost(undefined);
       setEditorExpanded(false);
       photoDraft.clear();
     }
@@ -197,6 +209,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
 
   if (settings) return <View style={{ gap: 14 }}>
     <FactReplyControls theme={theme} />
+    <MergeJudgmentControls theme={theme} />
     <CoordinatorPinControls theme={theme} coordinator={coordinator} />
     <View style={section}>
       <View style={{ ...wrap, alignItems: "center", justifyContent: "space-between" }}>
@@ -261,6 +274,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
           onFocus={() => setInputFocused(true)} onBlur={() => setInputFocused(false)}
           editable={!busy} multiline maxLength={24000} onChangeText={setText} />
       </PhotoComposer>
+      <WorkPlacement theme={theme} platform={platform} host={host} setPlatform={setPlatform} setHost={setHost} disabled={busy} />
       <View style={wrap}>
         <SendButton theme={theme} label={t("코디네이터에 요청 보내기", "Send to coordinator")} send={sendRequest} selected={!sendRequest.disabled} />
       </View>
@@ -273,5 +287,6 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
       <View style={wrap}><Button theme={theme} label={data?.routing.M ? t("저장한 모델로 시작", "Start with saved model") : t("추천 설정으로 시작", "Start with recommended settings")} disabled={busy || loading || !model || !mode || !languageReady} onPress={connect} /></View>
     </>}
     {feedback}
+    {coordinator && <SentRequestHistory theme={theme} coordinator={coordinator} open={openCoordinator} refreshKey={sendAttempts} />}
   </View>;
 }

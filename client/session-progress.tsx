@@ -7,6 +7,7 @@ import { Button, SessionChip, type Theme } from "./controls";
 import { useBoardLanguage } from "./language";
 import type { Card } from "./model";
 import type { RemoteGroup } from "./remote-running";
+import { assignmentReasons } from "../shared/host-assignment";
 
 const mode = z.enum(["projects", "running"]);
 type Mode = z.infer<typeof mode>;
@@ -45,10 +46,11 @@ export function SessionProgress({ cards, peers, peersLoading, hostLabel, project
   const failed = peers.filter(group => group.failed);
   const rows = current === "running" ? [
     ...local.map(({ session }) => ({
-      id: session.id, host: null, hostLabel, title: session.title, projectId: session.projectId, at: session.activityAt,
+      id: session.id, host: session.serverId ?? null, hostLabel: session.assignment?.label ?? hostLabel,
+      title: session.title, projectId: session.projectId, at: session.activityAt, reason: session.assignment?.reason,
     })),
     ...peers.flatMap(({ host, rows }) => rows.map(row => ({
-      id: row.sessionId, host: host.serverId, hostLabel: host.label, title: row.title, projectId: row.projectId, at: row.activityAt,
+      id: row.sessionId, host: host.serverId, hostLabel: host.label, title: row.title, projectId: row.projectId, at: row.activityAt, reason: undefined,
     }))),
   ].sort((a, b) => (Date.parse(b.at ?? "") || 0) - (Date.parse(a.at ?? "") || 0)
     || a.title.localeCompare(b.title) || (a.host ?? "").localeCompare(b.host ?? "") || a.id.localeCompare(b.id)) : [];
@@ -72,7 +74,9 @@ export function SessionProgress({ cards, peers, peersLoading, hostLabel, project
           return <View key={JSON.stringify([target, row.id])} style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 9, borderTopWidth: index ? 1 : 0, borderColor: c.border }}>
             <View style={{ flex: 1, gap: 3 }}>
               <Text selectable style={{ fontSize: 14, fontWeight: "600", color: c.foreground }}>{title}</Text>
-              <Text selectable style={{ fontSize: 12, color: c.foregroundMuted }}>{project} · {row.hostLabel}</Text>
+              <Text selectable style={{ fontSize: 12, color: c.foregroundMuted }}>
+                {project} · {row.hostLabel}{row.reason ? " · " + t(...assignmentReasons[row.reason]) : ""}
+              </Text>
             </View>
             {visit && <SessionChip theme={theme} label={t("세션 열기", "Open session")}
               accessibilityLabel={t(`세션 열기 · ${title}`, `Open session · ${title}`) + " · " + project + " · " + row.hostLabel} onPress={visit} />}

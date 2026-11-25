@@ -198,7 +198,7 @@ test("operating project warnings reuse selected identities without probing unrel
   const scopes = { coordinator: null };
   const catalog = [
     { id: "operating", path: operatingFolder },
-    { id: "selected-alias", path: join(tmpdir(), "fixture-selected-alias"), rootKey: "1:8" },
+    { id: "selected-alias", path: join(tmpdir(), "fixture-selected-alias"), rootKey: "1:8:" + operatingFolder.toLowerCase() },
     { id: "unrelated", path: join(tmpdir(), "fixture-offline-volume") },
   ];
   expect(await operatingProjects(catalog, [operatingFolder], scopes, undefined, folderReader, [operatingFolder]))

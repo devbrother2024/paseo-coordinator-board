@@ -180,7 +180,7 @@ test("코디네이터 목록 도구는 기다린 시간과 미처리 여부를 �
     ref: (id: string) => ({ timeline: { refetch: async () => page(timelines[id] ?? []) } }),
   } };
   let hook: (event: unknown) => Promise<{ tools: { execute: (input: object, ctx: object) => Promise<{ text: string }> }[] } | undefined> = async () => undefined;
-  attachCoordinatorTools({ addHook: (_: string, h: typeof hook) => { hook = h; return () => {}; } } as never, store, new ConversationReader(), [],
+  attachCoordinatorTools({ addHook: (_: string, h: typeof hook) => { hook = h; return () => {}; } } as never, store, new ConversationReader(), [], undefined,
     async () => ({ thresholdHours: 12, covered: new Set(["carded"]) }));
   const [read] = (await hook({ request: { purpose: "interactive", agentId: "coord", tools: [] } }))!.tools;
   const listing: { id: string; lane?: string; waitedHours?: number; needsCoordinator?: boolean }[] =

@@ -11,6 +11,7 @@ const statusLabel = {
   saved: ["보드에 저장함", "Saved on board"],
   reviewed: ["확인했어요", "Reviewed"],
   "already-closed": ["이미 처리됨", "Already handled"],
+  unsent: ["보내지 못한 답", "Reply not sent"],
 } as const;
 
 export function InlineDecisionReceipt({ receipt, theme, onOpen, onDismiss }: {
@@ -21,14 +22,15 @@ export function InlineDecisionReceipt({ receipt, theme, onOpen, onDismiss }: {
   const words = statusLabel[receipt.status];
   const delivery = mergeNotificationLabel(receipt.notification, t);
   const recipientId = receipt.status === "sent" && receipt.recipientId;
+  const unsent = receipt.status === "unsent";
   const openLabel = t("받은 세션 열기", "Open receiving session");
   return <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8, paddingVertical: 5 }}>
     <View accessibilityLiveRegion="polite" style={{ flexGrow: 1, flexShrink: 1, flexBasis: 200, minWidth: 0, gap: 2 }}>
       <Text selectable style={{ color: c.foreground, fontSize: 14 }}>
-        <Text style={{ color: c.statusSuccess, fontWeight: "600" }}>✓ {t(words[0], words[1])}</Text>
+        <Text style={{ color: unsent ? c.statusWarning : c.statusSuccess, fontWeight: "600" }}>{unsent ? "!" : "✓"} {t(words[0], words[1])}</Text>
         {"  "}{receipt.title}
       </Text>
-      {(!!receipt.detail || !!delivery) && <Text selectable numberOfLines={delivery ? 2 : 1} style={{ color: c.foregroundMuted, fontSize: 12 }}>
+      {(!!receipt.detail || !!delivery) && <Text selectable numberOfLines={unsent ? undefined : delivery ? 2 : 1} style={{ color: unsent ? c.foreground : c.foregroundMuted, fontSize: 12 }}>
         {[delivery, receipt.detail].filter(Boolean).join(" · ")}
       </Text>}
     </View>

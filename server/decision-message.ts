@@ -17,6 +17,7 @@ type ReplyContext = {
   recordedAt?: string;
   questions: {id:string; text:string; index?:number}[];
   action: string;
+  route?: "coordinator";
 };
 
 // The context is board-generated. Keep it separate from the user's verbatim input.
@@ -45,6 +46,7 @@ export function trackedReplyMessage(item: TrackedDecisionInput, input: TrackedRe
     sourceSessionId:item.sessionId ?? item.sessionMatch?.sessionId ?? null, sourceHost:item.sessionHost ?? null,
     recipientSessionId:input.recipientId!, cardId:item.id, cardTitle:item.title, revision:input.fingerprint,
     recordedAt:item.since ?? undefined, questions:trackedQuestions(item,input), action:"reply",
+    ...(input.route ? {route:input.route} : {}),
   }, input.answer ?? "");
 }
 

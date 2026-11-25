@@ -13,6 +13,8 @@ import { Button, SessionChip, type Theme } from "./controls";
 import { useBoardLanguage } from "./language";
 import type { Card } from "./model";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
+import { QuestionContext } from "./question-context";
+import { choiceRequest, decisionChoiceNotice } from "./choice-display";
 
 type Action = DecisionInput["action"];
 type CoordinationDraft = { text: string; recipientId: string };
@@ -30,9 +32,9 @@ export function ReceiptText({ receipt, theme }: { receipt: DecisionReceipt; them
   </Text>;
 }
 
-export function DecisionActions({ card, theme, hostLabel, coordinator, coordinatorTitle, open, onSent, receipt, clarification, priorityLabel, embedded = false }: {
+export function DecisionActions({ card, theme, hostLabel, coordinator, coordinatorTitle, open, onSent, receipt, clarification, pendingRequests, priorityLabel, embedded = false }: {
   card: Card; theme: Theme; hostLabel?: string; coordinator: string | null; coordinatorTitle?: string; open?: (id: string) => void;
-  onSent: (result: DecisionReceipt) => void; receipt?: DecisionReceipt; clarification?: ReactNode; priorityLabel?: string; embedded?: boolean;
+  onSent: (result: DecisionReceipt) => void; receipt?: DecisionReceipt; clarification?: ReactNode; pendingRequests?: ReactNode; priorityLabel?: string; embedded?: boolean;
 }) {
   const { t, language } = useBoardLanguage();
   const { session } = card;
@@ -117,6 +119,9 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
     onPress: () => { if (coordination) void submit("coordinate", coordination.text, coordination.recipientId, editorPhotos); },
   };
   const canCoordinate = !!coordinator && coordinator !== session.id;
+  const choiceNotice = formal ? null : decisionChoiceNotice(decision);
+  // A coordinator card that names options without carrying them goes back to the coordinator through the usual request box.
+  const completion = decision?.source === "coordinator" && canCoordinate ? choiceRequest(choiceNotice, true) : null;
   const canRestore = !!decision?.recommendation && !decision.needsInput && (selection !== null || draft !== null);
   const sourceExcerpts = evidence.filter(text => text !== headline);
   const hasEvidence = !!decision?.recommendationReason || sourceExcerpts.length > 0;
@@ -130,11 +135,17 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
     <HistoryMarkdown theme={theme} source={headline} heading />
     <View style={{ ...wrap, alignItems: "center" }}>
       <Text selectable style={{ color: c.foregroundMuted, fontSize: 12, flexShrink: 1 }}>{[marker, priorityLabel].filter(Boolean).join(" · ")}</Text>
-      {open && <SessionChip theme={theme} label={t("담당 세션", "Assigned session")} accessibilityLabel={named(t("담당 세션 열기", "Open assigned session")).accessibilityLabel} onPress={() => open(session.id)} />}
+      {open && <SessionChip theme={theme} label={t("작업 세션", "Work session")} accessibilityLabel={named(t("작업 세션 열기", "Open work session")).accessibilityLabel} onPress={() => open(session.id)} />}
     </View>
-    {formal || !decision ? formal && <Text style={{ color: c.foregroundMuted }}>
-      {t("승인 요청은 담당 세션에서 확인해 주세요.", "Review the approval request in the assigned session.")}
-    </Text> : <>
+    {!formal && decision && <QuestionContext theme={theme} title={session.title} choices={decision.choices} context={decision.contextMarkdown} notice={choiceNotice} />}
+    {completion && !coordination && <View style={wrap}>
+      <Button theme={theme} {...named(t(...completion.label))} disabled={busy || replyPhotos.reading}
+        onPress={() => { setError(null); setCoordination({ recipientId: coordinator!, text: t(...completion.text) }); }} />
+    </View>}
+    {formal || !decision ? formal && (pendingRequests ?? <Text style={{ color: c.foregroundMuted }}>
+      {t("승인 요청은 작업 세션에서 확인해 주세요.", "Review the approval request in the work session.")}
+    </Text>) : <>
+
       {!coordination && <>
         {!proposed && !!decision.needsInput && decision.needsInput !== headline && <HistoryMarkdown theme={theme} source={decision.needsInput} />}
         {!!decision.options?.length && <View style={wrap}>{decision.options.map((option, index) =>
@@ -144,11 +155,11 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
         <PhotoComposer theme={theme} draft={replyPhotos} disabled={busy}>
           <DecisionReplyInput {...inputFocus} send={sendReply} theme={theme} value={reply.text} onChangeText={setDraft}
             accessibilityLabel={named(t("답장 내용", "Reply text")).accessibilityLabel}
-            placeholder={t("담당 세션에 보낼 답을 입력하세요", "Write a reply to the assigned session")}
+            placeholder={t("작업 세션에 보낼 답을 입력하세요", "Write a reply to the work session")}
             maxLength={24000} disabled={busy} reviewRequired={reply.needsReview} onReview={() => setReviewedReply(proposed ?? null)} />
         </PhotoComposer>
         <View style={{ ...wrap, alignItems: "center" }}>
-          <SendButton theme={theme} {...named(t("담당 세션에 답장 보내기", "Send reply to assigned session"))} send={sendReply} selected={!sendReply.disabled} />
+          <SendButton theme={theme} {...named(t("작업 세션에 답장 보내기", "Send reply to work session"))} send={sendReply} selected={!sendReply.disabled} />
           {clarification}
         </View>
         <View style={{ ...wrap, alignItems: "center" }}>

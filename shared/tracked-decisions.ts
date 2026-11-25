@@ -3,6 +3,7 @@ import { z } from "zod";
 import { workImages } from "./work-images";
 import { repositorySlug, type PullRequestView } from "./prs";
 import type { SessionRow } from "./contract";
+import { sameProject, type ProjectFolders } from "./project-folders";
 import { ledgerDiagnosticsSchema } from "./ledger-diagnostics";
 
 const id = z.string().min(1).max(256);
@@ -29,7 +30,7 @@ export const trackedDecisionInputSchema = reference.extend({
   sessionMatch:z.object({projectId,sessionId:id,question:text}).nullish(),
   since:optionalText, howToAnswer:optionalText, projectTitle:optionalText, urgency:optionalText,
   where:z.enum(["human","manager","session","unknown"]).nullish(), owner:optionalText, answerLead:optionalText,
-  dueAt:z.string().max(64).nullish(), blocksWork:z.boolean().nullish(),
+  dueAt:z.string().max(64).nullish(), blocksWork:z.boolean().nullish(), recommendedReply:optionalText,
 });
 export type TrackedDecisionInput = z.output<typeof trackedDecisionInputSchema>;
 export type RoutedTrackedDecision = TrackedDecisionInput & { sourceCoordinatorId?: string | null };
@@ -68,15 +69,35 @@ export function mentionsSecurityGate(item: TrackedDecisionInput) {
     .some(line => /보안\s*게이트|security[- ]gate/i.test(line));
 }
 
-export function trackedAnswerText(item: TrackedDecisionInput, replies: string[], freeReply: string) {
-  const answers = item.questions.flatMap((question, index) => {
-    const value = replies[index];
-    return value ? [[question.id, question.text].filter(Boolean).join(" · ") + " — " + value] : [];
-  });
-  return [...answers, freeReply.trim()].filter(Boolean).join("\n");
+const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
+const questionLabel = (question: TrackedDecisionInput["questions"][number]) => [question.id, question.text].filter(Boolean).join(" · ");
+
+// The ledger's answer lead opens a reply to the card's questions, so the coordinator can tell what the answers decide.
+// A reply written only in the free field goes out as the person wrote it.
+export function trackedAnswerLead(item: Pick<TrackedDecisionInput, "answerLead">, replies: readonly string[], freeReply: string, photos = false) {
+  const lead = oneLine(item.answerLead ?? "");
+  return lead && (replies.some(Boolean) || (photos && !freeReply.trim())) ? lead : "";
 }
 
-export function suggestedTrackedReply(item: TrackedDecision) {
+export function trackedAnswerText(item: TrackedDecisionInput, replies: readonly string[], freeReply: string, lead = "") {
+  const answers = item.questions.flatMap((question, index) => replies[index] ? [questionLabel(question) + ": " + replies[index]] : []);
+  return [lead, ...answers, freeReply.trim()].filter(Boolean).join("\n");
+}
+
+// A reply recorded before the answer lead had no lead line and joined each question and its answer with an em dash.
+export function legacyTrackedAnswer(item: TrackedDecisionInput, answer: string) {
+  const lines = answer.split("\n");
+  const lead = oneLine(item.answerLead ?? "");
+  if (lead && lines[0] === lead) lines.shift();
+  const labels = item.questions.map(questionLabel);
+  return lines.map(line => {
+    const label = labels.find(label => line.startsWith(label + ": "));
+    return label ? label + " \u2014 " + line.slice(label.length + 2) : line;
+  }).join("\n");
+}
+
+// The ledger's example answer is guidance only. It may name several choices at once.
+export function trackedReplyExample(item: TrackedDecision) {
   return item.kind !== "merge" && !item.questions.length && !item.matchedSessionId ? item.howToAnswer?.trim() ?? "" : "";
 }
 
@@ -87,20 +108,72 @@ export function usesSourceCoordinator(item:RoutedTrackedDecision) {
 export function sourceCoordinatorRecipient(item:RoutedTrackedDecision, coordinator:string|null, sessions:readonly SessionRow[]) {
   const owner = item.sourceCoordinatorId;
   if (owner === undefined) return coordinator;
-  return owner && (owner === coordinator || sessions.some(s => s.id === owner)) ? owner : null;
+  return owner && (owner === coordinator || sessions.some(s => s.id === owner && !s.serverId)) ? owner : null;
 }
 
-export function trackedRecipient(item:RoutedTrackedDecision, coordinator:string|null, sessions:readonly SessionRow[]) {
+// The card's own session among this host's sessions. A session in another Paseo project counts when both projects
+// open the same folder. The reply route and the card's session chip use the same check.
+export function trackedSession(item:Pick<RoutedTrackedDecision,"sessionId"|"projectId">, sessions:readonly SessionRow[], folders:ProjectFolders = {}) {
+  return item.sessionId ? sessions.find(s => s.id === item.sessionId && !s.serverId && sameProject(s.projectId, item.projectId, folders)) : undefined;
+}
+
+export function trackedRecipient(item:RoutedTrackedDecision, coordinator:string|null, sessions:readonly SessionRow[], folders:ProjectFolders = {}) {
   if (item.where === "manager" || item.where === "human") return sourceCoordinatorRecipient(item,coordinator,sessions);
   if (item.where !== "session" || item.sessionHost || !item.sessionId) return null;
-  const session = sessions.find(s => s.id === item.sessionId && s.projectId === item.projectId);
-  return session ? session.id : null;
+  return trackedSession(item,sessions,folders)?.id ?? null;
 }
+
+// A session card whose own session cannot take the reply may go to the same
+// coordinator that owns coordinator cards. An unverified owner never falls back.
+export function trackedFallbackRecipient(item:RoutedTrackedDecision, coordinator:string|null, sessions:readonly SessionRow[]) {
+  return item.where === "session" ? sourceCoordinatorRecipient(item,coordinator,sessions) : null;
+}
+
+export type TrackedReplyBlock = "closed" | "error" | "other-project" | "other-host" | "missing" | "no-session" | "owner-unverified" | "no-coordinator";
+export type TrackedReplyRoute = {
+  targetId: string | null; recipientId: string | null; fallbackId: string | null; blocked?: TrackedReplyBlock;
+};
+
+function endedState(id:string, sessions:readonly SessionRow[]) {
+  const status = sessions.find(s => s.id === id)?.status;
+  return status === "closed" || status === "error" ? status : undefined;
+}
+
+export function trackedReplyRoute(item:RoutedTrackedDecision, coordinator:string|null, sessions:readonly SessionRow[], folders:ProjectFolders = {}):TrackedReplyRoute {
+  if (item.where === "manager" || item.where === "human") {
+    const owner = sourceCoordinatorRecipient(item,coordinator,sessions);
+    if (!owner) return {targetId:null, recipientId:null, fallbackId:null, blocked:item.sourceCoordinatorId === undefined ? "no-coordinator" : "owner-unverified"};
+    const ended = endedState(owner,sessions);
+    return {targetId:owner, recipientId:ended ? null : owner, fallbackId:null, ...(ended ? {blocked:ended} : {})};
+  }
+  if (item.where !== "session") return {targetId:null, recipientId:null, fallbackId:null};
+  const candidate = trackedFallbackRecipient(item,coordinator,sessions);
+  const fallbackId = candidate && !endedState(candidate,sessions) ? candidate : null;
+  const blocked = (reason:TrackedReplyBlock, targetId:string|null = null):TrackedReplyRoute => ({targetId, recipientId:null, fallbackId, blocked:reason});
+  if (!item.sessionId) return blocked("no-session");
+  if (item.sessionHost) return blocked("other-host");
+  const session = trackedSession(item,sessions,folders);
+  if (!session) {
+    const observed = sessions.find(s => s.id === item.sessionId);
+    return blocked(observed?.serverId ? "other-host" : observed ? "other-project" : "missing");
+  }
+  const ended = endedState(session.id,sessions);
+  return ended ? blocked(ended,session.id) : {targetId:session.id, recipientId:session.id, fallbackId};
+}
+
+// `earlier-unconfirmed` and `recipient-unchecked` clear with time: the first lasts while an earlier reply holds the card,
+// the second while a project folder cannot be read.
+export const trackedReplyReasons = ["removed","revised","conflict","earlier-unconfirmed","owner-changed","recipient-changed","recipient-closed",
+  "recipient-error","recipient-missing","recipient-unchecked","queue-stopped"] as const;
+export type TrackedReplyReason = typeof trackedReplyReasons[number];
 
 export const resolveTrackedDecision = defineRpc({
   name:"board.resolve-tracked-decision",
-  input: reference.extend({fingerprint,answer:z.string().max(4000).optional(),recipientId:id.optional(),images:workImages.optional(),questionIndexes:z.array(z.number().int().min(0).max(127)).max(128).optional()}).strict().refine(v => !v.recipientId || !!v.answer?.trim() || !!v.images?.length),
-  output:z.object({status:z.enum(["closed","already-closed","changed","out-of-scope","unavailable","sent","queued","busy","unconfirmed"])}),
+  input: reference.extend({fingerprint,answer:z.string().max(4000).optional(),recipientId:id.optional(),route:z.literal("coordinator").optional(),images:workImages.optional(),questionIndexes:z.array(z.number().int().min(0).max(127)).max(128).optional()}).strict()
+    .refine(v => !v.recipientId || !!v.answer?.trim() || !!v.images?.length).refine(v => !v.route || !!v.recipientId),
+  // `revision` names the earlier revision whose reply was confirmed. The card's newer revision stays open. `recipientId`
+  // names the session that took a confirmed reply when it is not the one asked for.
+  output:z.object({status:z.enum(["closed","already-closed","changed","out-of-scope","unavailable","sent","queued","busy","unconfirmed"]),reason:z.enum(trackedReplyReasons).optional(),revision:fingerprint.optional(),recipientId:id.optional()}),
 });
 export const cancelQueuedReply = defineRpc({
   name:"board.cancel-queued-reply",
