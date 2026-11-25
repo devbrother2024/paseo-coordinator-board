@@ -47,7 +47,9 @@ test("risky options and unknown syntax do not look like read-only commands", () 
     ["git status &&", "unknown"], ["git status &&\ncat README.md", "read"],
     ["npm ci", "network"], ["bun install", "network"], ["git fetch", "network"],
     ["sips -g pixelWidth image.png", "read"], ["sips -g pixelWidth --out result image.png", "write"],
+    ["sips -g pixelWidth --embedProfile profile.icc image.png", "write"], ["sips -g pixelWidth --sample-flag image.png", "unknown"],
     ["git branch --show-current", "read"], ["sed -n '1,5p' file", "read"],
+    ["git --no-pager log", "read"], ["sed -n '/term/p' file", "read"], ["file --compile -m magic", "write"],
     ["awk '{print $1}' data", "read"], ["node --version", "read"], ["git --version", "read"],
   ]) expect([command, shell(command).risk]).toEqual([command, risk]);
 });

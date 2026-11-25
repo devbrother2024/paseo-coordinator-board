@@ -81,11 +81,13 @@ function fileTargets(name: string, words: ShellWord[], cwd?: string) {
 function gitCommand(args: string[]): { risk: Risk; name: string; detail?: string } {
   if (args.length === 1 && ["--version", "--help"].includes(args[0])) return { risk: "read", name: "git" };
   let index = 0;
-  while (args[index] === "-C" && args[index + 1]) index += 2;
+  while (args[index] === "--no-pager" || args[index] === "-C" && args[index + 1]) {
+    index += args[index] === "-C" ? 2 : 1;
+  }
   const sub = args[index];
   const flags = args.slice(index + 1);
   const name = sub && /^[a-z][a-z-]*$/.test(sub) ? "git " + sub : "git";
-  if (flags.includes("--ext-diff")) return { risk: "execute", name };
+  if (flags.includes("--ext-diff") || flags.includes("--textconv")) return { risk: "execute", name };
   if (["reset", "clean", "restore", "rm"].includes(sub) || sub === "branch" && flags.some(flag => /^-[^-]*[dD]|^--delete$/.test(flag)) ||
     sub === "push" && flags.some(flag => /^--(?:force(?:$|[=-])|mirror$|prune$|delete$)|^-[^-]*[fd]|^[+:]/.test(flag))) return { risk: "destructive", name };
   if (["fetch", "pull", "push"].includes(sub) || sub === "ls-remote" || sub === "clone") return { risk: "network", name };
@@ -112,16 +114,19 @@ function commandRisk(name: string, args: string[]): Risk {
   if (fileCommands.has(name) ||
     name === "find" && args.some(arg => /^-f(?:ls|print|print0|printf)$/.test(arg)) ||
     name === "sort" && args.some(arg => /^-o|^--output(?:=|$)/.test(arg)) ||
-    name === "awk" && args.some(arg => arg.includes(">")) || name === "file" && args.includes("-C") ||
-    name === "sips" && args.some(arg => /^--(?:out|setProperty|deleteProperty|rotate|resample|crop|pad|flip)|^-(?:s|d|o|r|z|Z|c|p|f)/.test(arg))) return "write";
-  if (name === "sips") return args[0] === "-g" || args[0] === "--getProperty" ? "read" : "unknown";
+    name === "awk" && args.some(arg => arg.includes(">")) || name === "file" && args.some(arg => arg === "--compile" || /^-[^-]*C/.test(arg)) ||
+    name === "sips" && args.some(arg => /^--(?:out|setProperty|deleteProperty|rotate|resample|crop|pad|flip|matchTo|embedProfile)|^-(?:s|d|o|r|z|Z|c|p|f|m|M|e|E)/.test(arg))) return "write";
+  if (name === "sips") {
+    const query = /^(?:-g|--getProperty(?:=.+)?)$/;
+    return query.test(args[0] ?? "") && args.every(arg => !arg.startsWith("-") || query.test(arg)) ? "read" : "unknown";
+  }
   if (name === "sed") {
     if (args.some(arg => /^-[^-]*i|^--in-place/.test(arg))) return "write";
     if (args.some(arg => /^(?:-f|--file)|^\s*(?:\d+[,\d]*\s*)?e\b|\/[^/]*e[^/]*$/.test(arg))) return "execute";
     if (args.some(arg => /\/[^/]*w[^/]*$|^\s*(?:\d+[,\d]*\s*)?w\s/.test(arg))) return "write";
     // Give the read label to common print and substitution forms. Other sed programs
     // may contain commands with side effects, arbitrary delimiters or GNU extensions.
-    return args[0] === "-n" && /^(?:[\d,$]*p|s\/(?:[^/\\]|\\.)*\/(?:[^/\\]|\\.)*\/[gp0-9]*)$/.test(args[1] ?? "") &&
+    return args[0] === "-n" && /^(?:[\d,$]*p|\/(?:[^/\\]|\\.)*\/p|s\/(?:[^/\\]|\\.)*\/(?:[^/\\]|\\.)*\/[gp0-9]*)$/.test(args[1] ?? "") &&
       args.slice(2, args.includes("--") ? args.indexOf("--") : undefined).every(arg => !arg.startsWith("-")) ? "read" : "unknown";
   }
   return readCommands.has(name) ? "read" : "unknown";
