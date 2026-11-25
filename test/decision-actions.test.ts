@@ -275,12 +275,13 @@ test("pending and sent photo replies from before the preview upgrade retain the 
   expect(f.prefs.read().decisionReceipts[wire]).toBeUndefined();
 });
 
-test("active coordinators can take independent board inputs; pending permissions and running workers still wait",async()=>{
+test("only opted-in operations steer supported active turns and permission or error states always block",async()=>{
   const {canReceiveBoardInput}=await import("../server/discovery");
   const active={status:"running",activeTurn:{id:"turn"},pendingPermissions:[],provider:"claude"};
   for (const provider of ["claude","codex"]) {
     expect(canReceiveBoardInput({...active,provider},true)).toBe(true);
     expect(canReceiveBoardInput({...active,provider},false)).toBe(false);
+    expect(canReceiveBoardInput({...active,provider,attentionReason:"error"},true)).toBe(false);
     expect(canReceiveBoardInput({...active,provider,pendingPermissions:[{id:"permission"}]},true)).toBe(false);
     expect(canReceiveBoardInput({...active,provider,attentionReason:"permission"},true)).toBe(false);
   }
@@ -290,4 +291,68 @@ test("active coordinators can take independent board inputs; pending permissions
   Object.assign(f.actors.coordinator,active);
   await f.send({action:"coordinate",recipientId:"coordinator",text:"이 질문을 확인해 주세요."});
   expect(f.sent[0].id).toBe("coordinator");
+});
+
+test("an unchanged open conversation card steers a running worker, while a new turn message invalidates it", async () => {
+  for (const provider of ["claude", "codex"]) {
+    const f = await fixture();
+    Object.assign(f.actors.worker, {status:"running", provider, activeTurn:{id:"turn"}});
+    await f.send();
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0].text).toBe(f.input.text);
+    const changed = await fixture();
+    Object.assign(changed.actors.worker, {status:"running", provider, activeTurn:{id:"turn"}});
+    changed.timelines.worker.push({type:"user_message", text:"Choose a different layout."});
+    await expect(changed.send()).rejects.toThrow();
+    expect(changed.sent).toBeEmpty();
+  }
+});
+
+test("a queued conversation answer rechecks the revision after restart", async () => {
+  const f = await fixture();
+  Object.assign(f.actors.worker, {status:"running", provider:"other", activeTurn:{id:"turn"}});
+  expect(await f.send()).toMatchObject({queued:true});
+  expect(f.sent).toBeEmpty();
+  f.actors.worker.status = "idle"; f.actors.worker.activeTurn = null;
+  f.timelines.worker.push({type:"assistant_message",text:"Should we change the layout?"});
+  const restarted = new DecisionSender(f.prefs, f.notes, new ConversationReader());
+  await restarted.resume(f.sdk);
+  expect(f.sent).toBeEmpty();
+});
+
+test("a conversation idle marker queues a running Codex reply and sends its original photos once after idle", async()=>{
+  const f=await fixture();
+  f.timelines.worker[0].text="deliverWhenIdle: true\n자막을 한 줄로 할까요?";
+  f.actors.worker.updatedAt="2";
+  const decision=(await f.row()).decision;
+  Object.assign(f.actors.worker,{status:"running",provider:"codex",activeTurn:{id:"turn"}});
+  const first=await f.send({version:decision.version,images:[replyPng]});
+  expect(first.queued).toBe(true);
+  const resumed=new DecisionSender(f.prefs,f.notes,new ConversationReader());
+  await resumed.resume(f.sdk);
+  expect(f.sent).toBeEmpty();
+  Object.assign(f.actors.worker,{status:"idle",activeTurn:null});
+  await Promise.all([resumed.resume(f.sdk),resumed.resume(f.sdk)]);
+  expect(f.sent).toHaveLength(1);
+  expect(f.sent[0]).toMatchObject({messageId:first.messageId,images:[replyPng]});
+  expect(f.prefs.read().queuedDecisions).toEqual({});
+});
+
+test("canceling a held conversation reply prevents delivery after the worker becomes idle", async () => {
+  const f=await fixture();
+  Object.assign(f.actors.worker,{status:"running",provider:"custom",activeTurn:{id:"turn"}});
+  const {messageId}=await f.send();
+  const card={kind:"session",sessionId:"worker",version:f.input.version,projectId:"project"} as const;
+  expect(await f.sender.verifyQueue(f.sdk,messageId)).toBe(true);
+  const request={card,messageId,action:"parallel" as const};
+  expect(f.sender.control(request,"custom",10)?.answer).toBe(f.input.text);
+  expect(f.sender.control(request,"custom",10)).toBeUndefined();
+  Object.assign(f.actors.worker,{status:"idle",activeTurn:null});
+  const restarted=new DecisionSender(f.prefs,f.notes,new ConversationReader());
+  await restarted.resume(f.sdk);
+  expect(f.sent).toBeEmpty();
+  expect(restarted.control({...request,action:"cancel"},"custom",10)).toBeDefined();
+  await restarted.resume(f.sdk);
+  expect(f.prefs.read().queuedDecisions).toEqual({});
+  expect(f.sent).toBeEmpty();
 });

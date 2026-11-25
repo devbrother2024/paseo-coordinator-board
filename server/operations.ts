@@ -75,11 +75,12 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
       const scope = initial ?? store.read();
       const catalog = includedCatalog(directory.catalog, scope.excludedProviders);
       const coordinator = resolveRoute("M", scope.routing, catalog, false, scope.usageRouting ? usage : []);
+      // Settings also read the host file: its display-only cards, and reset passes for accounts Paseo measures.
+      // Routing above has already used Paseo's own usage, so nothing from the file reaches assignment.
+      const host = settings ? await readDisplayUsage(store.directory, directory.providers, usage ?? []) : null;
       return {
-        usage, usageRouting:scope.usageRouting,
-        ...(settings && { workerModeOverrides: scope.workerModeOverrides,
-          displayUsage: await readDisplayUsage(store.directory, directory.providers, usage ?? []),
-        }),
+        usage: host && usage ? host.usage : usage, usageRouting:scope.usageRouting,
+        ...(settings && { workerModeOverrides: scope.workerModeOverrides, displayUsage: host?.display ?? [] }),
         providers: directory.providers.map(p => ({ ...p, included: !scope.excludedProviders.includes(p.id) })),
         catalog, coordinatorMode: catalog.find(m => m.provider === coordinator?.provider)?.coordinatorMode ?? null,
         routing: scope.routing, revision: scope.routingRevision,

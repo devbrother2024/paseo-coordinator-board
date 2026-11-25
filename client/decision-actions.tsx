@@ -2,7 +2,7 @@ import { useDecisionInteraction } from "./decision-editing";
 import { useRpc } from "@getpaseo/plugin/client";
 import { useRef, useState, type ReactNode } from "react";
 import { Pressable, Text, View, type LayoutChangeEvent } from "react-native";
-import { sendDecision, type DecisionInput } from "../shared/decision-actions";
+import { changedDecisionMessage, sendDecision, type DecisionInput } from "../shared/decision-actions";
 import { requestRecommendation } from "../shared/recommendation";
 import { HistoryMarkdown } from "./history-markdown";
 import { DecisionReplyInput } from "./decision-reply";
@@ -33,9 +33,9 @@ export function ReceiptText({ receipt, theme }: { receipt: DecisionReceipt; them
   </Text>;
 }
 
-export function DecisionActions({ card, theme, hostLabel, coordinator, coordinatorTitle, open, onSent, receipt, clarification: renderClarification, pendingRequests, priorityLabel, embedded = false }: {
+export function DecisionActions({ card, theme, hostLabel, coordinator, coordinatorTitle, open, onSent, onQueued, receipt, clarification: renderClarification, pendingRequests, priorityLabel, embedded = false }: {
   card: Card; theme: Theme; hostLabel?: string; coordinator: string | null; coordinatorTitle?: string; open?: (id: string) => void;
-  onSent: (result: DecisionReceipt) => void; receipt?: DecisionReceipt; pendingRequests?: ReactNode; priorityLabel?: string; embedded?: boolean;
+  onQueued?: () => void; onSent: (result: DecisionReceipt) => void; receipt?: DecisionReceipt; pendingRequests?: ReactNode; priorityLabel?: string; embedded?: boolean;
   // The question box. Its earlier questions and answers show with the card's evidence.
   clarification?: (part: "ask" | "history") => ReactNode;
 }) {
@@ -97,11 +97,17 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
       if (!result.ok || result.recipientId !== recipientId) {
         setError(["영수증의 수신자를 확인할 수 없습니다. 원래 세션을 확인해 주세요.", "The receipt does not confirm the recipient. Check the original session."]); return;
       }
+      if (result.queued) { onQueued?.(); return; }
       delivered.current = payload; attachments?.clear(); setCoordination(null);
       if (action === "reply") setDraft("");
       onSent({ projectId: session.projectId, sessionId: session.id, version: decision.version, recipientId: result.recipientId,
         project: session.projectTitle, source: session.title, recipient: action === "coordinate" ? coordinatorTitle || recipientId : session.title, action, answer: text.trim() || undefined });
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.message.includes(changedDecisionMessage)) {
+        setError(["질문이나 받는 세션이 바뀌었습니다. 최신 카드를 확인해 주세요.",
+          "The question or recipient changed. Check the latest card."]);
+        return;
+      }
       setError(["전송을 확인하지 못했습니다. 최신 카드와 받는 세션을 확인한 뒤 다시 시도해 주세요.",
         "Delivery was not confirmed. Check the latest card and recipient before retrying."]);
     } finally { pending.current = false; setBusy(false); }

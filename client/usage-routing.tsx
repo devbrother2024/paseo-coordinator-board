@@ -7,6 +7,7 @@ import type { Theme } from "./controls";
 import { useBoardLanguage } from "./language";
 import { countdownClock, type ClockHost } from "./countdown-clock";
 import { resetCountdown } from "./reset-countdown";
+import { resetPassClockTimes, resetPassFreshness, resetPassRows } from "./reset-passes";
 
 function AccountCard({label,report,supplemental,issue,provider,busy,now,onInclude,theme}: AccountCardData & {busy:boolean;now:number;onInclude:(provider:string,included:boolean)=>void;theme:Theme}) {
   const {t,language} = useBoardLanguage();
@@ -22,6 +23,8 @@ function AccountCard({label,report,supplemental,issue,provider,busy,now,onInclud
     })),
   ] : [];
   const stale = report && !recentUsage(report);
+  const passes = resetPassRows(report?.resetPasses, now, language, t, date);
+  const passTime = report && resetPassFreshness(report, now);
   return <View style={{gap:7,padding:10,borderWidth:1,borderColor:c.border,borderRadius:8,backgroundColor:c.surface0}}>
     <Text selectable style={{color:c.foreground,fontWeight:"600"}}>{[label,report?.plan].filter(Boolean).join(" · ")}</Text>
     {provider && <View style={{gap:3}}>
@@ -56,6 +59,21 @@ function AccountCard({label,report,supplemental,issue,provider,busy,now,onInclud
     {!rows.length && <Text style={{fontSize:13,color:c.foregroundMuted}}>{!report ? t("연결된 사용량 보고서가 없습니다.","No connected usage report.")
       : report.status === "error" ? t("사용량 조회에 실패했습니다.","Usage lookup failed.")
       : t("제공된 잔여량 수치가 없습니다.","No remaining quota reported.")}</Text>}
+    {!!passes.length && <View style={{gap:5,paddingTop:2}}>
+      <Text style={{fontSize:12,fontWeight:"600",color:c.foregroundMuted}}>{t("초기화권","Reset passes")}</Text>
+      {passes.map(pass => <View key={pass.key} style={{gap:2}}>
+        <View style={{flexDirection:"row",gap:8,alignItems:"baseline",justifyContent:"space-between",flexWrap:"wrap"}}>
+          <Text style={{fontSize:13,color:c.foregroundMuted}}>{pass.name}</Text>
+          <Text selectable style={{fontSize:13,fontWeight:pass.empty || passTime?.stale ? "400" : "600",color:pass.empty || passTime?.stale ? c.foregroundMuted : c.foreground}}>{pass.value}</Text>
+        </View>
+        {pass.expiry && <Text style={{fontSize:12,color:c.foregroundMuted}}>{pass.expiry}</Text>}
+        {pass.note && <Text style={{fontSize:12,color:c.foregroundMuted}}>{pass.note}</Text>}
+      </View>)}
+      {passTime?.separate && <Text style={{fontSize:12,color:c.foregroundMuted}}>{!passTime.fetchedAt ? t("초기화권 조회 시각 미확인","Reset passes: check time unknown")
+        : passTime.stale ? t("초기화권 이전 보고 "+date(passTime.fetchedAt),"Reset passes last known "+date(passTime.fetchedAt))
+        : t("초기화권 조회 "+date(passTime.fetchedAt),"Reset passes checked "+date(passTime.fetchedAt))}</Text>}
+      <Text style={{fontSize:12,color:c.foregroundMuted}}>{t("초기화권은 호스트 추가 보고에서 오며 표시 전용입니다. 배정에는 쓰지 않습니다.","Reset passes come from a host report and are display only. They are not used for assignment.")}</Text>
+    </View>}
     {issue && <Text style={{fontSize:12,color:c.foregroundMuted}}>{issue === "login" ? t("Paseo 사용량 조회에 다시 로그인이 필요합니다.","Sign in again for Paseo usage reports.")
       : t("Paseo 사용량 조회 요청 한도에 도달했습니다.","Paseo usage lookup is rate-limited.")}</Text>}
     {report && (supplemental || report.fetchedAt) && <Text style={{fontSize:12,color:c.foregroundMuted}}>{[
@@ -97,8 +115,10 @@ export function UsageRouting({providers,reports,supplemental=[],busy,usage,onInc
   const c = theme.colors;
   const [width,setWidth] = useState(0);
   const {cards,allOff} = accountCards(providers,reports,supplemental);
-  const now = useCountdownClock(cards.flatMap(card => card.report?.status === "available"
-    ? [...card.report.windows.map(w => w.resetsAt), ...card.report.balances.map(b => b.resetsAt)] : []));
+  const now = useCountdownClock(cards.flatMap(card => [
+    ...card.report?.status === "available" ? [...card.report.windows.map(w => w.resetsAt), ...card.report.balances.map(b => b.resetsAt)] : [],
+    ...resetPassClockTimes(card.report, Date.now()),
+  ]));
   const ordering = t("사용량으로 순서 정하기","Order by remaining usage");
   return <View style={{gap:9,padding:12,borderRadius:8,backgroundColor:c.surface1}}>
     <Text accessibilityRole="header" style={{color:c.foreground,fontWeight:"600"}}>{t("계정과 사용량","Accounts and usage")}</Text>

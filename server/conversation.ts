@@ -4,6 +4,7 @@ import type { SessionRow } from "../shared/contract";
 import type { Preferences } from "./preferences";
 import { contextBefore, labelDefinitions, questionChoices, type LabelDefinition } from "../shared/question-choices";
 import { withAssignmentHost } from "./host-assignment";
+import { waitsForIdle } from "../shared/busy-delivery";
 import { asksForDecision } from "../shared/question-request";
 
 type Sdk = PluginHandlerContext["paseo"];
@@ -12,7 +13,7 @@ type Page = Awaited<ReturnType<ReturnType<Sdk["agents"]["ref"]>["timeline"]["ref
 export type Turn = { role: "user" | "assistant"; text: string; truncated?: boolean; at?: string; definitions?: LabelDefinition[] };
 type ClarificationObservation = { bodyHash: string; response?: string };
 export type Evidence = {
-  id: string; turns: Turn[];
+  id: string; turns: Turn[]; deliverWhenIdle?:true;
   replies?: Map<string, string>;
   lastInputIds?: string[];
   boardMessageHashes?: Map<string,string>;
@@ -56,7 +57,7 @@ export function excerpt(page: Page): Evidence {
     if (item.type === "user_message") {
       lastInputSender = undefined;
       messageIds = [item.messageId, item.clientMessageId].filter((id): id is string => !!id);
-      if (messageIds.length && text.startsWith("[Coordinator Board · ")) {
+      if (messageIds.length) {
         const hash=createHash("sha256").update(item.text).digest("hex");
         for (const id of messageIds) boardMessageHashes.set(id,hash);
       }
@@ -72,18 +73,19 @@ export function excerpt(page: Page): Evidence {
     if (!text) continue;
     laterInputs.length = 0;
     turns.push({ role, text: text.slice(-2000), ...(timestamp ? { at:timestamp } : {}), ...(text.length > 2000 ? { truncated: true } : {}) });
-    full.set(turns.at(-1)!, text);
+    full.set(turns.at(-1)!, item.text);
     digest.update(JSON.stringify([seqEnd, role, text]));
   }
   if (laterInputs.length) digest.update(JSON.stringify(laterInputs));
   const kept = turns.slice(-4);
   // Only the turns the excerpt keeps: long ones keep the definitions their cut-off start holds.
   for (const turn of kept) {
-    const text = full.get(turn);
-    const definitions = turn.role === "assistant" && text && text.length > 2000 ? labelDefinitions(text) : [];
+    if (turn.role !== "assistant" || !turn.truncated) continue;
+    const definitions = labelDefinitions(full.get(turn)!.trim());
     if (definitions.length) turn.definitions = definitions;
   }
-  return { id: digest.digest("hex").slice(0, 24), turns: kept,
+  const last = turns.at(-1);
+  return { ...(last?.role === "assistant" && waitsForIdle(full.get(last) ?? "") ? {deliverWhenIdle:true} : {}), id: digest.digest("hex").slice(0, 24), turns: kept,
     ...(clarification && messageIds.length ? { lastInputIds: messageIds } : {}),
     ...(clarificationMessages.size ? { clarificationMessages } : {}),
     ...(boardMessageHashes.size ? {boardMessageHashes} : {}),
@@ -170,13 +172,13 @@ export class ConversationReader {
 
   // A closed session is normally answered from the cache only. `closed` fetches its stored timeline anyway,
   // for a read a coordinator was explicitly allowed to make (the handover from the previous coordinator).
-  async read(paseo: Sdk, row: SessionRow, fresh = false, { closed = false }: { closed?: boolean } = {}): Promise<Evidence | null> {
+  async read(paseo: Sdk, row: SessionRow, fresh = false, { closed = false, openReply = false }: { closed?: boolean; openReply?: boolean } = {}): Promise<Evidence | null> {
     const entry = this.cache.get(row.id);
     const cached = entry?.serverId === row.serverId ? entry : undefined;
     if (row.status === "closed" && !closed) {
       return cached?.stamp === row.activityAt ? cached?.page ?? null : null;
     }
-    if (row.status !== "idle" && row.status !== "error" && row.status !== "closed") return null;
+    if (row.status !== "idle" && row.status !== "error" && row.status !== "closed" && !(openReply && row.status === "running")) return null;
     if (!fresh && cached && cached.stamp === row.activityAt && Date.now() - cached.at < 60_000) return cached.page;
     const page = withAssignmentHost(paseo, row.serverId, client =>
       client.agents.ref(row.id).timeline.refetch({ direction: "tail", projection: "projected", limit: 48 })).then(excerpt);

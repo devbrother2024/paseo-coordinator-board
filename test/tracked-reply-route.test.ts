@@ -2,6 +2,7 @@ import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {manageQueuedAnswer} from "../shared/busy-delivery";
 import contribute from "../index.server";
 import { recordActionKey, recordRowKey } from "../client/decision-receipts";
 import {
@@ -14,14 +15,14 @@ import { boardSnapshot, boardScope } from "../shared/contract";
 import { projectFolderMap } from "../shared/project-folders";
 import { linkSession } from "../shared/session-links";
 import {
-  legacyTrackedAnswer, resolveTrackedDecision, trackedAnswerLead, trackedAnswerText, trackedDecisionSchema, trackedReplyExample, trackedReplyRoute,
+  legacyTrackedAnswer, resolveTrackedDecision, trackedAnswerLead, trackedAnswerText, trackedDecisionInputSchema, trackedDecisionSchema, trackedReplyExample, trackedReplyRoute,
   trackedRecipient,
 } from "../shared/tracked-decisions";
 
 const scratch: string[] = [];
 afterEach(() => { for (const path of scratch.splice(0)) rmSync(path, {recursive: true, force: true}); });
 
-type Agent = {project: string; status: string; archived?: boolean};
+type Agent = {project: string; status: string; provider?:string; permission?:boolean; archived?: boolean};
 const card = (id: string, extra: Record<string, unknown>) => ({id, title: "Card " + id, kind: "answer", ...extra});
 
 // Two selected checkouts of one repository: the ledger names "studio", one live session sits in "studio-copy".
@@ -46,11 +47,13 @@ async function fixture(items: Record<string, unknown>[], owner = "operator", roo
     ["elsewhere", {project: "studio-copy", status: "idle"}],
   ]);
   const sent: {id: string; text: string; messageId?: string}[] = [];
+  const optionsLog: {activeTurnBehavior?:string;sourceAgentId?:string}[]=[];
   const hidden = new Set<string>();
   // `lost`: the SDK call delivers the message and then fails. `history`: the recipient's timeline shows what arrived.
   const lost = new Set<string>();
   const history = {visible: false};
-  const actor = (id: string) => ({id, title: id, updatedAt: "1", status: agents.get(id)!.status, pendingPermissions: [],
+  const actor = (id: string) => ({id, title: id, updatedAt: "1", status: agents.get(id)!.status, pendingPermissions: agents.get(id)!.permission ? [{id:"request"}] : [],
+    provider:agents.get(id)!.provider, activeTurn:agents.get(id)!.status==="running" ? {id:"turn"} : null,
     ...(agents.get(id)!.archived ? {archivedAt: "2026-01-02T00:00:00.000Z"} : {})});
   const page = (entries: unknown[]) => ({entries, pageInfo: {hasMore: false, nextCursor: null}});
   const sdk = {
@@ -62,7 +65,8 @@ async function fixture(items: Record<string, unknown>[], owner = "operator", roo
         refresh: async () => agents.has(id) ? {agent: actor(id)} : null,
         timeline: {refetch: async () => ({epoch: id, entries: history.visible
           ? sent.filter(m => m.id === id).map(m => ({item: {type: "user_message", messageId: m.messageId, text: m.text}})) : []})},
-        send: async (text: string, options?: {messageId?: string}) => {
+        send: async (text: string, options?: {messageId?: string;activeTurnBehavior?:string;sourceAgentId?:string}) => {
+          optionsLog.push(options ?? {});
           sent.push({id, text, messageId: options?.messageId});
           if (lost.has(id)) throw new Error("connection lost");
         },
@@ -92,7 +96,7 @@ async function fixture(items: Record<string, unknown>[], owner = "operator", roo
     writeFileSync(scopePath, JSON.stringify({...scope, createdCoordinator: {id, previous: null, workspaceId: "board-workspace", config: {provider: "claude"}}}));
     agents.set(id, {project: "board-workspace", status: "idle"});
   };
-  return {board, find, reply, link, context, agents, hidden, sent, lost, history, ledgerItems, writeLedger, setOwner, createdBy};
+  return {scopePath:join(data,"scope.json"),rpc,optionsLog,board, find, reply, link, context, agents, hidden, sent, lost, history, ledgerItems, writeLedger, setOwner, createdBy};
 }
 
 const tenQuestions = Array.from({length: 10}, (_, index) => ({id: "Q" + (index + 1), text: "Question " + (index + 1),
@@ -639,4 +643,109 @@ test("the example answer is only a placeholder; the recommendation is inserted o
   expect(recommendedChoices(choices, index => index === 3)).toEqual({
     0: [JSON.stringify(["A", "One"])], 1: [JSON.stringify(["1", "Logs"]), JSON.stringify(["2", "Docs"])],
   });
+});
+
+test("a running worker steers only a person's reply, and an idle-only ledger card queues it", async()=>{
+  const f=await fixture([card("one",{where:"session",agentId:"worker"}),card("two",{where:"session",agentId:"worker",deliverWhenIdle:true})]);
+  f.agents.set("worker",{project:"studio",status:"running",provider:"codex"});
+  const first=(await f.find("one")).item;
+  expect(await f.reply(first,{recipientId:"worker",answer:"Keep two columns."})).toEqual({status:"sent"});
+  expect(f.sent[0].text).toBe("Keep two columns.");
+  expect(f.optionsLog[0]).toMatchObject({activeTurnBehavior:"steer"});
+  expect(f.optionsLog[0].sourceAgentId).toBeUndefined();
+  const second=(await f.find("two")).item;
+  expect(second.deliverWhenIdle).toBe(true);
+  expect(await f.reply(second,{recipientId:"worker"})).toEqual({status:"queued"});
+  expect(f.sent).toHaveLength(1);
+});
+
+test("parallel review holds the original reply across refresh and ambiguous delivery, and requires a human to resume",async()=>{
+  const f=await fixture([card("one",{where:"session",agentId:"worker"})]);
+  f.agents.set("worker",{project:"studio",status:"running",provider:"custom"});
+  const first=(await f.find("one")).item;
+  expect(await f.reply(first,{recipientId:"worker",answer:"Use blue."})).toEqual({status:"queued"});
+  const q=(await f.find("one")).item.queuedReply;
+  expect(q.offer).toBe(true);
+  const ref={card:{kind:"ledger",source:first.source,id:first.id,projectId:first.projectId,fingerprint:first.fingerprint},
+    messageId:q.messageId,coordinatorId:q.coordinatorId};
+  const act=action=>f.rpc(manageQueuedAnswer,{...ref,action});
+  f.agents.get("operator")!.permission=true;
+  expect(await act("parallel")).toEqual({status:"unavailable"});
+  expect(f.sent).toBeEmpty();
+  f.agents.get("operator")!.permission=false;
+  f.lost.add("operator");
+  const pair=await Promise.all([act("parallel"),act("parallel")]);
+  expect(pair.map(p=>p.status).sort()).toEqual(["changed","unconfirmed"]);
+  expect(f.sent).toHaveLength(1);
+  expect(f.sent[0]).toMatchObject({id:"operator"});
+  expect(f.sent[0].text).toContain("Use blue.");
+  const preamble=f.sent[0].text.split("\n{")[0];
+  expect(preamble).toContain("이 요청 자체는 승인이 아닙니다");
+  expect(preamble).toContain("Check the original session transcript");
+  expect(f.optionsLog[0]).toMatchObject({sourceAgentId:"plugin:coordinator-board",activeTurnBehavior:"steer"});
+  f.agents.get("worker")!.status="idle";
+  expect((await f.find("one")).item.queuedReply.parallel).toBe("held");
+  expect(f.sent).toHaveLength(1);
+  expect(await act("resume")).toEqual({status:"updated"});
+  for(let i=0;i<5 && f.sent.length===1;i++) { await f.board(); await Bun.sleep(5); }
+  expect(f.sent.map(m=>m.id)).toEqual(["operator","worker"]);
+});
+
+test("invalid idle flags preserve both direct and imported ledger cards and allow mid-turn replies", async () => {
+  for (const value of ["true", 1, null, {enabled:true}]) {
+    const input = {source:"ledger", projectId:"studio", id:"one", title:"Pick a layout", deliverWhenIdle:value};
+    expect(trackedDecisionInputSchema.parse(input).deliverWhenIdle).toBeFalsy();
+  }
+  const f = await fixture([card("one",{where:"session",agentId:"worker",deliverWhenIdle:"true"})]);
+  f.agents.set("worker",{project:"studio",status:"running",provider:"codex"});
+  const item = (await f.find("one")).item;
+  expect(item).toBeDefined();
+  expect(item.deliverWhenIdle).toBeFalsy();
+  expect(await f.reply(item,{recipientId:"worker",answer:"Two columns."})).toEqual({status:"sent"});
+  expect(f.sent.map(message=>message.text)).toEqual(["Two columns."]);
+});
+
+for (const ended of ["closed","archived"]) {
+  test(`a held reply can only be canceled once the worker is ${ended}`, async () => {
+    const f = await fixture([card("one",{where:"session",agentId:"worker"})]);
+    f.agents.set("worker",{project:"studio",status:"running",provider:"custom"});
+    const item = (await f.find("one")).item;
+    await f.reply(item,{recipientId:"worker"});
+    const queue = (await f.find("one")).item.queuedReply;
+    const ref = {card:{kind:"ledger",source:item.source,id:item.id,projectId:item.projectId,fingerprint:item.fingerprint},
+      messageId:queue.messageId,coordinatorId:queue.coordinatorId};
+    const act = action => f.rpc(manageQueuedAnswer,{...ref,action});
+    expect(await act("parallel")).toEqual({status:"updated"});
+    expect((await f.find("one")).item.queuedReply.originState).toBe("live");
+    if (ended==="closed") f.agents.get("worker")!.status="closed";
+    else { f.agents.get("worker")!.archived=true; f.hidden.add("worker"); }
+    // A click from the older live snapshot must also preserve the hold.
+    expect(await act("resume")).toEqual({status:"changed"});
+    expect((await f.find("one")).item.queuedReply).toMatchObject({parallel:"held",originState:"ended"});
+    expect(await act("cancel")).toEqual({status:"updated"});
+    expect((await f.find("one")).item.queuedReply).toBeUndefined();
+    expect(f.sent.map(m=>m.id)).toEqual(["operator"]);
+  });
+}
+
+test("a persisted conversation hold distinguishes an archived origin from an unreachable host", async () => {
+  const f = await fixture([]);
+  const scope = JSON.parse(readFileSync(f.scopePath,"utf8"));
+  const card = {kind:"session",projectId:"studio",sessionId:"worker",version:"question-one"};
+  const input = {projectId:card.projectId,sessionId:card.sessionId,version:card.version,recipientId:"worker",
+    action:"reply",text:"Two columns.",requestKey:"queued-answer-1"};
+  const held = {input,at:new Date().toISOString(),title:"Which layout?",fingerprint:"saved-answer",
+    stopped:false,parallel:"held",photos:[]};
+  const local = crypto.randomUUID(), remote = crypto.randomUUID();
+  writeFileSync(f.scopePath,JSON.stringify({...scope,queuedDecisions:{
+    [local]:{...held,serverId:null}, [remote]:{...held,serverId:"offline-host"},
+  }}));
+  f.agents.get("worker")!.archived = true;
+  const snapshot = await f.board();
+  for (const [messageId,originState] of [[local,"ended"],[remote,"unknown"]]) {
+    expect(snapshot.queuedConversations.find(q => q.messageId===messageId)).toMatchObject({parallel:"held",originState});
+    expect(await f.rpc(manageQueuedAnswer,{card,messageId,action:"resume"})).toEqual({status:"changed"});
+    expect(await f.rpc(manageQueuedAnswer,{card,messageId,action:"cancel"})).toEqual({status:"updated"});
+  }
+  expect(f.sent).toBeEmpty();
 });
