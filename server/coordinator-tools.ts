@@ -44,12 +44,25 @@ export async function providerConversation(paseo: Sdk, id: string): Promise<{ se
 
 export class CoordinatorToolStamps {
   private current: ServedTools | undefined;
+  // When this board began serving the current contract. A restart of the same build keeps the time.
+  private servedSince = Date.now();
   constructor(private readonly prefs: PreferenceStore, private readonly contract: CoordinatorContract = coordinatorContract) {}
 
   // The coordinator tool definitions this board build hands out, and the revision of its guide.
-  serve(tools: readonly Tool[], guide = "") {
+  serve(tools: readonly Tool[], guide = "", now = new Date()) {
     const fingerprint = toolsFingerprint(tools);
     this.current = fingerprint ? { fingerprint, contract: this.contract.version, compatibleFrom: this.contract.compatibleFrom, guide } : undefined;
+    this.servedSince = now.getTime();
+    if (!fingerprint) return;
+    try {
+      const scope = this.prefs.read();
+      const served = scope.toolsServed;
+      if (served?.fingerprint === fingerprint) this.servedSince = Date.parse(served.at);
+      // Nothing is written for a board with no conversation to compare.
+      else if (Object.keys(scope.toolStamps).length) this.prefs.change(value => { value.toolsServed = { fingerprint, at: now.toISOString() }; });
+    } catch {
+      // The time this process started serving is the safe line.
+    }
   }
 
   get fingerprint() { return this.current?.fingerprint; }
@@ -79,15 +92,16 @@ export class CoordinatorToolStamps {
     return next;
   }
 
-  // Looks for a compaction after the stamp, for a stamp that is behind what the board serves. A
-  // compacted conversation loads its board tools again, so the board holds nothing against it.
+  // Looks for a compaction after the stamp and after this board began serving its contract, for a stamp
+  // that is behind what the board serves. A conversation compacted since then loads the board tools it
+  // serves now. An earlier compaction loaded the definitions of that time, so it shows nothing.
   // Whatever cannot be read leaves the stamp as it is.
   async refresh(paseo: Sdk, agentId: string, now = new Date()): Promise<void> {
     const saved = this.prefs.read().toolStamps[agentId];
     if (!saved || !behindServedTools(this.stamp(agentId), this.current)) return;
     try {
       const page = await paseo.agents.ref(agentId).timeline.refetch({ direction: "tail", projection: "projected", limit: compactionWindow });
-      const since = Date.parse(saved.at);
+      const since = Math.max(Date.parse(saved.at), this.servedSince);
       const compacted = page.entries.some(({ item, timestamp }) => item.type === "compaction" && item.status === "completed" && Date.parse(timestamp) > since);
       if (compacted) this.write(agentId, stamp => stamp && stamp.session === saved.session ? compactedToolStamp(stamp, this.current) : stamp, now, true);
     } catch {

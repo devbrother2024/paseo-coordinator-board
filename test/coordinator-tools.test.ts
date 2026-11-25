@@ -287,6 +287,46 @@ test("a compaction clears what the board held against an older conversation", as
   expect(d.stamps.staleness("coordinator-1", "conversation-1")).toBe("stale");
 });
 
+test("a compaction from before this board build is not evidence", async () => {
+  // Stamped long ago, compacted since, and only then updated: that compaction loaded the older definitions.
+  const prefs = store({ session: "conversation-1", fingerprint: "f".repeat(64) });
+  const h = host();
+  const row = { id: "coordinator-1", status: "idle", provider: "claude" };
+  h.compact("2026-03-01T00:00:00.000Z");
+  const b = await board(prefs, oldBuild);
+  expect(await readCoordinatorTools(h.paseo, b.stamps, row)).toEqual({ stale: true });
+  await b.call(h);
+  expect(b.stamps.staleness("coordinator-1", "conversation-1")).toBe("stale");
+
+  // The board remembers when it began serving these definitions, so a plugin restart of the same
+  // build does not move that line past a compaction that came after it.
+  const served = prefs.read().toolsServed!;
+  expect(served.fingerprint).toBe(b.stamps.fingerprint!);
+  await new Promise(resolve => setTimeout(resolve, 15));
+  h.compact(new Date(Date.parse(served.at) + 1).toISOString());
+  const restarted = await board(prefs, oldBuild);
+  expect(prefs.read().toolsServed).toEqual(served);
+  expect(await readCoordinatorTools(h.paseo, restarted.stamps, row)).toBeUndefined();
+
+  // An update serves other definitions and draws the line anew.
+  const prefsB = store();
+  await (await board(prefsB, oldBuild)).call(h);
+  const stampedAt = Date.parse(prefsB.read().toolStamps["coordinator-1"].at);
+  await new Promise(resolve => setTimeout(resolve, 15));
+  const updated = await board(prefsB, newBuild, { version: 2, compatibleFrom: 2 });
+  expect(prefsB.read().toolsServed!.fingerprint).toBe(updated.stamps.fingerprint!);
+  expect(Date.parse(prefsB.read().toolsServed!.at)).toBeGreaterThan(stampedAt);
+  const hb = host();
+  hb.compact(new Date(Date.parse(prefsB.read().toolsServed!.at) - 1).toISOString());
+  expect(await readCoordinatorTools(hb.paseo, updated.stamps, row)).toEqual({ stale: true });
+
+  // A board with nothing to compare writes nothing when it starts.
+  const dir = mkdtempSync(join(tmpdir(), "coordinator-tools-")); paths.push(dir);
+  const empty = new PreferenceStore(join(dir, "scope.json"));
+  new CoordinatorToolStamps(empty).serve(oldBuild);
+  expect(readdirSync(dir)).toEqual([]);
+});
+
 test("/clear starts a new conversation, which gets the served contract on its first call", async () => {
   const prefs = store({ session: "conversation-1", fingerprint: "f".repeat(64) });
   const h = host();

@@ -43,7 +43,7 @@ Intent: [intent.md](intent.md)
 보드는 호출에 적힌 값이 아니라 관찰한 것으로 판단한다. 모델이 적어 보내는 계약 번호 항목은 두지 않는다.
 
 - **도구 호출**: 어떤 도구를 부른 대화는 그 도구가 처음 들어간 계약 이상을 가졌다(`contractToolsSince`). 계약 전에 기록된 대화가 `read_board_guide`나 `board_action`을 부르면 계약 1을 가진 것으로 기록한다. 이 두 도구는 그 대화에 새로 알려진 도구라서, 불렀다고 해서 전에 불러온 일곱 도구의 정의가 새로워진 것은 아니다. 그래서 `early`는 남긴다.
-- **대화 압축**: Paseo의 Claude 구현은 압축이 끝나면 타임라인에 `compaction` 항목(`status: "completed"`)을 남긴다. 기록(`at`)보다 나중의 압축 항목이 있으면 그 대화는 보드 도구를 모두 다시 불러오므로, 같은 대화 ID의 새 대화처럼 기록을 새로 쓴다(`early` 없음, 지금 계약 번호, 빈 안내 판본).
+- **대화 압축**: Paseo의 Claude 구현은 압축이 끝나면 타임라인에 `compaction` 항목(`status: "completed"`)을 남긴다. 기록(`at`)보다 나중이고 **보드가 지금 계약을 내보내기 시작한 시각보다도 나중인** 압축 항목이 있으면 그 대화는 지금 보드의 도구를 모두 다시 불러오므로, 같은 대화 ID의 새 대화처럼 기록을 새로 쓴다(`early` 없음, 지금 계약 번호, 빈 안내 판본). 업데이트 전에 있었던 압축은 그때의 정의를 불러왔을 뿐이라 근거가 아니다. 내보내기 시작한 시각은 호스트 설정의 `toolsServed`(지문과 시각)에 적어 두어, 같은 빌드의 플러그인이 다시 시작해도 바뀌지 않는다. 비교할 기록이 하나도 없는 보드는 시작할 때 아무것도 쓰지 않는다.
 - 압축 항목은 기록이 뒤처진 대화(`stale`이거나 `early`)에 대해서만 찾는다. 코디네이터의 턴이 끝날 때, 보드 도구를 부를 때, 화면 안내를 낼 때 최근 타임라인 200항목을 본다. 읽지 못하면 기록을 그대로 둔다.
 - 근거 수준: 압축 뒤 정의를 다시 받는 것은 Claude Code 2.1.330 명령줄에서 확인했다. 타임라인의 압축 항목은 Paseo 0.17.4 소스와 SDK 타입(`CompactionTimelineItem`)에서 확인했고, 운영 중인 세션의 타임라인에서 직접 보지는 않았다.
 
@@ -99,7 +99,7 @@ Intent: [intent.md](intent.md)
 | R4 | 경로 출처 항목을 `board_action`으로 넘겨 배정 도구의 지금 형식 검사를 통과한다 | `test/coordinator-contract.test.ts`의 `the assignment route fields pass through board_action` |
 | R5 | 모르는 기능과 형식 오류는 오류 결과로 이름 목록, 어긋난 항목, 지금 형식을 준다 | `test/board-guide.test.ts`의 `board_action explains an unknown action and a rejected input` |
 | R6 | 안내 도구는 기능 목록, 기능별 사용법과 지금 형식, 대화의 정의 상태를 준다. 기존 도구의 사용법은 그 도구의 설명 그대로다 | `test/board-guide.test.ts`의 `the guide lists actions and describes one`, `test/coordinator-contract.test.ts`의 `every board tool is an action, and the guide repeats the tool's own description` |
-| R7 | 계약 전의 대화는 `stale`이고, 계약 도구를 부르면 교체 없이 `current`가 된다. 호환되지 않는 계약은 압축을 볼 때까지 `stale`이다. 압축을 보면 `early`도 풀린다. 호출에 적힌 값은 근거로 쓰지 않는다 | `test/coordinator-tools.test.ts`의 `a conversation from before the contract catches up by reading the guide`, `a broken contract stays stale until the conversation is compacted`, `a compaction clears what the board held against an older conversation`, `a contract tool call shows the conversation holds the contract that introduced the tool` |
+| R7 | 계약 전의 대화는 `stale`이고, 계약 도구를 부르면 교체 없이 `current`가 된다. 호환되지 않는 계약은 압축을 볼 때까지 `stale`이다. 압축을 보면 `early`도 풀린다. 호출에 적힌 값과, 지금 계약을 내보내기 전의 압축은 근거로 쓰지 않는다 | `test/coordinator-tools.test.ts`의 `a conversation from before the contract catches up by reading the guide`, `a broken contract stays stale until the conversation is compacted`, `a compaction clears what the board held against an older conversation`, `a compaction from before this board build is not evidence`, `a contract tool call shows the conversation holds the contract that introduced the tool` |
 | R8 | 알림은 안내 판본마다 대화당 한 번이고 글 결과에만 붙는다. JSON 결과는 몇 번을 불러도 그대로다. 주제 하나만 읽은 것은 읽은 것으로 치지 않는다 | `test/coordinator-tools.test.ts`의 `the guide note is attached once per guide revision`, `a JSON result is left alone, and the note waits for a text result`, `reading one topic is not reading the guide`, `the note keeps a result intact` |
 | R9 | 화면 안내는 맥락을 덜 잃는 순서이고 두 언어다 | `test/coordinator-tools.test.ts`의 `notice wording orders the fixes from least to most context lost` |
 | R10 | 보드는 세션을 다시 띄우지 않고 `/clear`, `/compact`를 보내지 않는다 | `test/coordinator-tools.test.ts`의 `the board never reloads a session, nor types /clear or /compact into one` |
@@ -118,7 +118,7 @@ Intent: [intent.md](intent.md)
 
 ## 6. 열린 질문 (제안 답)
 
-- 플러그인을 다시 시작하는 사이에 보드 도구를 부른 코디네이터가 "도구가 사라졌다"고 사람에게 보고할 수 있다(2.8). 보드가 그 오류 문구를 바꿀 수는 없다. 제안: 코디네이터 헌장에 "보드를 업데이트한 직후 보드 도구가 보이지 않으면 잠시 뒤 다시 부른다"는 한 줄을 더하는 것. 이번 변경에는 넣지 않았다.
+- (닫음) 플러그인을 다시 시작하는 사이에 보드 도구를 부른 코디네이터가 "도구가 사라졌다"고 사람에게 보고할 수 있다(2.8). 보드가 그 오류 문구를 바꿀 수는 없다. "업데이트 직후 보드 도구가 보이지 않으면 잠시 뒤 다시 부른다"는 안내는 유지관리자 쪽 운영 지침에서 다루기로 했다. 플러그인의 기본 헌장에는 넣지 않았다.
 - 대화 압축이 Paseo 안의 세션에서도 같은 결과를 내는가: 압축 뒤 정의를 다시 받는 것은 Claude Code 명령줄에서 확인했다. Paseo의 Claude 세션은 같은 실행 파일을 쓰고 압축을 타임라인에 적으므로 같을 것으로 보지만, 운영 중인 세션에서 직접 확인하지는 않았다. 화면 안내는 압축을 두 번째 수단으로 적고 확인한 버전을 밝힌다.
 - 압축 항목이 최근 200항목 밖으로 밀려난 뒤에야 보드가 확인하는 경우: 턴이 끝날 때마다 보므로 드물다. 놓치면 화면 안내가 남고, 사람은 세 번째 수단을 쓴다.
 - 도구가 지연 로딩되지 않는 환경에서 새 도구가 기존 대화에 알려지는가: 확인하지 못했다. 알려지지 않으면 그 대화는 화면 안내의 두 번째, 세 번째 수단을 쓴다.
