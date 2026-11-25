@@ -321,7 +321,7 @@ export function saveScan(scope: Preferences, row: SessionLabel, scan: QuestionSc
       ...(item.movedTo ? { movedTo: item.movedTo } : {}), ...(judge ? { judge } : {}),
       // The coordinator's verdict and the notice it got stay with the question.
       ...(kept?.verdict ? { verdict: kept.verdict } : {}), ...(kept?.notified ? { notified: kept.notified } : {}),
-      ...(kept?.notifiedAt ? { notifiedAt: kept.notifiedAt } : {}),
+      ...(kept?.notifiedAt ? { notifiedAt: kept.notifiedAt } : {}), ...(kept?.notices ? { notices: kept.notices } : {}),
     };
     // Display fields that do not fit the record are left out. The question itself is always kept.
     // The scan's flags replace the saved ones; the saved display fields stay unless the scan has new ones.

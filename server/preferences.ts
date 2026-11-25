@@ -44,6 +44,8 @@ export const raisedQuestionSchema = z.object({
   verdict: z.object({ kind: z.literal("needed"), evidence: z.string().max(2000).optional(), at: z.iso.datetime(), by: z.string().max(256) }).optional(),
   // The coordinator that was told to judge it, and when the board last tried to tell it (sent or failed).
   notified: z.string().max(256).optional(), notifiedAt: z.iso.datetime().optional(),
+  // How many notices the coordinator got about it. Each reminder waits twice as long as the one before.
+  notices: z.number().int().min(1).max(1000).optional(),
 });
 export type RaisedQuestion = z.output<typeof raisedQuestionSchema>;
 const raisedSession = z.object({
@@ -171,6 +173,8 @@ const schema = z.object({
   toolsServed: z.object({ fingerprint: z.string().max(128), at: z.iso.datetime() }).optional().catch(undefined),
   // Questions the board raised from a session's conversation, kept until something shows they were handled.
   raisedQuestions: tolerantRecord(raisedSession),
+  // The last judgment notice the board sent to the coordinator. Notices go at least 5 minutes apart.
+  judgmentNotice: z.object({ coordinator: z.string().max(256), at: z.iso.datetime() }).optional().catch(undefined),
   // Questions closed with evidence, by question key. A closed question never opens again.
   closedQuestions: tolerantRecord(closedQuestion),
 });

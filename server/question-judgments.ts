@@ -10,9 +10,14 @@ import type { Preferences, PreferenceStore } from "./preferences";
 type Sdk = PluginHandlerContext["paseo"];
 const sender = "plugin:coordinator-board";
 export const judgeOpenQuestionName = "judge_open_question";
-// A question the coordinator has not judged gets a new notice this long after the last attempt to tell it.
+// A question the coordinator has not judged gets a new notice this long after the first attempt to tell it, then twice
+// as long each time, up to 8 hours.
 export const STILL_NOT_JUDGED_MS = 30 * 60 * 1000;
+const LONGEST_REMINDER_MS = 8 * 60 * 60 * 1000;
 export const QUESTIONS_PER_NOTICE = 20;
+// One message per round, and messages at least this far apart, however many questions wait.
+export const NOTICE_SPACING_MS = 5 * 60 * 1000;
+const reminderGap = (notices: number) => Math.min(STILL_NOT_JUDGED_MS * 2 ** Math.max(0, notices - 1), LONGEST_REMINDER_MS);
 // Handled needs evidence that names something: at least this many characters other than spaces.
 export const MIN_EVIDENCE = 10;
 
@@ -32,7 +37,7 @@ export function questionsToJudge(scope: Pick<Preferences, "coordinator" | "proje
     for (const question of saved.questions) {
       if (!question.judge || question.verdict) continue;
       const told = question.notified === coordinator;
-      if (told && question.notifiedAt && now - Date.parse(question.notifiedAt) < STILL_NOT_JUDGED_MS) continue;
+      if (told && question.notifiedAt && now - Date.parse(question.notifiedAt) < reminderGap(question.notices ?? 1)) continue;
       due.push({ again: told, item: { sessionId, questionKey: question.key, question: question.question.slice(0, 340), why: question.judge,
         ...(question.askedAt ? { askedAt: question.askedAt } : {}) } });
     }
@@ -55,20 +60,38 @@ function messageIdFor(coordinator: string, keys: readonly string[], at: string) 
   return [h.slice(0, 8), h.slice(8, 12), "4" + h.slice(13, 16), "8" + h.slice(17, 20), h.slice(20, 32)].join("-");
 }
 
+// Up to `limit` items, taken in turn from each session so one session cannot fill a message.
+function fairly(items: readonly JudgmentItem[], limit: number) {
+  const bySession = new Map<string, JudgmentItem[]>();
+  for (const item of items) bySession.set(item.sessionId, [...(bySession.get(item.sessionId) ?? []), item]);
+  const picked: JudgmentItem[] = [];
+  for (let round = 0; picked.length < limit; round++) {
+    const before = picked.length;
+    for (const queue of bySession.values()) if (round < queue.length && picked.length < limit) picked.push(queue[round]);
+    if (picked.length === before) break;
+  }
+  return picked;
+}
+
 /**
- * Tells the coordinator which open questions to judge. Every attempt is recorded before the send, so a send that fails is
- * not sent again: the board does not retry a sourced send. A question still not judged 30 minutes after the last attempt
- * gets a new notice ("still not judged"), which is a new message rather than a retry. At most 20 questions per message.
+ * Tells the coordinator which open questions to judge, one message per round and at least 5 minutes apart. Each message
+ * holds up to 20 questions taken fairly across sessions, first notices before reminders. The coordinator is checked right
+ * before each message, so one that waits on a permission request gets nothing. Every attempt is recorded before the
+ * send, so a send that fails is not sent again: the board does not retry a sourced send. A question still not judged gets
+ * a new notice ("still not judged") 30 minutes after the first, then after twice as long each time, up to 8 hours. That is
+ * a new message rather than a retry.
  */
 export class QuestionNotices {
   private running = false;
   constructor(private store: PreferenceStore) {}
 
-  async deliver(sdk: Pick<Sdk, "agents">, now = Date.now()): Promise<"sent" | "waiting" | "nothing" | "unavailable"> {
+  async deliver(sdk: Pick<Sdk, "agents">, now = Date.now()): Promise<"sent" | "waiting" | "spaced" | "nothing" | "unavailable"> {
     const scope = this.store.read();
     const coordinator = scope.coordinator;
     const due = questionsToJudge(scope, now);
     if (!coordinator || !due.length) return "nothing";
+    const last = scope.judgmentNotice;
+    if (last?.coordinator === coordinator && now - Date.parse(last.at) < NOTICE_SPACING_MS) return "spaced";
     if (this.running) return "waiting";
     this.running = true;
     try {
@@ -78,21 +101,24 @@ export class QuestionNotices {
       // A coordinator waiting on a permission request would lose it to any message.
       if (!canReceiveBoardInput(agent, false)) return "waiting";
       if (this.store.read().coordinator !== coordinator) return "unavailable";
+      const first = due.filter(entry => !entry.again);
+      const again = !first.length;
+      const batch = fairly((again ? due : first).map(entry => entry.item), QUESTIONS_PER_NOTICE);
+      const keys = new Set(batch.map(item => item.questionKey));
       const at = new Date(now).toISOString();
-      for (const again of [false, true]) {
-        const items = due.filter(entry => entry.again === again).map(entry => entry.item);
-        for (let start = 0; start < items.length; start += QUESTIONS_PER_NOTICE) {
-          const batch = items.slice(start, start + QUESTIONS_PER_NOTICE);
-          const keys = new Set(batch.map(item => item.questionKey));
-          // Recorded before the send: if the send fails, the next snapshot does not send it again.
-          this.store.change(current => {
-            for (const saved of Object.values(current.raisedQuestions)) {
-              for (const question of saved.questions) if (keys.has(question.key)) { question.notified = coordinator; question.notifiedAt = at; }
-            }
-          });
-          await handle.send(judgmentNotice(batch, again), { sourceAgentId: sender, messageId: messageIdFor(coordinator, [...keys], at), activeTurnBehavior: "steer" });
+      // Recorded before the send: if the send fails, the next round does not send it again.
+      this.store.change(current => {
+        current.judgmentNotice = { coordinator, at };
+        for (const saved of Object.values(current.raisedQuestions)) {
+          for (const question of saved.questions) {
+            if (!keys.has(question.key)) continue;
+            question.notices = question.notified === coordinator ? (question.notices ?? 1) + 1 : 1;
+            question.notified = coordinator;
+            question.notifiedAt = at;
+          }
         }
-      }
+      });
+      await handle.send(judgmentNotice(batch, again), { sourceAgentId: sender, messageId: messageIdFor(coordinator, [...keys], at), activeTurnBehavior: "steer" });
       return "sent";
     } finally { this.running = false; }
   }
