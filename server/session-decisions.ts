@@ -34,6 +34,7 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
     row.detail = "답장을 보냈습니다. 작업 세션의 결과를 기다립니다.";
   } else {
     row.decision = { ...content, version };
+    if (content.source !== "permission" && evidence?.deliverWhenIdle) row.decision.deliverWhenIdle = true;
     if (content.source === "conversation" && evidence) {
       const excerpt = conversationQuestionDetails(evidence, row.id === prefs.coordinator);
       // Display-only fields stay out of the version, so new context never reopens an answered card.

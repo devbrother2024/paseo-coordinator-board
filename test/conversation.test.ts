@@ -14,6 +14,12 @@ const row = { id: "worker", status: "idle", projectId: "p", projectTitle: "프�
 function page(items) { return { epoch: "a", entries: items.map(([type,text],i)=>({ item:{type,text}, seqEnd:i })),error:null }; }
 const question = ["assistant_message","확인해 주실 것\n두 번째 자막을 한 줄로 둘까요?"];
 const evidence = (...items) => excerpt(page(items));
+test("대화 발췌는 첫 줄의 네 칸 들여쓴 예시와 실제 대기 표식을 구분한다", () => {
+  const message = "deliverWhenIdle: true\nWhich layout?";
+  expect(evidence(["assistant_message", "    " + message]).deliverWhenIdle).toBeUndefined();
+  expect(evidence(["assistant_message", message]).deliverWhenIdle).toBe(true);
+});
+
 test("텍스트 요청과 근거를 보여주고, 후속 메시지는 대조 대상으로 둔다", () => {
   const e = evidence(question);
   expect(classify(e,row)).toMatchObject({lane:"human", detail:expect.stringContaining("두 번째 자막")});

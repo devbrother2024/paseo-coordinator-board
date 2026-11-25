@@ -6,6 +6,8 @@ import type { SessionRow } from "./contract";
 import { sameProject, type ProjectFolders } from "./project-folders";
 import { ledgerDiagnosticsSchema } from "./ledger-diagnostics";
 
+import { queueView } from "./busy-delivery";
+
 const id = z.string().min(1).max(256);
 const projectId = z.string().min(1).max(4096);
 const text = z.string().min(1).max(16000);
@@ -16,7 +18,7 @@ const target = z.object({repo:repositorySlug, number:z.number().int().positive()
 const reference = z.object({source:id,projectId:projectId.nullable(),id});
 const fingerprint = z.string().regex(/^[a-f0-9]{64}$/);
 export const trackedDecisionInputSchema = reference.extend({
-  title:text,
+  title:text, deliverWhenIdle:z.boolean().optional().catch(undefined),
   kind:z.enum(["check","answer","merge","approve","cleanup","other"]).default("other"),
   ask:lines, recommend:lines, why:lines, risk:lines, steps:lines,
   questions:z.array(z.object({
@@ -36,8 +38,7 @@ export type TrackedDecisionInput = z.output<typeof trackedDecisionInputSchema>;
 export type RoutedTrackedDecision = TrackedDecisionInput & { sourceCoordinatorId?: string | null };
 export const trackedDecisionSchema = trackedDecisionInputSchema.extend({
   historyUnavailable: z.literal(true).optional(),
-  queuedReply:z.object({messageId:z.string().uuid(),recipientId:id,answer:z.string().optional(),
-    imageCount:z.number().int().nonnegative(), stopped:z.boolean()}).optional(),
+  queuedReply:queueView.optional(),
   sourceCoordinatorId:id.nullable().optional(), key:z.string(), fingerprint, matchedSessionId:id.nullable(), matchedPull:target.nullable(),
 });
 export type TrackedDecision = z.output<typeof trackedDecisionSchema>;

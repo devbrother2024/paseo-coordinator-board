@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { z } from "zod";
 import { sessionLinkSchema } from "../shared/session-links";
 import {clarificationCard, clarificationEntry} from "../shared/clarifications";
-import { decisionSchema, decisionFields } from "../shared/decision-actions";
+import { decisionSchema, decisionFields, decisionRequest } from "../shared/decision-actions";
 import { dispatchInputSchema, routePolicySchema, workerModeProvider } from "../shared/dispatch";
 import { pullMergeActivity, repositoryOverride } from "../shared/prs";
 import { replyDetails } from "../shared/reply-history";
@@ -12,6 +12,8 @@ import { factSchema } from "../shared/board-facts";
 import { assignmentPolicy, hostIdentity } from "../shared/host-assignment";
 import { assignmentLocation, assignmentNotice } from "../shared/dispatch-hosts";
 import { pullJudgmentSchema } from "../shared/pull-judgments";
+import { parallelState } from "../shared/busy-delivery";
+import { WORK_IMAGE_MIME_TYPES } from "../shared/work-images";
 import { conversationIdPattern } from "../shared/coordinator-tools";
 
 export const judgment = z.object({
@@ -70,6 +72,11 @@ const schema = z.object({
   clarifications:z.record(z.string(),clarificationEntry.extend({
     card:clarificationCard,fingerprint:z.string(),bodyHash:z.string(),sourceSessionId:z.string().nullable(),
     savedDecision:decisionSchema.optional(),noteRevision:z.number().optional(),sourceEvidenceId:z.string().optional(), sourceRequestedAt:z.string().optional(),
+  })).default({}),
+  queuedDecisions: z.record(z.string(), z.object({
+    input:decisionRequest.omit({images:true}), at:z.string().datetime(), title:z.string(), fingerprint:z.string(),
+    serverId:z.string().nullable(), stopped:z.boolean(), parallel:parallelState.optional(),
+    photos:z.array(z.object({mimeType:z.enum(WORK_IMAGE_MIME_TYPES),digest:z.string()})),
   })).default({}),
   decisionReceipts: z.record(z.string(), z.object({
     activity: replyDetails.optional(), response: z.string().optional(),

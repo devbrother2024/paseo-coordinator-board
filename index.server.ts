@@ -1,9 +1,11 @@
 import type { ReplyEntry } from "./shared/reply-history";
-import { pullKey, trackedFallbackRecipient, trackedRecipient, trackedReplyRoute, usesSourceCoordinator, type TrackedReplyReason } from "./shared/tracked-decisions";
+import { randomUUID } from "node:crypto";
+import { canChangeQueue, manageQueuedAnswer, parallelWait, type QueueView } from "./shared/busy-delivery";
+import { sourceCoordinatorRecipient, type RoutedTrackedDecision, type TrackedResolution, pullKey, trackedFallbackRecipient, trackedRecipient, trackedReplyRoute, usesSourceCoordinator, type TrackedReplyReason } from "./shared/tracked-decisions";
 import { boardReadiness } from "./shared/readiness";
 import { SnapshotReads } from "./server/snapshot-reads";
 import { readProjectDecisionSources } from "./server/project-decision-sources";
-import { TrackedDecisionStore } from "./server/tracked-decisions";
+import { TrackedDecisionStore, type Prepared } from "./server/tracked-decisions";
 import { MergeNotifications, mergeHistoryKey } from "./server/merge-notifications";
 import { closedMergeTarget, settledKey, settleMergeCards } from "./shared/merge-card-place";
 import { ProjectPullRequests } from "./server/prs";
@@ -32,7 +34,7 @@ import { BoardFacts } from "./server/board-facts";
 import { ProjectRootReader } from "./server/project-root";
 import { recordDigestCompletion } from "./server/digest";
 import { coordinatorReach, operatingProjects } from "./server/coordinator-reach";
-import { discoverBoardSessions } from "./server/board-sessions";
+import { discoverBoardSessions, withRemoteReadHost } from "./server/board-sessions";
 import { withAssignmentHost } from "./server/host-assignment";
 import { judgedMergeCardOptions, judgePullTool, registerMergeJudgmentSettings } from "./server/pull-judgments";
 import { applyPullJudgments } from "./shared/pull-judgments";
@@ -42,6 +44,11 @@ import { coveredSessionIds, decorateReviewWait, reviewWaitThreshold } from "./se
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(hostVisibility);
+  const queueSettings = server.registerSettings(parallelWait);
+  async function parallelMinutes() {
+    const state = await queueSettings?.read().catch(() => undefined);
+    return state?.status === "ready" ? state.values.minutes : 10;
+  }
   const staleHours = reviewWaitThreshold(server);
   const home = process.env.PASEO_HOME || join(homedir(), ".paseo");
   const dataDir = join(home, "plugin-data", "coordinator-board");
@@ -67,6 +74,14 @@ export default function contribute(server: PluginServerContext) {
   registerRecommendation(server, decisions);
   server.handle(sendDecision, async (input, { paseo }) => {
     const result = await decisions.send(paseo, input);
+    if (result.queued) {
+      // A turn or permission hook may have run just before this reservation was saved.
+      await decisions.resume(paseo,input.sessionId);
+      const scope=prefs.read();
+      if (scope.decisionReceipts[result.messageId]?.status==="sent") delete result.queued;
+      else if (!scope.queuedDecisions[result.messageId] || scope.queuedDecisions[result.messageId].stopped)
+        throw Error("전송 상태가 바뀌었습니다. 최신 카드를 확인해 주세요. / Delivery changed. Check the latest card.");
+    }
     invalidateCount();
     return result;
   });
@@ -79,6 +94,18 @@ export default function contribute(server: PluginServerContext) {
     const scope = prefs.read();
     return { configured: scope.projects.length > 0, coordinator: scope.coordinator, decisionTitles: tracked.previewTitles(new Set(scope.projects)) };
   });
+  async function readOriginState(paseo: PluginHandlerContext["paseo"], id:string, serverId?:string):Promise<NonNullable<QueueView["originState"]>> {
+    try {
+      const result = serverId
+        ? await withRemoteReadHost(paseo,serverId,(sdk,read) => read(() => sdk.agents.ref(id).refresh()))
+        : await paseo.agents.ref(id).refresh();
+      if (!result) return "ended";
+      const agent = result.agent;
+      if (!agent || agent.id !== id) return "unknown";
+      return agent.status === "closed" || agent.archivedAt ? "ended" : "live";
+    } catch { return "unknown"; }
+  }
+
   async function buildSnapshot(paseo: PluginHandlerContext["paseo"], refreshPulls=false) {
     // GitHub can take seconds even when Paseo already knows the current sessions.
     // Start both paths together, and consume both rejections via Promise.all.
@@ -113,6 +140,44 @@ export default function contribute(server: PluginServerContext) {
     if (coordinatorRow && coordinatorRow.id === latest.coordinator) targets.set(coordinatorRow.id, coordinatorRow);
     for (const id of evidence.keys()) if (!targets.has(id)) evidence.delete(id);
     const {history = [], ...trackedDecisions} = tracked.read(selected, visible, pullRequests, evidence);
+    const minutes = await parallelMinutes();
+    const originReads = new Map<string, ReturnType<typeof readOriginState>>();
+    const queueUpdates:Promise<void>[] = [];
+    function showQueue(queue:QueueView, coordinator:string|null, serverId?:string) {
+      const row = targets.get(queue.recipientId);
+      if (queue.parallel === "held") {
+        if (row && row.serverId === serverId) {
+          queue.originState = row.status === "closed" ? "ended" : "live";
+        } else {
+          // Archived sessions disappear from discovery. An unreachable host is inconclusive.
+          const key = JSON.stringify([serverId,queue.recipientId]);
+          const state = originReads.get(key) ?? readOriginState(paseo,queue.recipientId,serverId);
+          originReads.set(key,state);
+          queueUpdates.push(state.then(value => { queue.originState = value; }));
+        }
+        return;
+      }
+      if (row && queue.at && canChangeQueue({...queue,at:queue.at},"parallel",row.provider,minutes)) {
+        queue.offer = true;
+        if (coordinator) queue.coordinatorId = coordinator;
+      }
+    }
+    for (const item of trackedDecisions.items) {
+      if (item.queuedReply && !item.historyUnavailable) showQueue(item.queuedReply,sourceCoordinatorRecipient(item,latest.coordinator,visible));
+    }
+    const queuedConversations = Object.entries(latest.queuedDecisions).flatMap(([messageId,q]) => {
+      if (!selected.has(q.input.projectId)) return [];
+      const queue = {messageId,projectId:q.input.projectId,sessionId:q.input.sessionId,version:q.input.version,title:q.title,
+        recipientId:q.input.recipientId,answer:q.input.text,at:q.at,stopped:q.stopped,parallel:q.parallel,imageCount:q.photos.length};
+      showQueue(queue,latest.coordinator,q.serverId ?? undefined);
+      return [queue];
+    });
+    await Promise.all(queueUpdates);
+    // A remote turn can finish without a local hook, or while this plugin is stopped.
+    // Recover the person's saved reply on the next snapshot. resume skips holds and rechecks the card before sending.
+    if (queuedConversations.some(q=>!q.stopped && q.parallel!=="held")) {
+      void decisions.resume(paseo).catch(()=>console.warn("Could not check queued conversation replies."));
+    }
     // A merge card whose PR is confirmed merged or closed leaves My decisions at once. The ledger is not touched.
     const boardMerge = (repo: string, number: number) => {
       const entry = Object.hasOwn(latest.pullMergeHistory, mergeHistoryKey(repo, number)) ? latest.pullMergeHistory[mergeHistoryKey(repo, number)] : undefined;
@@ -185,7 +250,7 @@ export default function contribute(server: PluginServerContext) {
       id, title: id, path: "", selected: true, missing: true as const, temporary: false,
     }));
     const notice = latest.assignmentNotice;
-    return { sessions: visible, notes: visibleNotes, pullRequests, trackedDecisions, replyHistory, ...(clarifications.length ? { clarifications } : {}),
+    return { sessions: visible, ...(queuedConversations.length ? {queuedConversations} : {}), notes: visibleNotes, pullRequests, trackedDecisions, replyHistory, ...(clarifications.length ? { clarifications } : {}),
       ...(notice && selected.has(notice.projectId) && { assignmentNotice: notice }),
       projects: [...knownProjects, ...missingProjects], coordinator: latest.coordinator, lastDigestAt: latest.lastDigest?.at, ...(reach ? { coordinatorReach: reach } : {}),
       ...(coordinatorTools ? { coordinatorTools } : {}) };
@@ -270,12 +335,14 @@ export default function contribute(server: PluginServerContext) {
   const onRecipientAvailable = async (event: {agent?: {id:string}}, context: PluginHandlerContext) => {
     if (!event.agent?.id) return;
     const id=event.agent.id;
-    if (tracked.hasWaitingReplies(id)) {
-      await resumeReplies(context,id);
+    const waiting=()=>tracked.hasWaitingReplies(id) || decisions.hasWaiting(id);
+    const drain=()=>Promise.all([resumeReplies(context,id),decisions.resume(context.paseo,id)]);
+    if (waiting()) {
+      await drain();
       // The completion hook can precede the daemon's idle projection.
-      if (tracked.hasWaitingReplies(id)) {
+      if (waiting()) {
         await new Promise(resolve=>setTimeout(resolve,250));
-        await resumeReplies(context,id);
+        await drain();
       }
     }
     await mergeNotifications.resume(context.paseo,event.agent.id);
@@ -290,8 +357,8 @@ export default function contribute(server: PluginServerContext) {
       })(),
     ]);
   });
-  const removeReplyClose = server.addHook("agent.close.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });
-  const removeReplyArchive = server.addHook("agent.archive.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });
+  const removeReplyClose = server.addHook("agent.close.after",async (event,ctx)=>{ if(event.agent?.id) await Promise.all([resumeReplies(ctx,event.agent.id),decisions.resume(ctx.paseo,event.agent.id)]); });
+  const removeReplyArchive = server.addHook("agent.archive.after",async (event,ctx)=>{ if(event.agent?.id) await Promise.all([resumeReplies(ctx,event.agent.id),decisions.resume(ctx.paseo,event.agent.id)]); });
   const removeMergePermission = server.addHook("agent.permission.after",onRecipientAvailable);
   // The board's own same-folder judgment, read again when a reply goes out. Only selected projects get a key.
   // `unread` says a project's folder, or the project list itself, could not be read just now.
@@ -311,7 +378,7 @@ export default function contribute(server: PluginServerContext) {
     return !page.error && !page.gap && !page.staleCursor && page.entries.some(({item:m})=>m.type==="user_message" &&
       (m.messageId===messageId || m.clientMessageId===messageId) && matches(m.text));
   }
-  const resumeReplies = tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, async (item,targetId,{paseo},route) => {
+  async function prepareTracked(item:RoutedTrackedDecision,targetId:string,{paseo}:PluginHandlerContext,route?:TrackedResolution["route"]):Promise<Prepared> {
     let rows = await discoverSessions(paseo);
     // Only a card's own local session may sit in another project on the same folder.
     const {folders, unread} = item.where === "session" && item.sessionId && !item.sessionHost ? await currentFolders(paseo) : {folders: {}, unread: () => false};
@@ -354,15 +421,90 @@ export default function contribute(server: PluginServerContext) {
         await handle.send(answer,{messageId,activeTurnBehavior:"steer",...(images?.length ? {images} : {})});
       },
       accepted:(messageId,matches)=>arrived(handle,messageId,matches),
-      ready:canReceiveBoardInput(agent,owned || fallback || targetId===prefs.read().coordinator),
+      verbatim:agent.status==="running" && !owned && !fallback && targetId!==prefs.read().coordinator,
+      ready:canReceiveBoardInput(agent,!item.deliverWhenIdle),
     };
-  }, ({paseo}) => ({
+  }
+  const resumeReplies = tracked.register(server, () => new Set(prefs.read().projects), invalidateCount, prepareTracked, ({paseo}) => ({
     arrived:(recipientId,messageId,matches)=>arrived(paseo.agents.ref(recipientId),messageId,matches),
     gone:async recipientId=>{
       const agent=(await paseo.agents.ref(recipientId).refresh())?.agent;
       return !agent || !!agent.archivedAt;
     },
   }));
+  server.handle(manageQueuedAnswer, async (input,ctx):Promise<typeof manageQueuedAnswer.output._output> => {
+    const {card,messageId,action}=input;
+    const scope=()=>new Set(prefs.read().projects);
+    const minutes=await parallelMinutes();
+    const control=(provider?:string|null)=>card.kind==="ledger"
+      ? tracked.control(input,scope(),provider,minutes) : decisions.control(input,provider,minutes);
+    if (action!=="parallel") {
+      if (action==="resume") {
+        let recipientId:string | undefined;
+        let serverId:string | undefined;
+        if (card.kind==="session") {
+          const queued=prefs.read().queuedDecisions[messageId];
+          if (queued?.parallel==="held" && scope().has(card.projectId) && queued.input.projectId===card.projectId &&
+              queued.input.sessionId===card.sessionId && queued.input.version===card.version) {
+            recipientId=queued.input.recipientId;
+            serverId=queued.serverId ?? undefined;
+          }
+        } else {
+          const target=tracked.queuedTarget(input,scope());
+          if (target?.record.queue?.parallel==="held") recipientId=target.recipientId;
+        }
+        if (!recipientId || await readOriginState(ctx.paseo,recipientId,serverId)!=="live") return {status:"changed"};
+      }
+      if (!control()) return {status:"changed"};
+      if (action==="resume") {
+        if (card.kind==="session") await decisions.resume(ctx.paseo,card.sessionId);
+        else await resumeReplies(ctx);
+      }
+      invalidateCount();
+      return {status:"updated"};
+    }
+    const rows=await discoverBoardSessions(ctx.paseo,prefs);
+    const ledger=card.kind==="ledger" ? tracked.queuedTarget(input,scope()) : undefined;
+    const recipientId=card.kind==="session" ? card.sessionId : ledger?.recipientId;
+    const recipient=managedSessions(rows,prefs.read()).find(row=>row.id===recipientId) ??
+      (recipientId===prefs.read().coordinator ? rows.find(row=>row.id===recipientId) : undefined);
+    if (!recipient || !input.coordinatorId) return {status:"changed"};
+    const expected=()=> {
+      const current=prefs.read();
+      if (card.kind==="session") return current.coordinator;
+      const currentLedger=tracked.queuedTarget(input,scope());
+      return currentLedger && sourceCoordinatorRecipient(currentLedger.row.item,current.coordinator,managedSessions(rows,current));
+    };
+    if (expected()!==input.coordinatorId) return {status:"changed"};
+    if (ledger) {
+      const target=await prepareTracked(ledger.row.item,ledger.recipientId,ctx);
+      if (!target || "blocked" in target || !target.stillCurrent() || target.ready) return {status:"changed"};
+    } else if (card.kind==="session") {
+      try { if (!await decisions.verifyQueue(ctx.paseo,messageId)) return {status:"changed"}; }
+      catch { return {status:"changed"}; }
+    } else return {status:"changed"};
+    const handle=ctx.paseo.agents.ref(input.coordinatorId);
+    const agent=(await handle.refresh())?.agent;
+    if (!agent || agent.id!==input.coordinatorId || agent.internal || agent.archivedAt ||
+        !canReceiveBoardInput(agent,true)) return {status:"unavailable"};
+    if (expected()!==input.coordinatorId) return {status:"changed"};
+    const request=control(recipient.provider);
+    if (!request) return {status:"changed"};
+    invalidateCount();
+    const body=[
+      "병렬 세션 검토 요청 / Parallel session request",
+      "보드가 만든 요청입니다. 실린 답은 사람이 썼지만 이 요청 자체는 승인이 아닙니다. 승인으로 쓰려면 원래 세션 기록에서 원문을 확인하세요.",
+      "The board generated this request. A person wrote the enclosed reply. This request itself is not approval. Check the original session transcript before treating the reply as authorization.",
+      "원래 작업과 겹치지 않을 때만 새 작업 세션에 맡기고 결과를 알려 주세요. 겹치면 원래 세션의 대기를 유지하도록 알려 주세요.",
+      "Assign a new session only if the work is independent. Report the outcome so the person can cancel or resume the original reply.",
+      JSON.stringify({card,originalSession:request.recipientId,title:request.title,answer:request.answer}),
+    ].join("\n");
+    try {
+      await handle.send(body,{messageId:randomUUID(),sourceAgentId:"plugin:coordinator-board",activeTurnBehavior:"steer",
+        ...(request.images?.length ? {images:request.images} : {})});
+      return {status:"updated"};
+    } catch { return {status:"unconfirmed"}; }
+  });
   server.handle(boardSnapshot, (input, { paseo }) => reads.read(() => buildSnapshot(paseo), input.fresh));
   server.handle(boardDecisionCount, async (_input, { paseo }) => ({
     count: await reads.count(() => buildSnapshot(paseo)),

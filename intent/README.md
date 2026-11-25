@@ -171,4 +171,5 @@ Spec: [spec.md](spec.md)
 | [sent-reply-receipt](sent-reply-receipt/intent.md) | 구현됨 (PR #54) | 세션 | 보낸 답장이 그 자리에 접힌 카드로 남아, 펼쳐서 무엇을 보냈는지 확인할 수 있다 |
 | [replace-bootstrap](replace-bootstrap/intent.md) | 구현됨 (PR #57) | 세션 | 보드에서 코디네이터를 교체하면 새 세션이 시작 지시로 옛 코디네이터의 일을 이어받고, 옛 세션은 사람이 설정에서 보관한다 |
 | [reset-pass-display](reset-pass-display/intent.md) | 구현됨 (PR #59) | 세션 | 계정 카드에 사용량 초기화권의 남은 장수와 만료를 보이고, 값은 호스트의 account-usage.json이 채운다 |
+| [busy-session-delivery](busy-session-delivery/intent.md) | 승인 | 세션 | 작업 중인 세션에 현재 질문의 답을 보내고 대기 중인 답은 병렬 검토를 요청할 수 있다 |
 | [stable-coordinator-tools](stable-coordinator-tools/intent.md) | 구현됨 (PR #62) | 세션 | 코디네이터 도구를 계약으로 고정하고, 새 기능은 안내 도구와 범용 도구로 내어 운영 중인 대화를 그대로 쓴다 |

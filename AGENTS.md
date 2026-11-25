@@ -19,12 +19,12 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 ### Immutable
 
 - 플러그인 서버가 스스로 시작하는 전송에는 반드시 `sourceAgentId`를 붙인다. 출처 없는 전송은 받는 세션 기록에 사람이 쓴 말과 같은 꼴로 남고, 받는 쪽은 그것을 승인으로 읽을 수 있다. 출처 없는 `send`는 사용자가 화면에서 쓰고 누른 글에만 쓴다(받는 세션이 바빠 대기열에 넣었다가 나중에 보내는 답 포함). 보드가 만든 문장을 그 길로 보내지 않는다.
-  - 근거(비대칭): 보드가 만든 문장을 보내는 `server/board-facts.ts:220`과 `server/merge-notifications.ts:115`는 `sourceAgentId`를 붙인다. 원격 배정의 첫 지시는 `server/dispatch.ts:274`에서 `sourceAgentServerId`도 붙인다. 사용자 글을 보내는 `server/decisions.ts:158`, `server/digest.ts:65`, `server/tracked-decisions.ts:410`, 대기 답장의 `index.server.ts:350`는 붙이지 않는다.
+  - 근거(비대칭): 보드가 만든 문장은 `server/board-facts.ts`, `server/merge-notifications.ts`, `index.server.ts`의 병렬 검토 요청에서 출처를 붙인다. 원격 배정의 첫 지시는 `server/dispatch.ts`에서 `sourceAgentServerId`도 붙인다. 사람이 누른 원장·대화 카드 답장과 그 예약 전송에는 출처를 붙이지 않는다(`server/decisions.ts`, `index.server.ts`의 `prepareTracked`).
   - `server/board-facts.ts:219` 주석대로, 출처를 붙인 전송이 실패하면 출처 없는 전송으로 다시 보내지 않는다. 자동 재시도도 하지 않는다.
   - 새 코디네이터를 만드는 요청의 첫 프롬프트(`server/lifecycle.ts`, 문구는 `server/coordinator-bootstrap.ts`)는 출처를 붙일 수 없는 보드 글이다. 머리말 `[Coordinator Board · …]`과 "사용자가 쓴 글이 아니며 승인이 아니다" 줄을 빼지 않고, 생성 뒤에 따로 보내는 전송으로 바꾸지 않는다. 옛 코디네이터에는 아무것도 보내지 않는다. 근거(테스트 경계): `test/coordinator-bootstrap.test.ts`.
   - `read_board_conversation`은 관리 세션만 읽는다. 예외는 보드가 교체로 만든 세션이 지금 코디네이터일 때 바로 앞 코디네이터 하나를 읽는 경우뿐이다(`server/coordinator.ts`의 `handoverSource`). 이 예외를 넓히지 않는다.
 - 권한 요청을 기다리는 세션에는 보내지 않는다. Paseo는 메시지를 받은 세션의 대기 중 권한 요청을 지운다. 새 전송 경로를 만들 때 같은 검사를 넣는다.
-  - 근거(이중 방어): `server/discovery.ts:17`(`canReceiveBoardInput`), `server/merge-notifications.ts:110`, `server/board-facts.ts:201`.
+  - 근거(이중 방어): `server/discovery.ts`의 `canReceiveBoardInput`, `server/decisions.ts`의 대화 카드 재검증, `index.server.ts`의 원장 답장과 병렬 검토 전송 전 수신자 확인. 병합 알림은 `server/merge-notifications.ts`에서 권한 대기를 다시 확인한다. 확인된 사실의 전송은 `server/board-facts.ts`에서 대기 중인 권한 요청을 검사하고, 요약 전송은 `server/digest.ts`에서 새로 읽은 수신 상태에 `canReceiveBoardInput`을 적용한다.
 - 보드는 세션을 다시 띄우지(`reload`) 않고, `/clear`·`/compact`를 대신 보내지 않는다. 코디네이터 대화는 한 번 불러온 보드 도구의 정의를 기억하므로(Claude Code가 대화 기록에 저장해 이어받기에도 다시 보낸다) 다시 띄워도 그 정의가 바뀌지 않는다. 대화를 압축하거나 새 대화로 바꾸는 일은 사람이 한다(`/compact`, 교체, `/clear` 직접 입력).
   - 근거(테스트 경계): `test/coordinator-tools.test.ts`가 소스에 세션 다시 띄우기 호출과 `/clear`·`/compact` 전송이 없는지 폴더를 내려가며 검사한다. 옛 도구 판정은 코디네이터 대화(`persistence.sessionId`)별 기록(첫 보드 도구 호출 때의 계약 지문과 계약 번호)과 지금 계약의 비교다(`shared/coordinator-tools.ts`의 `toolStaleness`). 기록의 계약 번호가 `compatibleFrom` 이상이면 알리지 않는다. 판단할 수 없으면 알리지 않는다. 대화가 가진 정의는 관찰한 것으로만 판단한다: 부른 도구(`contractToolsSince`)와, 지금 계약을 내보내기 시작한 뒤에 코디네이터 타임라인에서 끝난 압축(`CoordinatorToolStamps.refresh`). 모델이 적어 보내는 값을 근거로 삼는 입력 항목을 만들지 않는다. Claude Code인지는 실행기 ID가 아니라 Paseo가 세션의 이어받기 정보에 적는 실행기 구현 이름으로 판정한다(`shared/coordinator-tools.ts`의 `conversationProvider`). ID의 생김새로 추측하지 않는다.
 - 코디네이터 도구의 이름과 입력 형식은 번호가 붙은 계약이다(`shared/coordinator-contract.ts`). 운영 중인 대화가 그 정의를 들고 있으므로 고치지 않는다. 새 선택 항목은 도구의 `input`을 그대로 두고 `accepts`에 더하고, 도구 정의 없이 내는 기능은 `actionOnly`로 더한다(`server/board-guide.ts`의 `coordinatorTool`). 둘 다 `board_action`으로 받고 `read_board_guide`에 나온다. `accepts`에서도 있던 항목을 지우거나 이름을 바꾸거나 형식을 좁히지 않는다(`refine`, `max`, `enum` 줄이기 등). 정말 깨야 하면 계약 번호를 올리고(옛 대화가 못 쓰게 되면 `compatibleFrom`도) README와 OVERVIEW에 적는다. 도구 설명은 계약 밖이라 고쳐도 운영 중인 대화에 알림이 뜨지 않는다(그 대화는 받았던 문구를 그대로 본다). 설명을 줄여 안내 도구로 옮기지 않는다. `board_action`으로만 닿는 기능이나 항목이 생기면 보드가 그 대화에 안내 도구를 읽으라고 한 번 알리고, 그 항목의 안내는 `usage`에 둔다.
@@ -41,7 +41,7 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 - 외부 명령은 `server/prs.ts:99`의 `run`처럼 `shell:false`, 시간 제한, `maxBuffer`, 대화형 프롬프트를 끈 환경 변수(`GH_PROMPT_DISABLED`, `GIT_TERMINAL_PROMPT`)로 실행한다. 인자는 배열로 넘긴다.
 - GitHub에서 읽은 글(PR 제목 등)은 화면에 내기 전에 제어 문자와 양방향 제어 문자를 지우고 길이를 자른다(`server/prs.ts:64`).
 - 병합은 사용자가 확인한 head 커밋에 고정한다. `expectedHeadOid`로 보내고 SHA는 40자 hex로 검증한다(`server/pr-merge.ts:31`, `server/pr-merge.ts:35`).
-- 플러그인 데이터 파일은 임시 파일에 쓴 뒤 `renameSync`로 바꾸고 `mode: 0o600`을 준다(`server/preferences.ts:183`, `server/notes.ts:47`, `server/session-photos.ts:37`).
+- 플러그인 데이터 파일은 임시 파일에 쓴 뒤 `renameSync`로 바꾸고 `mode: 0o600`을 준다(`server/preferences.ts:190`, `server/notes.ts:47`, `server/session-photos.ts:37`).
 - 화면 문구는 `client/language.tsx`의 `t(한국어, 영어)`로 두 언어를 함께 쓴다. 한쪽만 바꾸지 않는다.
 - 브라우저 전용 API(`document`, `navigator`, `FileReader`, DOM 요소)는 `Platform.OS === "web"`과 `typeof` 검사 뒤에서만 쓴다. 같은 클라이언트가 모바일 앱에서도 돈다(`client/photo-composer.tsx:88`, `client/send-input.tsx:9`).
 - 로직은 `client/*.ts`, `shared/*.ts`, `server/*.ts`에 두고 `.tsx`에는 화면만 둔다. 테스트가 `.tsx`를 하나도 불러오지 않는다(테스트 경계). 시험할 판단을 `.tsx` 안에 쓰면 검증 밖으로 빠진다.
