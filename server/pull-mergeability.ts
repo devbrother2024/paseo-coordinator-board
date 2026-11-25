@@ -1,4 +1,4 @@
-import type { PullRequestItem } from "../shared/prs";
+import type { PullDetail, PullRequestItem } from "../shared/prs";
 
 type Pull = Omit<PullRequestItem, "projectIds">;
 type Limit = <T>(task: () => Promise<T>) => Promise<T>;
@@ -6,14 +6,14 @@ export type MergeabilityOptions = { retryMs: number; attempts: number; perRead: 
 type Entry = { attempts: number; nextAt: number; item?: Pull; inflight?: Promise<void> };
 
 const keyOf = (pr: Pull) => JSON.stringify([pr.repo, pr.number, pr.headSha ?? pr.updatedAt]);
-const unreadable = (pr: Pull): Pull => ({ ...pr, lane: "progress", reason: "unknown" });
+const unreadable = (pr: Pull, detail: PullDetail): Pull => ({ ...pr, lane: "progress", reason: "unknown", detail });
 
 // GitHub's PR list leaves mergeability UNKNOWN until someone asks for that PR alone.
 // Ask only for PRs whose verdict hangs on it, a few at a time, and give up after a short round.
 export class MergeabilityChecks {
   private readonly entries = new Map<string, Entry>();
   constructor(private readonly lookup: (repo: string, number: number) => Promise<Pull>, private readonly now: () => number,
-    private readonly options: MergeabilityOptions) {}
+    private readonly options: MergeabilityOptions, private readonly failure: (error: unknown) => PullDetail) {}
 
   // budget is shared by every repository in one board read.
   async apply(items: readonly Pull[], limit: Limit, allowed: () => boolean, budget: { left: number }): Promise<Pull[]> {
@@ -36,7 +36,8 @@ export class MergeabilityChecks {
 
   private async check(pr: Pull, entry: Entry) {
     let fresh: Pull | null;
-    try { fresh = await this.lookup(pr.repo, pr.number); } catch { fresh = null; }
+    let failed: PullDetail = "lookup-failed";
+    try { fresh = await this.lookup(pr.repo, pr.number); } catch (error) { fresh = null; failed = this.failure(error); }
     const now = this.now();
     if (fresh && fresh.reason !== "computing") {
       Object.assign(entry, { attempts: 0, nextAt: now + this.options.resolvedMs, item: fresh });
@@ -45,7 +46,7 @@ export class MergeabilityChecks {
     entry.attempts++;
     const exhausted = entry.attempts >= this.options.attempts;
     // A failed read is unknown right away. A PR still computing reads as unknown once the round runs out.
-    entry.item = !fresh || exhausted ? unreadable(pr) : fresh;
+    entry.item = !fresh ? unreadable(pr, failed) : exhausted ? unreadable(pr, "still-computing") : fresh;
     entry.nextAt = now + (exhausted ? this.options.restMs : this.options.retryMs);
     if (exhausted) entry.attempts = 0;
   }

@@ -405,8 +405,9 @@ export class PullMerges {
       return outcome("changed", "changed");
     if (live.status === "merged") return outcome("already-merged", "merged", pull.mergeCommit?.oid);
     if (live.status !== "ready") return outcome("blocked", live.reason);
-    if (fingerprint(state, live) !== v.fingerprint || !live.methods.includes(request.method))
-      return outcome("changed", "changed");
+    if (!live.methods.includes(request.method)) return outcome("changed", "changed");
+    // Same head, but the base tip or another detail moved (often another merge). The board reads a new preview.
+    if (fingerprint(state, live) !== v.fingerprint) return outcome("changed", "outdated");
     // An ambiguous mutation never gets re-sent by retrying the same confirmation button.
     if (v.submitted) return outcome("unconfirmed", "unconfirmed");
     // The confirmed checkout was resolved before this fresh GitHub read. Do not wait

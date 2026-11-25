@@ -421,3 +421,20 @@ test("preview stops when the PR head moved past the commit the board showed", as
   expect(f.behavior.invalidations).toBe(before + 1);
   expect(f.mutations()).toBe(0);
 });
+
+test("a merge confirmed after another merge moved the base reports outdated, never merges, and a new preview works", async () => {
+  const f = fixture(),
+    first = await f.preview();
+  f.p.baseRef.target.oid = "d".repeat(40);
+  expect(await f.confirm(first.token)).toMatchObject({ status: "changed", reason: "outdated" });
+  expect(f.mutations()).toBe(0);
+  const next = await f.preview();
+  expect(next).toMatchObject({ status: "ready", headSha: head, baseSha: "d".repeat(40) });
+  expect(await f.confirm(next.token)).toMatchObject({ status: "merged" });
+  // A moved head is not outdated: it needs a new review.
+  const g = fixture(),
+    shown = await g.preview();
+  g.p.headRefOid = "e".repeat(40);
+  expect(await g.confirm(shown.token)).toMatchObject({ status: "changed", reason: "changed" });
+  expect(g.mutations()).toBe(0);
+});

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ProjectPullRequests, githubRepository, mergeabilityRetry, parseOpenPull, parseOpenPulls } from "../server/prs";
+import { ProjectPullRequests, githubRepository, mergeabilityRetry, parseOpenPull, parseOpenPulls, pullLookupFailure } from "../server/prs";
 import { pullRequestViewSchema, readPullLifecycle, setProjectRepository } from "../shared/prs";
 import { PreferenceStore } from "../server/preferences";
 
@@ -120,12 +120,12 @@ test("tracked PR lifecycle reads distinguish merged, closed, open and unavailabl
   }
   let calls = 0;
   const f = fixture(["root"], async () => { calls++; throw Error("offline"); });
-  expect(await f.lifecycle(target)).toEqual({state:"UNKNOWN"});
-  expect(await f.lifecycle({...target,repo:"other/repo"})).toEqual({state:"UNKNOWN"});
-  expect(await f.lifecycle({...target,projectId:"unselected"})).toEqual({state:"UNKNOWN"});
+  expect(await f.lifecycle(target)).toEqual({state:"UNKNOWN",why:"lookup-failed"});
+  expect(await f.lifecycle({...target,repo:"other/repo"})).toEqual({state:"UNKNOWN",why:"scope"});
+  expect(await f.lifecycle({...target,projectId:"unselected"})).toEqual({state:"UNKNOWN",why:"scope"});
   expect(calls).toBe(1);
   const moving = fixture(["root"], async () => { moving.store.change(s => {s.projects=[];}); return "MERGED"; });
-  expect(await moving.lifecycle(target)).toEqual({state:"UNKNOWN"});
+  expect(await moving.lifecycle(target)).toEqual({state:"UNKNOWN",why:"scope"});
 });
 
 test("read-only PR references reuse the current repository cache and keep merge status behavior", async () => {
@@ -139,7 +139,7 @@ test("read-only PR references reuse the current repository cache and keep merge 
   await f.read();
   expect(await f.lifecycle({...target, reference:true})).toEqual({state:"DRAFT"});
   expect(await f.lifecycle({...target, number:2, reference:true})).toEqual({state:"OPEN"});
-  expect(await f.lifecycle({...target, repo:"org/other", reference:true})).toEqual({state:"UNKNOWN"});
+  expect(await f.lifecycle({...target, repo:"org/other", reference:true})).toEqual({state:"UNKNOWN",why:"scope"});
   expect(lookedUp).toEqual([]);
   expect(await f.lifecycle({...target, number:3, reference:true})).toEqual({state:"CLOSED"});
   expect(await f.lifecycle({...target, number:4, reference:true})).toEqual({state:"MERGED"});
@@ -246,8 +246,9 @@ test("a PR still computing shows that, retries a few times, then reads as unknow
   }
   expect(f.log.single).toHaveLength(mergeabilityRetry.attempts);
   expect(reasons).toEqual([...Array(mergeabilityRetry.attempts - 1).fill("computing"), "unknown", "unknown"]);
+  expect((await f.read()).items[0].detail).toBe("still-computing");
   // No extra GitHub calls until the rest period passes.
-  await f.read(); expect(f.log.single).toHaveLength(mergeabilityRetry.attempts);
+  expect(f.log.single).toHaveLength(mergeabilityRetry.attempts);
   f.tick(mergeabilityRetry.restMs);
   f.behavior.single.set(1, raw(1));
   expect((await f.read()).items[0].reason).toBe("ready");
@@ -256,11 +257,11 @@ test("a PR still computing shows that, retries a few times, then reads as unknow
 test("a failed single lookup reads as unknown, not as computing", async () => {
   const f = fixture(["root"]);
   f.behavior.rows = [raw(1,{mergeable:"UNKNOWN"})]; f.behavior.singleFail = true;
-  expect((await f.read()).items[0]).toMatchObject({reason:"unknown",lane:"progress"});
+  expect((await f.read()).items[0]).toMatchObject({reason:"unknown",lane:"progress",detail:"lookup-failed"});
   // A PR that closed between the list and the single read is not reported as open and ready.
   const g = fixture(["root"]);
   g.behavior.rows = [raw(1,{mergeable:"UNKNOWN"})]; g.behavior.single.set(1, raw(1,{state:"MERGED"}));
-  expect((await g.read()).items[0].reason).toBe("unknown");
+  expect((await g.read()).items[0]).toMatchObject({reason:"unknown",detail:"closed"});
 });
 
 test("single lookups are capped per read and share the host-wide concurrency limit", async () => {
@@ -281,4 +282,23 @@ test("a single lookup that sees a newer head keeps that head for the merge check
   f.behavior.rows = [raw(1,{mergeable:"UNKNOWN",headSha:"a".repeat(40)})];
   f.behavior.single.set(1, raw(1,{headSha:"b".repeat(40),title:"Newer"}));
   expect((await f.read()).items[0]).toMatchObject({reason:"ready",headSha:"b".repeat(40),title:"Newer"});
+});
+
+test("a status-unknown PR carries why, and failed GitHub reads keep only a fixed reason", () => {
+  const detail = (extra: Record<string, unknown>) => parseOpenPulls("example/pkg", JSON.stringify([raw(1, extra)])).items[0].detail;
+  expect(detail({checks:[{status:"COMPLETED"}]})).toBe("check-result");
+  expect(detail({reviewDecision:"SOMETHING_NEW"})).toBe("review-state");
+  expect(detail({mergeable:"MERGEABLE",mergeStateStatus:"SOMETHING_NEW"})).toBe("merge-state");
+  expect(detail({})).toBeUndefined();
+  expect(pullLookupFailure(Object.assign(Error("spawn gh ENOENT"), {code:"ENOENT"}))).toBe("gh-missing");
+  expect(pullLookupFailure({killed:true, signal:"SIGTERM", message:"Command failed"})).toBe("timeout");
+  expect(pullLookupFailure({stderr:"To get started with GitHub CLI, please run:  gh auth login"})).toBe("gh-auth");
+  expect(pullLookupFailure({stderr:"error connecting to api.github.com: could not resolve host"})).toBe("network");
+  expect(pullLookupFailure(Error("/home/someone/secret path failed"))).toBe("lookup-failed");
+});
+
+test("a repository whose PR list cannot be read reports why", async () => {
+  const f = fixture(["root"]);
+  f.behavior.fail = true;
+  expect((await f.read()).projects[0]).toMatchObject({status:"unavailable", failure:"lookup-failed"});
 });

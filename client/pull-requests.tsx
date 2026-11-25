@@ -7,9 +7,11 @@ import { Button, SessionChip, type Theme } from "./controls";
 import { GitHubPullLink } from "./github-pull-link";
 import { mergeNotificationLabel } from "./merge-notification";
 import { useBoardLanguage, type Translate } from "./language";
-import { githubStatusWords, needsRunningConfirmation, pullStatusWords } from "../shared/pull-judgments";
+import { githubStatusWords, needsRunningConfirmation, pullStatusWords, unknownStatusWords } from "../shared/pull-judgments";
 import { findRemoteWorkSessionState, type RemoteWorkSession, type WorkSessionHost, type WorkSessionStates } from "./tracked-session-targets";
 import { pullSessionNote } from "./pull-work-session";
+import { afterConfirm, afterReopen, announceBoardMerge, onBoardMerge, reopenDelayMs, reopenedWords } from "./merge-flow";
+import type { MergeWaitReason } from "../shared/merge-card-place";
 
 type PullRequest = PullRequestView["items"][number];
 
@@ -29,6 +31,7 @@ function reasonText(reason: MergeReason | undefined, t: Translate) {
   const reasons: Partial<Record<MergeReason, readonly [string, string]>> = {
     ...githubStatusWords,
     changed: ["검토한 뒤 PR이 바뀜", "The PR changed after the review"],
+    outdated: ["검토한 뒤 병합 정보가 바뀜", "Merge details changed after the review"],
     closed: ["닫힌 PR", "Pull request closed"],
     queue: ["GitHub 병합 대기열 사용", "The repository uses a merge queue"],
     permission: ["GitHub 병합 권한 확인 필요", "Check GitHub merge permissions"],
@@ -75,22 +78,28 @@ function useRemotePullSession(source: RemotePullSession | undefined) {
 }
 
 type Lifecycle = ReturnType<typeof readPullLifecycle.output.parse>["state"];
+type LifecycleWhy = ReturnType<typeof readPullLifecycle.output.parse>["why"] | "unmapped";
 const referenceStates = { OPEN: ["열림", "Open"], DRAFT: ["초안", "Draft"], MERGED: ["병합됨", "Merged"], CLOSED: ["닫힘", "Closed"] } as const;
 export function TrackedPullStatus({repo, number, projectId, theme, securityGate = false, reference = false}: {repo:string; number:number; projectId:string|null; theme:Theme; securityGate?:boolean; reference?:boolean}) {
   const {t} = useBoardLanguage();
   const lookup = useRpc(readPullLifecycle);
   const [state, setState] = useState<Lifecycle | null>(null);
+  const [why, setWhy] = useState<LifecycleWhy>();
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     setState(null);
     async function refresh() {
       let current: Lifecycle = "UNKNOWN";
+      let reason: LifecycleWhy = projectId ? "lookup-failed" : "unmapped";
       if (projectId) {
-        try { current = (await lookup({repo, number, projectId, ...(reference ? {reference: true} : {})})).state; } catch { /* Show the link when GitHub is unavailable. */ }
+        try {
+          const read = await lookup({repo, number, projectId, ...(reference ? {reference: true} : {})});
+          current = read.state; reason = read.why;
+        } catch { /* Show the link when GitHub is unavailable. */ }
       }
       if (!active) return;
-      setState(current);
+      setState(current); setWhy(reason);
       if (projectId && current !== "MERGED") timer = setTimeout(() => void refresh(), 60_000);
     }
     void refresh();
@@ -102,11 +111,25 @@ export function TrackedPullStatus({repo, number, projectId, theme, securityGate 
     : state === "CLOSED" ? t("병합 없이 닫힘", "Closed without merging")
     : state === "OPEN" && securityGate ? t("열린 PR · 보안 게이트 통과 여부 확인 필요", "Open · Security gate unverified")
     : state === "OPEN" ? t("열린 PR · 병합 조건 미확인", "Open · Merge requirements unverified")
-    : state === "UNKNOWN" ? t("PR 상태 미확인", "Pull request status unavailable")
+    : state === "UNKNOWN" ? t(...unknownStatusWords(why))
     : t("GitHub 상태 확인 중…", "Checking GitHub status…");
   return <View style={{...wrap, alignItems:"baseline"}}>
     <GitHubPullLink repo={repo} number={number} theme={theme} />
     {message && <Text selectable accessibilityLiveRegion="polite" style={{color:state === "MERGED" ? theme.colors.statusSuccess : theme.colors.foregroundMuted}}>{message}</Text>}
+  </View>;
+}
+
+// A ledger merge card whose PR the board could not read waits in project progress with the reason.
+export function WaitingMergeRow({repo, number, title, why, theme}: {repo:string; number:number; title:string; why:MergeWaitReason; theme:Theme}) {
+  const {t} = useBoardLanguage();
+  const c = theme.colors;
+  return <View style={{gap:4}}>
+    <View style={{...wrap, alignItems:"baseline"}}>
+      <GitHubPullLink repo={repo} number={number} theme={theme} />
+      <Text selectable style={{color:c.foregroundMuted, fontSize:12}}>· {t(...unknownStatusWords(why))}</Text>
+    </View>
+    <Text selectable style={{color:c.foreground, fontSize:14}}>{title}</Text>
+    <Text style={{color:c.foregroundMuted, fontSize:12}}>{t("GitHub에서 병합 준비가 확인되면 내 결정에 올라옵니다.", "This moves to My decisions once GitHub confirms the PR is ready.")}</Text>
   </View>;
 }
 
@@ -123,7 +146,12 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   const [lookupError, setLookupError] = useState(false);
   const [busy, setBusy] = useState<"read" | "merge" | null>(null);
   const [runningPrompt, setRunningPrompt] = useState(false);
+  // Shown above a preview the board read again on its own, and the recheck button after a stop.
+  const [reopened, setReopened] = useState<readonly [string, string] | null>(null);
+  const [recheck, setRecheck] = useState(false);
   const locked = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
   const target = pr.repo + " #" + pr.number;
   const named = (label: string) => ({label, accessibilityLabel: target + " · " + label});
   const ready = !securityGate && !!projectId && pr.lane === "review" && pr.reason === "ready" && notice?.status !== "merged" && notice?.status !== "already-merged";
@@ -141,7 +169,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
     // A running work session may still push. Ask once more before showing the merge preview.
     if (working && !confirmedRunning) { setRunningPrompt(true); return; }
     setRunningPrompt(false);
-    locked.current = true; setBusy("read"); setNotice(null); setLookupError(false);
+    locked.current = true; setBusy("read"); setNotice(null); setLookupError(false); setRecheck(false); setReopened(null);
     try {
       const next = await read({ ...args, ...(pr.headSha ? { expectedHeadSha: pr.headSha } : {}) });
       if (next.status === "ready" && next.token && next.methods.length) {
@@ -153,16 +181,53 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
     } catch { setLookupError(true); }
     finally { locked.current = false; setBusy(null); }
   }
+  // Read the preview again in place. Merging still waits for the person to press Confirm merge.
+  async function reopen(previousBase: string | undefined) {
+    if (locked.current) return;
+    locked.current = true; setBusy("read"); setNotice(null); setLookupError(false); setRecheck(false); setReopened(null);
+    try {
+      for (let attempt = 0; ; attempt++) {
+        const next = await read({ ...args, ...(pr.headSha ? { expectedHeadSha: pr.headSha } : {}) });
+        if (!alive.current) return;
+        const step = afterReopen(next, attempt);
+        if (step === "show") {
+          setPreview(next); setMethod(next.defaultMethod && next.methods.includes(next.defaultMethod) ? next.defaultMethod : null);
+          setReopened(reopenedWords(previousBase, next.baseSha));
+          return;
+        }
+        if (step === "wait") { await new Promise(resolve => setTimeout(resolve, reopenDelayMs)); if (!alive.current) return; continue; }
+        const feedback: MergeNotice = { projectId, target, status: next.status === "merged" ? "already-merged" : "blocked", reason: next.reason };
+        setNotice(feedback); setRecheck(next.status !== "merged"); onResult(feedback);
+        return;
+      }
+    } catch { setLookupError(true); }
+    finally { locked.current = false; setBusy(null); }
+  }
+  const reopenRef = useRef(reopen);
+  reopenRef.current = reopen;
+  const previewRef = useRef(preview);
+  previewRef.current = preview;
+  // Another PR in the same repository merged on the board, so this open preview may be out of date.
+  useEffect(() => onBoardMerge((repo, number) => {
+    const open = previewRef.current;
+    if (repo !== pr.repo || number === pr.number || !open || locked.current) return;
+    setPreview(null); setMethod(null);
+    void reopenRef.current(open.baseSha);
+  }), [pr.repo, pr.number]);
   async function confirm() {
     if (locked.current || !ready || !preview?.token || !method || !preview.methods.includes(method)) return;
-    locked.current = true; setBusy("merge");
+    locked.current = true; setBusy("merge"); setReopened(null);
+    const previousBase = preview.baseSha;
     let feedback: MergeNotice;
     try {
       const result = await merge({ ...args, token: preview.token, method });
       feedback = { projectId, target, ...result };
     } catch { feedback = { projectId, target, status: "unconfirmed" }; }
     finally { locked.current = false; setBusy(null); setPreview(null); setMethod(null); }
-    setNotice(feedback); onResult(feedback);
+    const step = afterConfirm({ status: feedback.status, reason: feedback.reason ?? "unconfirmed" });
+    if (step === "reopen") { await reopen(previousBase); return; }
+    if (feedback.status === "merged") announceBoardMerge(pr.repo, pr.number);
+    setNotice(feedback); setRecheck(step === "recheck"); onResult(feedback);
   }
   return <View style={[{gap: 6}, showDivider && {borderTopColor: c.border, borderTopWidth: 1, paddingVertical: 8}]}>
     <View style={{ ...wrap, alignItems: "baseline" }}>
@@ -192,6 +257,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
         <Button theme={theme} {...named(t("취소", "Cancel"))} disabled={!!busy} onPress={() => setRunningPrompt(false)} />
       </View>
     </View>}
+    {preview && ready && reopened && <Text accessibilityLiveRegion="polite" style={{color: c.foregroundMuted, fontSize: 13}}>{t(reopened[0], reopened[1])}</Text>}
     {preview && ready && <View style={{gap: 7, padding: 10, borderWidth: 1, borderRadius: 7, borderColor: c.border, backgroundColor: c.surface0}}>
       <Text selectable style={{color: c.foreground, fontWeight: "600"}}>{preview.baseRef} ← {preview.headRef}</Text>
       <Text selectable style={{color: c.foregroundMuted, fontSize: 12}}>{t("검토한 HEAD", "Reviewed HEAD")} · {preview.headSha}</Text>
@@ -208,7 +274,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
       </View>
     </View>}
     {((ready && !preview) || clarification) && <View style={wrap}>
-      {ready && !preview && !runningPrompt && <Button theme={theme} {...named(busy === "read" ? t("병합 정보 조회 중…", "Loading merge details…") : t("보드에서 병합", "Merge on board"))} selected={decision} disabled={!!busy} onPress={() => void inspect()} />}
+      {ready && !preview && !runningPrompt && <Button theme={theme} {...named(busy === "read" ? t("병합 정보 조회 중…", "Loading merge details…") : recheck ? t("최신 정보로 다시 확인", "Check the latest again") : t("보드에서 병합", "Merge on board"))} selected={decision} disabled={!!busy} onPress={() => void inspect()} />}
       {clarification}
     </View>}
     {lookupError && <Text accessibilityLiveRegion="polite" style={{color:c.statusWarning}}>{t("병합 정보를 불러오지 못했습니다. 다시 조회하거나 GitHub에서 확인하세요.", "Could not load merge details. Try again or open GitHub.")}</Text>}
@@ -240,7 +306,7 @@ function RepositorySetting({project, title, theme, refresh}: {project: PullReque
       setError(false); refresh();
     } catch { setError(true); } finally { setPending(false); }
   }
-  const states = {ok:t("조회됨","Connected"), unmapped:t("저장소 연결 필요","Link a repository"), unavailable:t("조회 실패 · 호스트의 gh 연결 확인","Lookup failed · Check gh on the host"), off:t("꺼짐","Off"), truncated:t("일부 PR만 표시","Showing a partial PR list")};
+  const states = {ok:t("조회됨","Connected"), unmapped:t("저장소 연결 필요","Link a repository"), unavailable:project.failure ? t(...unknownStatusWords(project.failure)) : t("조회 실패 · 호스트의 gh 연결 확인","Lookup failed · Check gh on the host"), off:t("꺼짐","Off"), truncated:t("일부 PR만 표시","Showing a partial PR list")};
   return <View style={{gap:6,padding:10,backgroundColor:c.surface1,borderRadius:8}}>
     <Text selectable style={{color:c.foreground,fontWeight:"600"}}>{title}</Text>
     <Text selectable style={{color:c.foregroundMuted}}>{project.repo ? project.repo + " · " : ""}{states[project.status]}</Text>

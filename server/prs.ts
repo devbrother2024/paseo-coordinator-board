@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { commitSha, confirmPullRequestMerge, previewPullRequestMerge, pullLifecycle, pullReason, pullUrl, readPullLifecycle, repositorySlug, setProjectRepository,
-  type MergeTarget, type PullRequestItem, type PullRequestView } from "../shared/prs";
+  type MergeTarget, type PullDetail, type PullRequestItem, type PullRequestView } from "../shared/prs";
 import { mergeHistoryKey, type MergeNotifications } from "./merge-notifications";
 import { githubMergeApi, PullMerges } from "./pr-merge";
 import { githubRepository } from "../shared/github-repository";
@@ -18,7 +18,7 @@ type Workspace = Awaited<ReturnType<Sdk["workspaces"]["list"]>>["entries"][numbe
 type ProjectView = PullRequestView["projects"][number];
 type Reason = z.infer<typeof pullReason>;
 type Pull = Omit<PullRequestItem,"projectIds">;
-type Source = {status:"ok"|"unavailable"|"truncated"; items:Pull[]};
+type Source = {status:"ok"|"unavailable"|"truncated"; items:Pull[]; failure?:PullDetail};
 const scanLimit = 200;
 const check = z.object({ status:z.string().nullish(), conclusion:z.string().nullish(), state:z.string().nullish() });
 const rawPull = z.object({
@@ -36,35 +36,50 @@ const ttl = 60_000;
 // resolvedMs: how long a single answer stands in for a list that still says UNKNOWN. restMs: pause after a round gives up.
 export const mergeabilityRetry = { retryMs: 15_000, attempts: 4, perRead: 3, resolvedMs: ttl, restMs: 5 * 60_000 };
 
-function reason(p: z.output<typeof rawPull>):Reason {
-  if (p.isDraft || p.mergeStateStatus === "DRAFT") return "draft";
-  if (p.mergeable === "CONFLICTING" || p.mergeStateStatus === "DIRTY") return "conflict";
+function judge(p: z.output<typeof rawPull>):{reason:Reason; detail?:PullDetail} {
+  const why = (reason:Reason, detail?:PullDetail) => detail ? {reason,detail} : {reason};
+  if (p.isDraft || p.mergeStateStatus === "DRAFT") return why("draft");
+  if (p.mergeable === "CONFLICTING" || p.mergeStateStatus === "DIRTY") return why("conflict");
   const failing = ["FAILURE","ERROR","TIMED_OUT","CANCELLED","ACTION_REQUIRED","STARTUP_FAILURE","STALE"];
-  if (p.checks.some(c => failing.includes(c.conclusion || c.state || ""))) return "checks-failed";
-  if (p.reviewDecision === "CHANGES_REQUESTED") return "changes-requested";
-  if (p.checks.some(c => c.status ? c.status !== "COMPLETED" : ["PENDING","EXPECTED"].includes(c.state ?? ""))) return "checks-pending";
-  if (p.autoMerge) return "auto-merge";
-  if (p.reviewDecision === "REVIEW_REQUIRED") return "review-required";
-  if (["BLOCKED","BEHIND","UNSTABLE","HAS_HOOKS"].includes(p.mergeStateStatus ?? "")) return "blocked";
+  if (p.checks.some(c => failing.includes(c.conclusion || c.state || ""))) return why("checks-failed");
+  if (p.reviewDecision === "CHANGES_REQUESTED") return why("changes-requested");
+  if (p.checks.some(c => c.status ? c.status !== "COMPLETED" : ["PENDING","EXPECTED"].includes(c.state ?? ""))) return why("checks-pending");
+  if (p.autoMerge) return why("auto-merge");
+  if (p.reviewDecision === "REVIEW_REQUIRED") return why("review-required");
+  if (["BLOCKED","BEHIND","UNSTABLE","HAS_HOOKS"].includes(p.mergeStateStatus ?? "")) return why("blocked");
   const green = ["SUCCESS","NEUTRAL","SKIPPED"];
-  if (p.reviewDecision && p.reviewDecision !== "APPROVED") return "unknown";
-  if (p.checks.some(c => !(c.status === "COMPLETED" && green.includes(c.conclusion ?? "")) && c.state !== "SUCCESS")) return "unknown";
-  if (p.mergeable === "UNKNOWN" || p.mergeStateStatus === "UNKNOWN") return "computing";
-  return p.mergeable === "MERGEABLE" && p.mergeStateStatus === "CLEAN" ? "ready" : "unknown";
+  if (p.reviewDecision && p.reviewDecision !== "APPROVED") return why("unknown","review-state");
+  if (p.checks.some(c => !(c.status === "COMPLETED" && green.includes(c.conclusion ?? "")) && c.state !== "SUCCESS")) return why("unknown","check-result");
+  if (p.mergeable === "UNKNOWN" || p.mergeStateStatus === "UNKNOWN") return why("computing");
+  return p.mergeable === "MERGEABLE" && p.mergeStateStatus === "CLEAN" ? why("ready") : why("unknown","merge-state");
 }
 
 function pullItem(repo:string, p:z.output<typeof rawPull>):Pull {
-  const why = reason(p);
+  const {reason:why, detail} = judge(p);
   const head = repositorySlug.safeParse(p.headRepo);
   const headSha = commitSha.safeParse(p.headSha);
   return {repo, number:p.number, ...(head.success && p.headBranch ? {headRepo:head.data,headBranch:p.headBranch} : {}),
     ...(headSha.success ? {headSha:headSha.data} : {}), title:p.title.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g," ").slice(0,512),
-    url:pullUrl(repo,p.number), lane:why==="ready"?"review":"progress",reason:why,updatedAt:p.updatedAt};
+    url:pullUrl(repo,p.number), lane:why==="ready"?"review":"progress",reason:why,...(detail ? {detail} : {}),updatedAt:p.updatedAt};
+}
+
+// A short, fixed reason for a failed GitHub read. Raw gh output can carry paths, so it never reaches the screen.
+export function pullLookupFailure(error:unknown):PullDetail {
+  const failure = error as {code?:unknown; killed?:boolean; signal?:unknown; stderr?:unknown; message?:unknown; pullClosed?:boolean} | null;
+  if (failure?.pullClosed) return "closed";
+  if (failure?.code === "ENOENT") return "gh-missing";
+  const text = [failure?.stderr, failure?.message].filter(value => typeof value === "string").join(" ");
+  if (failure?.killed || failure?.signal === "SIGTERM" || failure?.code === "ETIMEDOUT" || /timed? ?out/i.test(text)) return "timeout";
+  if (/gh auth login|not logged in|authentication|HTTP 401|bad credentials/i.test(text)) return "gh-auth";
+  if (/could not resolve|ENOTFOUND|ECONNRESET|ECONNREFUSED|EAI_AGAIN|network|connection/i.test(text)) return "network";
+  return "lookup-failed";
 }
 
 // One open PR read on its own. A PR that closed in the meantime fails the parse.
 export function parseOpenPull(repo:string, json:string):Pull {
-  return pullItem(repo, rawPull.parse(JSON.parse(json)));
+  const row:unknown = JSON.parse(json);
+  if (row && typeof row === "object" && "state" in row && row.state !== "OPEN") throw Object.assign(Error("Pull request is not open"), {pullClosed:true});
+  return pullItem(repo, rawPull.parse(row));
 }
 
 export function parseOpenPulls(repo:string, json:string):Source {
@@ -133,7 +148,7 @@ export class ProjectPullRequests {
   private readonly mergeability: MergeabilityChecks;
   constructor(private store:PreferenceStore,private readonly deps:{localOrigin:typeof localOrigin; githubPulls:typeof githubPulls; githubPull?:typeof githubPull; now:()=>number} = {localOrigin,githubPulls,githubPull,now:Date.now},
     private readonly mergeApi=githubMergeApi(args=>run("gh",args)), private readonly lookupLifecycle=githubLifecycle) {
-    this.mergeability = new MergeabilityChecks(deps.githubPull ?? githubPull, deps.now, mergeabilityRetry);
+    this.mergeability = new MergeabilityChecks(deps.githubPull ?? githubPull, deps.now, mergeabilityRetry, pullLookupFailure);
   }
 
   private async limited<T>(task:()=>Promise<T>):Promise<T> {
@@ -147,23 +162,32 @@ export class ProjectPullRequests {
     }
   }
 
-  async lifecycle(paseo: Sdk, {reference, ...target}: z.output<typeof readPullLifecycle.input>) {
+  async lifecycle(paseo: Sdk, input: z.output<typeof readPullLifecycle.input>) {
+    return (await this.explainLifecycle(paseo, input)).state;
+  }
+
+  // The lifecycle with the reason it reads as UNKNOWN, when it does.
+  async explainLifecycle(paseo: Sdk, {reference, ...target}: z.output<typeof readPullLifecycle.input>):Promise<z.output<typeof readPullLifecycle.output>> {
+    const scope = {state:"UNKNOWN" as const, why:"scope" as const};
     try {
       return await this.limited(async () => {
-        const current = await this.mergeScope(paseo, target);
-        if (!current()) return "UNKNOWN" as const;
+        let current: () => boolean;
+        try { current = await this.mergeScope(paseo, target); } catch { return scope; }
+        if (!current()) return scope;
         const cached = reference ? this.sources.get(target.repo) : undefined;
         if (cached && cached.expires !== Infinity && cached.expires > this.deps.now()) {
           const source = await cached.value;
           const pull = source?.items.find(p => p.number === target.number);
-          if (!current()) return "UNKNOWN" as const;
-          if (pull) return pull.reason === "draft" ? "DRAFT" as const : "OPEN" as const;
+          if (!current()) return scope;
+          if (pull) return {state: pull.reason === "draft" ? "DRAFT" as const : "OPEN" as const};
         }
-        const state = await this.lookupLifecycle(target);
-        if (!current()) return "UNKNOWN" as const;
-        return state === "DRAFT" && !reference ? "OPEN" as const : state;
+        let state: Awaited<ReturnType<typeof this.lookupLifecycle>>;
+        try { state = await this.lookupLifecycle(target); } catch (error) { return {state:"UNKNOWN" as const, why:pullLookupFailure(error)}; }
+        if (!current()) return scope;
+        if (state === "UNKNOWN") return {state, why:"lookup-failed" as const};
+        return {state: state === "DRAFT" && !reference ? "OPEN" as const : state};
       });
-    } catch { return "UNKNOWN" as const; }
+    } catch { return {state:"UNKNOWN" as const, why:"lookup-failed" as const}; }
   }
 
   register(server:PluginServerContext,onInvalidated?:()=>void,notifications?:MergeNotifications) {
@@ -182,7 +206,7 @@ export class ProjectPullRequests {
         }
       });
     });
-    server.handle(readPullLifecycle, async (input, {paseo}) => ({state: await this.lifecycle(paseo, input)}));
+    server.handle(readPullLifecycle, (input, {paseo}) => this.explainLifecycle(paseo, input));
     server.handle(previewPullRequestMerge,({expectedHeadSha,...target},{paseo})=>
       merges.preview(target,()=>this.mergeScope(paseo,target),expectedHeadSha));
     server.handle(confirmPullRequestMerge,(input,{paseo})=>{
@@ -271,7 +295,7 @@ export class ProjectPullRequests {
     const entry={expires:Infinity,value:this.limited(async():Promise<Source|null>=>{
       if (!stillAllowed()) return null;
       try {return await this.deps.githubPulls(repo);}
-      catch {return {status:"unavailable",items:[]};}
+      catch (error) {return {status:"unavailable",items:[],failure:pullLookupFailure(error)};}
     })};
     this.sources.set(repo,entry);
     const discard = () => {
@@ -335,7 +359,9 @@ export class ProjectPullRequests {
     const byRepo = new Map<string,string[]>();
     for (const project of visible) {
       if (!project.repo) continue;
-      project.status = sources.get(project.repo)?.status ?? "unavailable";
+      const source = sources.get(project.repo);
+      project.status = source?.status ?? "unavailable";
+      if (source?.failure) project.failure = source.failure;
       const connected = byRepo.get(project.repo);
       if (connected) connected.push(project.projectId);
       else byRepo.set(project.repo,[project.projectId]);

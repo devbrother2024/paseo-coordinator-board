@@ -9,7 +9,8 @@ import { TrackedDecisionCard } from "./tracked-decisions";
 import { closedRevision } from "./tracked-reply-draft";
 import { mentionsSecurityGate, trackedCoverage, trackedReplyRoute, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
 import { projectFolderMap } from "../shared/project-folders";
-import { MergeFeedback, PullRequestCard, PullRequestSettings, type MergeNotice, type WorkSessionLink } from "./pull-requests";
+import { MergeFeedback, PullRequestCard, PullRequestSettings, WaitingMergeRow, type MergeNotice, type WorkSessionLink } from "./pull-requests";
+import { waitingMergeCard } from "../shared/merge-card-place";
 import { pullRowKey, recordActionKey, sessionRowKey, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
 import { rankDecisionRows, priorityLabel } from "./decision-priority";
 import { DecisionEditingRow, keepEditingPositions, useDecisionEditing } from "./decision-editing";
@@ -68,6 +69,14 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     return [...snapshot?.trackedDecisions?.items ?? []].sort((a,b) => priority(a.urgency) - priority(b.urgency) ||
       (a.where === "human" ? 0 : 1) - (b.where === "human" ? 0 : 1) || (a.since ?? "~").localeCompare(b.since ?? "~"));
   }, [snapshot?.trackedDecisions]);
+  // A merge card waits in project progress until GitHub confirms its PR is ready.
+  const waitingMerges = new Map(records.flatMap(item => {
+    const wait = waitingMergeCard(item, pullRequests);
+    return wait ? [[item.key, wait] as const] : [];
+  }));
+  const deciding = records.filter(item => !waitingMerges.has(item.key));
+  // Cards whose PR row cannot show in the kanban (no readable PR) keep a small row with the reason.
+  const unlisted = (item: TrackedDecision) => { const wait = waitingMerges.get(item.key); return !!wait && !wait.pr; };
   const folders = useMemo(() => projectFolderMap(snapshot?.projects ?? []), [snapshot?.projects]);
   const [inlineReceipts, setInlineReceipts] = useState<InlineReceipt[]>([]);
   const completed = new Set(inlineReceipts.map(receipt => receipt.actionKey));
@@ -77,7 +86,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     if (!displayed.has(id)) displayed.set(id, {id,title:names.get(id) ?? id,cards:[]});
   }
   function decisionsFor(inScope:(id:string|null)=>boolean) {
-    const visibleRecords=records.filter(item=>inScope(item.projectId) && !completed.has(recordActionKey(item)));
+    const visibleRecords=deciding.filter(item=>inScope(item.projectId) && !completed.has(recordActionKey(item)));
     const covered=trackedCoverage(visibleRecords);
     return {
       records:visibleRecords,
@@ -149,6 +158,11 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const inFilter = (id: string | null) => !filters.size || filters.has(id);
   const visibleProjects = [...displayed.values()].filter(project => inFilter(project.id));
   const hostWideRecords = records.filter(item=>item.projectId === null);
+  const renderWaitingMerge = (item: TrackedDecision) => {
+    const wait = waitingMerges.get(item.key);
+    return item.mergeTarget && wait && !wait.pr ? <WaitingMergeRow key={item.key} repo={item.mergeTarget.repo} number={item.mergeTarget.number}
+      title={item.title} why={wait.why} theme={theme} /> : null;
+  };
   const hostWideFollowups = followups.filter(item=>item.entry.projectId === null);
   const showHostWide = inFilter(null) && hostWideVisible({records:hostWideRecords.length, followups:hostWideFollowups.length});
   const {records:filteredRecords,sessions:filteredSessions,prs:filteredPrs}=decisionsFor(inFilter);
@@ -462,9 +476,10 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         peers={visiblePeers} peersLoading={peersLoading} hostLabel={hostLabel} projectName={projectName} open={actions.onOpen} openRemote={onOpenHostSession}>
         {!visibleProjects.length && !showHostWide && <Text style={{ color: c.foregroundMuted }}>{t("표시할 세션이 없습니다.", "No sessions to show.")}</Text>}
         {showHostWide && <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId="" title={t("공통","Host-wide")} cards={[]} requests={[]} followups={hostWideFollowups} now={now}
-          records={hostWideRecords} decisions={byProject.get(null) ?? 0} renderRecord={renderRecord} renderPull={renderPull}
+          records={hostWideRecords.filter(item => !waitingMerges.has(item.key))} waiting={hostWideRecords.filter(unlisted)} renderWaiting={renderWaitingMerge}
+          decisions={byProject.get(null) ?? 0} renderRecord={renderRecord} renderPull={renderPull}
           recordLinks={recordLinks} compact={layout.compact} theme={theme} {...actions} />}
-        {visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} followups={followups.filter(item=>item.entry.projectId===p.id)} now={now} records={records.filter(r => r.projectId === p.id)} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={pullRequests?.items.filter(pr => pr.projectIds.includes(p.id)) ?? []} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
+        {visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} followups={followups.filter(item=>item.entry.projectId===p.id)} now={now} records={deciding.filter(r => r.projectId === p.id)} waiting={records.filter(r => r.projectId === p.id && unlisted(r))} renderWaiting={renderWaitingMerge} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={pullRequests?.items.filter(pr => pr.projectIds.includes(p.id)) ?? []} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
         <RemoteRunning groups={visiblePeers} projects={activeProjects} open={onOpenHostSession} theme={theme} />
       </SessionProgress>}
     </ScrollView>

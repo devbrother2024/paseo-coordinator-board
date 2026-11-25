@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { applyPullJudgments, needsRunningConfirmation, ownerRunning, prunePullJudgments, pullColumn, pullJudgmentKey, pullStatusWords, type PullJudgment } from "../shared/pull-judgments";
+import { applyPullJudgments, needsRunningConfirmation, ownerRunning, prunePullJudgments, pullColumn, pullJudgmentKey, pullStatusWords, unknownStatusWords, type PullJudgment } from "../shared/pull-judgments";
 import type { PullRequestItem } from "../shared/prs";
 
 const head = "a".repeat(40);
@@ -127,6 +127,8 @@ test("each GitHub state has its own words, and status unknown is kept for lookup
   expect(pullStatusWords(pr({ reason: "checks-pending", lane: "progress" }))[0]).toBe("검사 중");
   expect(pullStatusWords(pr({ reason: "blocked", lane: "progress" }))[0]).toBe("병합 조건 대기");
   expect(pullStatusWords(pr({ reason: "unknown", lane: "progress" }))[0]).toBe("상태 미확인");
+  expect(pullStatusWords(pr({ reason: "unknown", lane: "progress", detail: "gh-auth" }))).toEqual(["상태 미확인: 호스트의 gh 로그인 필요", "Status unknown: gh on the host needs to sign in"]);
+  expect(unknownStatusWords("unmapped")).toEqual(["상태 미확인: 저장소 연결 없음", "Status unknown: No repository linked"]);
   expect(pullColumn(pr({ reason: "computing", lane: "progress" }))).toBe("running");
   expect(pullColumn(pr({ reason: "review-required", lane: "progress" }))).toBe("review");
 });
