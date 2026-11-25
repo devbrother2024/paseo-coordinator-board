@@ -17,7 +17,7 @@ import { latestMergeNotification } from "./merge-notification";
 import { decisionSummary } from "./decision-summary";
 import { matchesWorkspace } from "../shared/workspace-pull";
 import { ownerRunning } from "../shared/pull-judgments";
-import { heldMergeRecord, mergeHolds, snapshotHoldSessions } from "../shared/merge-hold";
+import { heldMergeRecord, mergeHolds, mergeRecordLinks, snapshotHoldSessions } from "../shared/merge-hold";
 import type { PullRequestItem } from "../shared/prs";
 import { getPaseoClient, type PluginScreenProps } from "@getpaseo/plugin/client";
 import { remoteScope, readRemoteHistorySession } from "./remote-sessions";
@@ -67,26 +67,31 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const [settings, setSettings] = useState(false);
   const {groups: peers, hosts: peerHosts, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
   const assigned = new Set(snapshot?.sessions.filter(row => row.serverId).map(row => JSON.stringify([row.serverId, row.id])));
-  // A merge card whose work session still runs waits in project progress until the session rests.
-  const holds = mergeHolds(pullRequests?.items ?? [], {
-    sessions: snapshotHoldSessions(snapshot?.sessions ?? []),
-    peers: { complete: !peersLoading && !peers.some(group => group.failed), rows: peers.flatMap(({host, rows}) => rows
-      .filter(row => !assigned.has(JSON.stringify([host.serverId, row.sessionId])))
-      .map(row => ({ id: row.sessionId, projectId: row.projectId, running: true, ...(row.workspacePull ? { workspacePull: row.workspacePull } : {}) }))) },
-    records: snapshot?.trackedDecisions?.items ?? [],
-  });
-  const pullHold = (pr: Pick<PullRequestItem, "repo" | "number">) => holds.get(pullKey(pr.repo, pr.number));
-  const readyPrs = pullRequests?.items.filter(pr => pr.lane === "review" && pullHold(pr) !== "running") ?? [];
-  // Held PRs sit in the kanban's running column as plain PR rows.
-  const kanbanPrs = pullRequests?.items.map(pr => pullHold(pr) === "running" ? { ...pr, lane: "progress" as const } : pr) ?? [];
   const sortedRecords = useMemo(() => {
     const priority = (urgency: string | null | undefined) => ["now","today","week"].includes(urgency ?? "") ? ["now","today","week"].indexOf(urgency!) : 3;
     return [...snapshot?.trackedDecisions?.items ?? []].sort((a,b) => priority(a.urgency) - priority(b.urgency) ||
       (a.where === "human" ? 0 : 1) - (b.where === "human" ? 0 : 1) || (a.since ?? "~").localeCompare(b.since ?? "~"));
   }, [snapshot?.trackedDecisions]);
+  const folders = useMemo(() => projectFolderMap(snapshot?.projects ?? []), [snapshot?.projects]);
+  // A merge card whose work session still runs on the PR branch waits in project progress until the session rests.
+  // Hosts not read yet or that failed only warn on PRs linked to a session there.
+  const unreadHosts = new Set(peerHosts.filter(host => !peers.some(group => group.host.serverId === host.serverId && !group.failed)).map(host => host.serverId));
+  const holds = mergeHolds(pullRequests?.items ?? [], {
+    sessions: snapshotHoldSessions(snapshot?.sessions ?? []),
+    peers: { unread: unreadHosts, rows: peers.flatMap(({host, rows}) => rows
+      .filter(row => !assigned.has(JSON.stringify([host.serverId, row.sessionId])))
+      .map(row => ({ id: row.sessionId, projectId: row.projectId, running: true, ...(row.workspacePull ? { workspacePull: row.workspacePull } : {}) }))) },
+    links: mergeRecordLinks(sortedRecords, item => {
+      const target = trackedWorkSession(item, { hostId, hostLabel, sessions: snapshot?.sessions ?? [], hosts: peerHosts, folders });
+      return target?.kind === "remote" ? target.hosts.map(host => host.serverId) : undefined;
+    }),
+  });
+  const pullHold = (pr: Pick<PullRequestItem, "repo" | "number">) => holds.get(pullKey(pr.repo, pr.number));
+  const readyPrs = pullRequests?.items.filter(pr => pr.lane === "review" && pullHold(pr) !== "running") ?? [];
+  // Held PRs sit in the kanban's running column as plain PR rows.
+  const kanbanPrs = pullRequests?.items.map(pr => pullHold(pr) === "running" ? { ...pr, lane: "progress" as const } : pr) ?? [];
   // A held ledger merge card shows as its PR row in the kanban instead.
   const records = sortedRecords.filter(item => !heldMergeRecord(item, holds));
-  const folders = useMemo(() => projectFolderMap(snapshot?.projects ?? []), [snapshot?.projects]);
   const [inlineReceipts, setInlineReceipts] = useState<InlineReceipt[]>([]);
   const completed = new Set(inlineReceipts.map(receipt => receipt.actionKey));
   const names = new Map(snapshot?.projects.map(project => [project.id, project.title]));

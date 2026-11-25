@@ -1,7 +1,7 @@
 import type { Note, SessionRow } from "./contract";
 import { trackedCoverage, pullKey, type TrackedDecisionView } from "./tracked-decisions";
 import type { PullRequestView } from "./prs";
-import { heldMergeRecord, mergeHolds, snapshotHoldSessions } from "./merge-hold";
+import { heldMergeRecord, mergeHolds, mergeRecordLinks, snapshotHoldSessions } from "./merge-hold";
 
 export function displayLane(session: SessionRow, note: Note | undefined): SessionRow["lane"] | "done" {
   if (session.nativePending) return "human";
@@ -24,9 +24,9 @@ export function decisionCount(view: {sessions: SessionRow[]; notes: Record<strin
   const sessions = view.sessions.filter(row => displayLane(row, view.notes[row.id]) === "human");
   const ledger = view.trackedDecisions?.items ?? [];
   const prs = view.pullRequests?.items ?? [];
-  // A merge card whose work session still runs waits in project progress. Only sessions in the
-  // snapshot count here; the board also reads other hosts.
-  const holds = mergeHolds(prs, { sessions: snapshotHoldSessions(view.sessions), records: ledger });
+  // A merge card whose work session still runs on the PR branch waits in project progress. Only sessions
+  // in the snapshot count here; the board screen also reads other hosts.
+  const holds = mergeHolds(prs, { sessions: snapshotHoldSessions(view.sessions), links: mergeRecordLinks(ledger) });
   const records = ledger.filter(item => !heldMergeRecord(item, holds));
   const covered = trackedCoverage(records);
   return records.length + sessions.filter(s => !covered.sessionIds.has(s.id)).length +

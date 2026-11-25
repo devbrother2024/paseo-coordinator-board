@@ -8,7 +8,7 @@ import { GitHubPullLink } from "./github-pull-link";
 import { mergeNotificationLabel } from "./merge-notification";
 import { useBoardLanguage, type Translate } from "./language";
 import { githubStatusWords, needsRunningConfirmation, pullStatusWords } from "../shared/pull-judgments";
-import { mergeHoldWords, type MergeHold } from "../shared/merge-hold";
+import { asksBeforeMerge, mergeHoldWords, type MergeHold } from "../shared/merge-hold";
 
 type PullRequest = PullRequestView["items"][number];
 
@@ -114,10 +114,10 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   const held = hold === "running" && pr.lane !== "review" ? mergeHoldWords.running : null;
   const status = securityGate && pr.reason === "ready" ? t("열린 PR · 보안 게이트 통과 여부 확인 필요", "Open · Security gate unverified")
     : held ? t(held[0], held[1]) : t(words[0], words[1]);
-  const running = needsRunningConfirmation(workSessions);
-  // When another host could not be read, a session there may still be running. Ask the same way.
-  const unverified = !running && hold === "unverified";
-  const working = ready && (running || unverified);
+  // A session on the PR branch keeps the card out of My decisions. What is left is a session busy elsewhere
+  // (one line), or one whose branch or host the board could not read (a warning and one more confirmation).
+  const note = ready && hold && hold !== "running" ? mergeHoldWords[hold] : null;
+  const working = ready && (asksBeforeMerge(hold) || (!hold && needsRunningConfirmation(workSessions)));
   const args = { projectId, repo: pr.repo, number: pr.number };
 
   async function inspect(confirmedRunning = false) {
@@ -161,11 +161,11 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
     {decision && pr.gate === "judged" && pr.judgment && <Text selectable style={{color: c.foregroundMuted, fontSize: 13}}>
       {t("코디네이터 확인", "Coordinator check")} · {pr.judgment.reason}
     </Text>}
-    {working && <Text accessibilityLiveRegion="polite" style={{color: c.statusWarning, fontSize: 13}}>
-      {unverified ? t(mergeHoldWords.unverified[0], mergeHoldWords.unverified[1]) : t("작업 세션이 아직 진행 중입니다.", "A work session is still running.")}
+    {(note || working) && <Text accessibilityLiveRegion="polite" style={{color: working ? c.statusWarning : c.foregroundMuted, fontSize: 13}}>
+      {note ? t(note[0], note[1]) : t("작업 세션이 아직 진행 중입니다.", "A work session is still running.")}
     </Text>}
     {runningPrompt && working && !preview && <View style={{gap: 7, padding: 10, borderWidth: 1, borderRadius: 7, borderColor: c.statusWarning, backgroundColor: c.surface0}}>
-      <Text style={{color: c.foreground}}>{unverified
+      <Text style={{color: c.foreground}}>{asksBeforeMerge(hold)
         ? t("작업 세션이 아직 진행 중이면 병합한 뒤에 올라올 변경이 빠질 수 있습니다. 그래도 병합 정보를 볼까요?",
           "If a work session is still running, merging now can leave out changes it is still making. Review the merge anyway?")
         : t("작업 세션이 끝나기 전에 병합하면 그 뒤에 올라올 변경이 빠질 수 있습니다. 그래도 병합 정보를 볼까요?",
