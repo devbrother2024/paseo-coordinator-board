@@ -20,7 +20,7 @@ const readOptions: Readonly<Record<string, ReadOptions>> = {
   sort: { short: "bdfghiMmnRrsuVz", shortValue: "ktS", flags: "--ignore-leading-blanks --dictionary-order --ignore-case --general-numeric-sort --human-numeric-sort --numeric-sort --reverse --stable --unique --version-sort --zero-terminated", values: "--key --field-separator --buffer-size --parallel" },
   uniq: { short: "cdiuz", shortValue: "fsw", flags: "--count --repeated --ignore-case --unique --zero-terminated", values: "--skip-fields --skip-chars --check-chars" },
   rg: { ...search, short: search.short?.replace("L", "") },
-  grep: { ...search, short: search.short?.replace("R", "") },
+  grep: { ...search, short: search.short?.replace("R", ""), flags: search.flags + " --recursive" },
   find: { flags: "-H -L -P -print -print0 -ls -depth -empty -readable -writable -executable -xdev -mount -ignore_readdir_race -not -and -or", values: "-name -iname -path -ipath -type -xtype -maxdepth -mindepth -size -mtime -mmin -user -group -perm" },
   awk: { shortValue: "F", values: "--field-separator" },
   readlink: { short: "efmnqsvz", flags: "--canonicalize --canonicalize-existing --canonicalize-missing --no-newline --quiet --silent --verbose --zero" },
@@ -47,14 +47,18 @@ function safeReadOperands(args: string[], rules: ReadOptions) {
   const operands: string[] = [];
   const patternFiles: string[] = [];
   let patternOption = false;
+  let recursive = false;
   for (let index = 0; index < args.length; index++) {
     const word = args[index];
-    if (word === "--") return { operands: [...operands, ...args.slice(index + 1)], patternOption, patternFiles };
+    if (word === "--") { operands.push(...args.slice(index + 1)); break; }
     if (word === "-" || !word.startsWith("-")) { operands.push(word); continue; }
     if (rules.numeric && /^-\d+$/.test(word)) continue;
     const equals = word.indexOf("=");
     const flag = equals < 0 ? word : word.slice(0, equals);
-    if (equals < 0 && flags.has(flag)) continue;
+    if (equals < 0 && flags.has(flag)) {
+      recursive ||= flag === "--recursive";
+      continue;
+    }
     if (optionalValues.has(flag)) continue;
     if (values.has(flag)) {
       if (["--file", "--regexp"].includes(flag)) patternOption = true;
@@ -75,9 +79,10 @@ function safeReadOperands(args: string[], rules: ReadOptions) {
         break;
       }
       if (!rules.short?.includes(option)) return null;
+      recursive ||= option === "r";
     }
   }
-  return { operands, patternOption, patternFiles };
+  return { operands, patternOption, patternFiles, recursive };
 }
 
 export function gitSubcommandIndex(args: string[]) {
@@ -103,7 +108,7 @@ export function readCommandOperands(name: string, args: string[]): string[] | nu
   }
   if (name === "rg" || name === "grep") {
     const files = parsed.patternOption || args.includes("--files") ? parsed.operands : parsed.operands.slice(1);
-    return [...parsed.patternFiles, ...(name === "rg" && !files.length ? ["."] : files)];
+    return [...parsed.patternFiles, ...(!files.length && (name === "rg" || parsed.recursive) ? ["."] : files)];
   }
   return ["echo", "printf", "pwd"].includes(name) ? [] : parsed.operands;
 }

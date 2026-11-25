@@ -85,7 +85,7 @@ export function sedScriptRisk(script: string): "read" | "write" | "execute" | "u
 }
 
 const curlValueOptions = new Set(["--url", "--url-query", "--header", "--user", "--data", "--data-raw", "--data-binary",
-  "--data-urlencode", "--form", "--form-string", "--request", "--config", "--output-dir", "--proxy",
+  "--data-urlencode", "--form", "--form-string", "--request", "--config", "--proxy",
   "--cacert", "--cert", "--key", "--cookie", "--user-agent", "--referer", "--max-time", "--connect-timeout", "--retry",
   "--write-out", "--resolve", "--connect-to", "--interface", "--request-target", "--proto", "--proto-redir"]);
 
@@ -94,14 +94,25 @@ export function curlFileOutput(args: string[]) {
   let remoteName = false;
   let directory: string | undefined;
   let destinations: string[] = [];
+  let cookieJar: string | undefined;
+  let headerDump: string | undefined;
   const files: string[] = [];
+  const setDestination = (option: string, file: string | undefined) => {
+    if (!file) return;
+    if (option === "-c" || option === "--cookie-jar") cookieJar = file;
+    else if (option === "-D" || option === "--dump-header") headerDump = file;
+    else if (file !== "-") destinations.push(file);
+  };
   const finishTransfer = () => {
-    writes ||= remoteName || destinations.length > 0;
-    files.push(...destinations.map(file => directory ? resolveReadPath(file, directory) : file));
+    const auxiliary = [cookieJar, headerDump].filter((file): file is string => !!file && file !== "-");
+    writes ||= remoteName || destinations.length > 0 || auxiliary.length > 0;
+    files.push(...destinations.map(file => directory ? resolveReadPath(file, directory) : file), ...auxiliary);
     if (directory && remoteName && !destinations.length) files.push(directory);
     directory = undefined;
     destinations = [];
     remoteName = false;
+    cookieJar = undefined;
+    headerDump = undefined;
   };
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
@@ -111,9 +122,9 @@ export function curlFileOutput(args: string[]) {
       const equals = arg.indexOf("=");
       const name = equals < 0 ? arg : arg.slice(0, equals);
       if (name === "--remote-name" || name === "--remote-name-all") remoteName = true;
-      if (name === "--output") {
+      if (name === "--output" || name === "--cookie-jar" || name === "--dump-header") {
         const value = equals < 0 ? args[++index] : arg.slice(equals + 1);
-        if (value && value !== "-") destinations.push(value);
+        setDestination(name, value);
       } else if (name === "--output-dir") {
         directory = equals < 0 ? args[++index] : arg.slice(equals + 1);
       } else if (equals < 0 && curlValueOptions.has(name)) index++;
@@ -121,12 +132,12 @@ export function curlFileOutput(args: string[]) {
       for (let offset = 1; offset < arg.length; offset++) {
         const option = arg[offset];
         if (option === "O") remoteName = true;
-        if (option === "o") {
+        if (option === "o" || option === "c" || option === "D") {
           const value = arg.slice(offset + 1) || args[++index];
-          if (value && value !== "-") destinations.push(value);
+          setDestination("-" + option, value);
           break;
         }
-        if ("AbcCdDeEFHKmPQrTuxXUYywz".includes(option)) {
+        if ("AbCdeEFHKmPQrTuxXUYywz".includes(option)) {
           if (offset + 1 === arg.length) index++;
           break;
         }

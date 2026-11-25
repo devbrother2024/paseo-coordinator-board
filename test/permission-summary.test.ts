@@ -22,6 +22,17 @@ test("conditional directory changes retain possible earlier folders", () => {
   expect(shell("cd child && cat notes.txt").risk).toBe("read");
 });
 
+test("recursive grep includes its implicit directory while ordinary grep uses stdin", () => {
+  for (const options of ["-r sample", "-rn sample", "--recursive sample", "-rf patterns.txt"]) {
+    expect(shell(`cd ../other && grep ${options}`)).toMatchObject({ risk: "outside-read", readPathsUnresolved: true });
+  }
+  for (const command of ["grep sample", "grep -e-r", "grep -- -r", "grep -r sample -"]) {
+    expect(shell(command).risk).toBe("read");
+    expect(shell(command)).not.toHaveProperty("readPathsUnresolved");
+  }
+  expect(shell("grep -r sample")).toMatchObject({ risk: "read", readPathsUnresolved: true });
+});
+
 test("sed classifies the program separately from its input files", () => {
   for (const [command, risk] of [
     ["sed -n '1p' src/index.ts", "read"], ["sed -n '1p' src/raw.txt", "read"],
@@ -51,6 +62,19 @@ test("package installs include execution risk and curl file outputs include writ
   expect(permissionHeading(shell("curl -H '-o' https://example.invalid"), en)).not.toContain("Write or modify files");
   expect(shell("curl -o first.txt --output-dir build https://example.invalid --next -o second.txt https://example.invalid").groups[0])
     .toMatchObject({ detail: "build/first.txt, second.txt" });
+});
+
+test("curl writes cookie jars and header dumps to their explicit destinations", () => {
+  for (const options of ["-c sample.txt", "-sScsample.txt", "--cookie-jar=sample.txt", "-D sample.txt", "-sSDsample.txt", "--dump-header sample.txt"]) {
+    const summary = shell(`curl ${options} --output-dir build https://example.invalid`);
+    expect(permissionHeading(summary, en)).toContain("Network access · Write or modify files");
+    expect(summary.groups[0]).toMatchObject({ detail: "sample.txt" });
+  }
+  for (const options of ["-c -", "-D -", "--cookie-jar=-", "--dump-header=-", "-H '-D'", "-- -c"]) {
+    expect(permissionHeading(shell(`curl ${options} https://example.invalid`), en)).not.toContain("Write or modify files");
+  }
+  expect(shell("curl -c old.txt -c new.txt -D headers.txt -D - -o body.txt --output-dir build https://example.invalid").groups[0])
+    .toMatchObject({ detail: "build/body.txt, new.txt" });
 });
 
 test("the classifier flags parameter expansion without exposing its runtime value", () => {
