@@ -73,15 +73,15 @@ export function excerpt(page: Page): Evidence {
     if (!text) continue;
     laterInputs.length = 0;
     turns.push({ role, text: text.slice(-2000), ...(timestamp ? { at:timestamp } : {}), ...(text.length > 2000 ? { truncated: true } : {}) });
-    full.set(turns.at(-1)!, text);
+    full.set(turns.at(-1)!, item.text);
     digest.update(JSON.stringify([seqEnd, role, text]));
   }
   if (laterInputs.length) digest.update(JSON.stringify(laterInputs));
   const kept = turns.slice(-4);
   // Only the turns the excerpt keeps: long ones keep the definitions their cut-off start holds.
   for (const turn of kept) {
-    const text = full.get(turn);
-    const definitions = turn.role === "assistant" && text && text.length > 2000 ? labelDefinitions(text) : [];
+    if (turn.role !== "assistant" || !turn.truncated) continue;
+    const definitions = labelDefinitions(full.get(turn)!.trim());
     if (definitions.length) turn.definitions = definitions;
   }
   const last = turns.at(-1);
