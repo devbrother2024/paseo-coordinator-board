@@ -71,7 +71,7 @@ test("every board tool is an action, and the guide repeats the tool's own descri
   const overview = JSON.parse((await guide.execute({}, context)).text);
   const named = tools.filter(tool => tool.name !== boardGuideName && tool.name !== boardActionName);
   // Actions with no tool definition of their own run through board_action only. They come after the tools.
-  const onlyActions = ["judge_open_question"];
+  const onlyActions = ["judge_open_question", "list_open_questions"];
   expect(overview.actions.map((action: any) => action.name)).toEqual([...named.map(tool => tool.name), ...onlyActions]);
   expect(overview.actions.filter((action: any) => action.tool === false).map((action: any) => action.name)).toEqual(onlyActions);
   // An action only through board_action gives the guide a revision, so a running conversation is told to read it once.

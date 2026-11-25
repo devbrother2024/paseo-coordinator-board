@@ -28,7 +28,7 @@ import { createOperations } from "./server/operations";
 import { hostVisibility } from "./shared/hosts";
 import { decorateDecision, DecisionSender } from "./server/decisions";
 import { applyDoneNotes } from "./server/session-decisions";
-import { coordinatorClosures, judgeOpenQuestionTool, QuestionNotices } from "./server/question-judgments";
+import { coordinatorClosures, judgeOpenQuestionTool, listOpenQuestionsTool, QuestionNotices } from "./server/question-judgments";
 import { sendDecision } from "./shared/decision-actions";
 import { isCurrentMembership, managedSessions, registerSessionLinks, releaseUnmanagedCoordinator } from "./server/session-links";
 import { registerRecommendation } from "./server/recommendation";
@@ -648,6 +648,6 @@ export default function contribute(server: PluginServerContext) {
   const removeReport = attachReportTool(server, notes);
   const reviewContext = async () => ({ thresholdHours: await staleHours(),
     covered: coveredSessionIds(tracked.read(new Set(prefs.read().projects), [], { items: [], projects: [] }).items) });
-  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount), judgePullTool(prefs, prs, invalidateCount, undefined, {hints:(selected, id) => tracked.ownerHints(selected, id)}), judgeOpenQuestionTool(prefs, invalidateCount)], toolStamps, reviewContext);
+  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount), judgePullTool(prefs, prs, invalidateCount, undefined, {hints:(selected, id) => tracked.ownerHints(selected, id)}), judgeOpenQuestionTool(prefs, invalidateCount), listOpenQuestionsTool(prefs)], toolStamps, reviewContext);
   return () => { removeMergeTurn(); removeMergePermission(); removeReplyClose(); removeReplyArchive(); removeCoordinator(); removeReport(); };
 }

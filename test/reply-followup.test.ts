@@ -87,3 +87,11 @@ test('the host-wide section is hidden when it has nothing to show', () => {
   expect(hostWideVisible({records:1,followups:0})).toBe(true);
   expect(hostWideVisible({records:0,followups:1})).toBe(true);
 });
+
+test('a reply leaves the board once its ledger card is taken down, and stays in recent decisions', () => {
+  // The coordinator handled the card and took it off the ledger: the reply is no longer waiting for anything.
+  expect(kind({...sent, at: hoursAgo(3), cardRemoved: true})).toBeNull();
+  expect(kind({...sent, at: hoursAgo(3), status: 'pending', cardRemoved: true})).toBeNull();
+  // A reply that was never sent still asks for a look, card or not.
+  expect(kind({...sent, at: hoursAgo(3), status: 'unsent', cardRemoved: true})).toBe('unsent');
+});

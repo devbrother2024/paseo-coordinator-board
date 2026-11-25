@@ -4,8 +4,8 @@ import type { Lane } from "./model";
 
 type Translate = (korean: string, english: string) => string;
 
-// A sent reply waits on the project board for one day. After that, or once the session answers,
-// it stays only in Recent decision activity.
+// A sent reply waits on the project board for one day. After that, once the session answers, or once the ledger card it
+// answered is taken down, it stays only in Recent decision activity.
 export const FOLLOWUP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // Board replies are listed once, in Recent decision activity, not as a kanban column.
@@ -34,7 +34,8 @@ export function followupKind(entry: ReplyEntry, links: readonly HistorySession[]
   if (!Number.isFinite(at) || now - at >= FOLLOWUP_WINDOW_MS) return null;
   if (entry.status === "unsent") return "unsent";
   if (entry.status !== "sent" && entry.status !== "pending") return null;
-  if (entry.response) return null;
+  // Answered, or the ledger card it answered was handled and taken down: nothing left to wait for on the board.
+  if (entry.response || entry.cardRemoved) return null;
   return findable(recipientLink(links)) ? "waiting" : null;
 }
 
