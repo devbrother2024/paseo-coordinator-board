@@ -9,20 +9,17 @@ import { Button, type Theme } from "./controls";
 import { HistoryMarkdown } from "./history-markdown";
 import { useBoardLanguage } from "./language";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
-import type { ChoiceRequest } from "./choice-display";
 
 type Props = {
   card: ClarificationCard | null; title: string; theme: Theme; recipientId: string | null; recipientTitle?: string;
   entries: ClarificationEntry[]; prior?: TrackedDecision["qa"]; onRefresh: () => void; onDraftChange?: (active:boolean) => void;
-  // A card can split the box: "ask" is the button and editor beside the reply, and "history" is the earlier questions
-  // and answers inside the card's evidence. A question asked in "ask" stays there until the board lists it, so its
-  // answer is not missed.
+  // "ask" is the question box of an approval request card, where a question is all the board can send. Every other
+  // card has one input of its own and shows only "history": the earlier questions and answers, inside its evidence.
+  // A question asked in "ask" stays there until the board lists it, so its answer is not missed.
   part?: "all" | "ask" | "history";
-  /** A ready question this card suggests. The button only fills the box; the person sends it. */
-  suggestion?: ChoiceRequest | null;
 };
 
-export function Clarification({card,title,theme,recipientId,recipientTitle,entries,prior = [],onRefresh,onDraftChange,suggestion,part = "all"}:Props) {
+export function Clarification({card,title,theme,recipientId,recipientTitle,entries,prior = [],onRefresh,onDraftChange,part = "all"}:Props) {
   const {t} = useBoardLanguage();
   const ask = useRpc(askClarification);
   const photos = usePhotoDraft();
@@ -53,13 +50,6 @@ export function Clarification({card,title,theme,recipientId,recipientTitle,entri
     if (sending.current || photos.readPending.current) return;
     if (!expanded && !hasDraft) setDraftTarget(target);
     setExpanded(!expanded);
-  }
-  function draftSuggestion() {
-    if (!suggestion || sending.current || photos.readPending.current) return;
-    const request = t(...suggestion.text);
-    setDraftTarget(target); setError(false); setExpanded(true);
-    // Keep anything the person already wrote and add the request once.
-    setText(current => !current.trim() ? request : current.includes(request) ? current : current.trimEnd() + "\n\n" + request);
   }
   async function submit() {
     if (!card || !recipientId || changed || sending.current || photos.blocksSubmit()) return;
@@ -94,13 +84,11 @@ export function Clarification({card,title,theme,recipientId,recipientTitle,entri
     </View>;
   if (part === "history") return historyBox || null;
   return <>
-    {/* A small text button: asking first is the less common path beside the reply. */}
+    {/* A small text button that opens the question box. */}
     <Pressable accessibilityRole="button" accessibilityLabel={label("질문하기", "Ask a question")} accessibilityState={{expanded,disabled:busy || photos.reading}}
       aria-expanded={expanded} disabled={busy || photos.reading} onPress={toggle} style={{paddingVertical:4}}>
       <Text style={{color:c.foregroundMuted,fontSize:12,textDecorationLine:"underline",opacity:busy || photos.reading ? 0.6 : 1}}>{t("질문하기", "Ask a question")}</Text>
     </Pressable>
-    {suggestion && card && recipientId && <Button theme={theme} label={t(...suggestion.label)} accessibilityLabel={label(...suggestion.label)}
-      disabled={busy || photos.reading} onPress={draftSuggestion} />}
     {expanded && <View style={{width:"100%",gap:6}}>
       {!card || !recipientId ? <Text style={{color:c.foregroundMuted}}>{t("질문을 보낼 세션을 확인할 수 없습니다.", "No verified session is available for this question.")}</Text> : <>
         <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>{t("질문 받을 세션", "Question recipient")} · {recipientTitle || recipientId}</Text>

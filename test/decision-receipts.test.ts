@@ -107,6 +107,20 @@ describe("a sent reply stays as a folded card", () => {
     expect(settleReceipt(waiting, undefined, now)).toBe(waiting);
   });
 
+  test("a ledger reply stays through its follow-up until the card is taken down", () => {
+    const now = sentAt + 60_000;
+    // The session answered, but the card is still on the ledger: what was asked may still be open.
+    const ledger = sent({ untilRemoved: true });
+    expect(settleReceipt(ledger, entry({ response: "It needs a server we do not run." }), now)).toBe(ledger);
+    expect(settleReceipt(ledger, entry({ response: "ok" }), now + 60_000)).toBe(ledger);
+    // Taken down: shown once more, then folded. A day still folds it either way.
+    const down = settleReceipt(ledger, entry({ response: "ok", cardRemoved: true }), now);
+    expect(down).toMatchObject({ settled: true });
+    expect(down.hidden).toBeFalsy();
+    expect(settleReceipt(down, entry({ response: "ok", cardRemoved: true }), now).hidden).toBe(true);
+    expect(settleReceipt(ledger, entry({ response: "ok" }), sentAt + RECEIPT_KEEP_MS).hidden).toBe(true);
+  });
+
   test("a card taken down from the ledger folds on the next refresh", () => {
     const now = sentAt + 60_000;
     const first = settleReceipt(sent(), entry({ cardRemoved: true }), now);

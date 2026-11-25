@@ -16,6 +16,8 @@ import { PhotoComposer, usePhotoDraft } from "./photo-composer";
 import { QuestionContext } from "./question-context";
 import { choiceRequest, decisionChoiceNotice } from "./choice-display";
 import { foldsAsk } from "./card-steps";
+import { cardInputPlaceholder, sendWords, withRequest } from "./card-input";
+import { applyBlockChoice, applyBlockPicks, blockPicks, blockQuestionLabel, recommendedBlockPicks } from "../shared/question-block";
 
 type Action = DecisionInput["action"];
 type CoordinationDraft = { text: string; recipientId: string };
@@ -29,14 +31,15 @@ export function ReceiptText({ receipt, theme }: { receipt: DecisionReceipt; them
   const name = receipt.recipient || t("코디네이터 세션", "coordinator session");
   const kind = receipt.action;
   return <Text accessibilityLiveRegion="polite" selectable style={{ color: theme.colors.statusSuccess }}>
-    {receipt.project} · {receipt.source} · {t(`${name}에 ${korean[kind]}을 보냈습니다.`, `Sent a ${english[kind]} to ${name}.`)}
+    {receipt.project} · {receipt.source} · {kind === "reply" ? t(`${name}에 보냈습니다.`, `Sent to ${name}.`) : t(`${name}에 ${korean[kind]}을 보냈습니다.`, `Sent a ${english[kind]} to ${name}.`)}
   </Text>;
 }
 
 export function DecisionActions({ card, theme, hostLabel, coordinator, coordinatorTitle, open, onSent, receipt, clarification: renderClarification, pendingRequests, priorityLabel, embedded = false }: {
   card: Card; theme: Theme; hostLabel?: string; coordinator: string | null; coordinatorTitle?: string; open?: (id: string) => void;
   onSent: (result: DecisionReceipt) => void; receipt?: DecisionReceipt; pendingRequests?: ReactNode; priorityLabel?: string; embedded?: boolean;
-  // The question box. Its earlier questions and answers show with the card's evidence.
+  // "history" is the earlier questions and answers, shown with the card's evidence. "ask" is the question box of an
+  // approval request card, the only thing the board can send from that card.
   clarification?: (part: "ask" | "history") => ReactNode;
 }) {
   const { t, language } = useBoardLanguage();
@@ -74,7 +77,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   // The header keeps the project and how long the card has waited. The session and host move to the evidence.
   const marker = [session.projectTitle, priorityLabel].filter(Boolean).join(" · ");
   const origin = [session.title, hostLabel && t(`실행 호스트 · ${hostLabel}`, `Host · ${hostLabel}`), session.sourceProjectTitle && t(`원래 소속 ${session.sourceProjectTitle}`, `From ${session.sourceProjectTitle}`)].filter(Boolean).join(" · ");
-  const clarification = renderClarification?.("ask");
+  const words = sendWords("decision", "session");
   const named = (label: string) => ({ label, accessibilityLabel: `${session.title} · ${label}` });
 
   function selectReply(index: number | null) {
@@ -131,6 +134,13 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   const choiceNotice = formal ? null : decisionChoiceNotice(decision);
   // A coordinator card that names options without carrying them goes back to the coordinator through the usual request box.
   const completion = decision?.source === "coordinator" && canCoordinate ? choiceRequest(choiceNotice, true) : null;
+  // A session that named options without explaining them is asked in the card's own input. The person still sends it.
+  const explanation = decision?.source === "conversation" ? choiceRequest(choiceNotice, false) : null;
+  // A question block the session ended its message with. Its options fill the input, and the input's text says what is chosen.
+  const block = formal ? undefined : decision?.block;
+  const picks = block ? blockPicks(reply.text, block) : {};
+  const allPicks = block ? recommendedBlockPicks(block, reply.text) : null;
+  const fill = (text: string) => { setSelection(null); setReviewedReply(null); setError(null); setDraft(text); };
   const canRestore = !!decision?.recommendation && !decision.needsInput && (selection !== null || draft !== null);
   const sourceExcerpts = evidence.filter(text => text !== headline);
   const needsInputText = !proposed && !!decision?.needsInput && decision.needsInput !== headline ? decision.needsInput : "";
@@ -185,19 +195,57 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
           <HistoryMarkdown theme={theme} source={needsInputText} preview={needsInputFolds && !askOpen} />
           {needsInputFolds && disclose(askOpen ? t("접기", "Less") : t("더 보기", "More"), askOpen, () => setAskOpen(v => !v))}
         </View>}
+        {block && <View style={{ gap: 10 }}>
+          {block.questions.map((question, index) => {
+            const label = blockQuestionLabel(question);
+            return <View key={index} style={{ gap: 6 }}>
+              {(block.questions.length > 1 || label !== headline) && <HistoryMarkdown theme={theme} source={label} heading />}
+              {!!question.options.length && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
+                {question.multi ? t("여러 개 선택", "Choose any that apply") : t("하나 선택", "Choose one")}
+              </Text>}
+              {question.options.map(option => {
+                const checked = picks[index]?.includes(option.key) ?? false;
+                const title = option.key + " · " + option.text;
+                return <Pressable key={option.key} accessibilityRole={question.multi ? "checkbox" : "radio"}
+                  accessibilityLabel={session.title + " · " + label + " · " + title} accessibilityState={{ checked, disabled: busy }} aria-checked={checked}
+                  disabled={busy} onPress={() => fill(applyBlockChoice(reply.text, block, index, option.key))}
+                  style={{ gap: 4, padding: 8, borderWidth: 1, borderRadius: 7, borderColor: checked ? c.accent : c.border, backgroundColor: checked ? c.surface2 : c.surface0 }}>
+                  <Text style={{ color: c.foreground, fontWeight: checked ? "700" : "500" }}>
+                    {checked ? "✓ " : ""}{title}{option.recommended ? " · " + t("추천", "Recommended") : ""}
+                  </Text>
+                  {showEvidence && ([[t("고르면", "Outcome"), option.does], [t("장점", "Benefits"), option.pros], [t("대가", "Trade-offs"), option.cons]] as const)
+                    .map(([name, text]) => text ? <Text key={name} style={{ color: c.foregroundMuted, fontSize: 12 }}>{name} · {text}</Text> : null)}
+                </Pressable>;
+              })}
+            </View>;
+          })}
+          {!!block.recommend && <View style={{ ...wrap, alignItems: "baseline", flexWrap: "nowrap" }}>
+            <Text style={{ color: c.foregroundMuted, fontSize: 12, fontWeight: "600", flexShrink: 0 }}>{t("추천", "Recommendation")}</Text>
+            <View style={{ flexShrink: 1 }}><HistoryMarkdown theme={theme} source={block.recommend} /></View>
+          </View>}
+          {(allPicks || (!!block.recommendedReply && !reply.text.includes(block.recommendedReply))) && <View style={wrap}>
+            {allPicks && <Button theme={theme} disabled={busy} {...named(t("추천대로 모두 고르기", "Choose all recommendations"))}
+              onPress={() => fill(applyBlockPicks(reply.text, block, allPicks))} />}
+            {!!block.recommendedReply && !reply.text.includes(block.recommendedReply) && <Button theme={theme} disabled={busy}
+              {...named(t("추천 답 넣기", "Use recommendation"))} onPress={() => fill(withRequest(reply.text, block.recommendedReply!))} />}
+          </View>}
+        </View>}
+        {explanation && <View style={wrap}>
+          <Button theme={theme} disabled={busy} {...named(t(...explanation.label))} onPress={() => fill(withRequest(reply.text, t(...explanation.text)))} />
+        </View>}
         {!!decision.options?.length && <View style={wrap}>{decision.options.map((option, index) =>
           <Button key={index} theme={theme} label={option.label} selected={selection === index}
             accessibilityLabel={named(t("선택", "Choose") + " · " + option.label).accessibilityLabel} disabled={busy}
             onPress={() => selectReply(index)} />)}</View>}
         <PhotoComposer theme={theme} draft={replyPhotos} disabled={busy}>
           <DecisionReplyInput {...inputFocus} send={sendReply} theme={theme} value={reply.text} onChangeText={setDraft}
-            accessibilityLabel={named(t("답장 내용", "Reply text")).accessibilityLabel}
-            placeholder={t("작업 세션에 보낼 답을 입력하세요", "Write a reply to the work session")}
+            accessibilityLabel={named(t("보낼 내용", "Message text")).accessibilityLabel}
+            placeholder={t(...cardInputPlaceholder.decision)}
             maxLength={24000} disabled={busy} reviewRequired={reply.needsReview} onReview={() => setReviewedReply(proposed ?? null)} />
         </PhotoComposer>
         <View style={{ ...wrap, alignItems: "center" }}>
-          <SendButton theme={theme} {...named(t("작업 세션에 답장 보내기", "Send reply to work session"))} send={sendReply} selected={!sendReply.disabled} />
-          {clarification}
+          <SendButton theme={theme} label={t(...words.label)} accessibilityLabel={named(t(...words.name)).accessibilityLabel} send={sendReply} selected={!sendReply.disabled} />
+          {words.to && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{t(...words.to)}</Text>}
         </View>
         <View style={{ ...wrap, alignItems: "center" }}>
           {!proposed && !decision.needsInput && coordinator && (adviceSent
@@ -225,7 +273,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
         </View>
       </View>}
     </>}
-    {(formal || !decision || coordination) && clarification}
+    {(formal || !decision) && renderClarification?.("ask")}
     <View style={{ alignItems: "flex-start", gap: 4 }}>
       {disclose(showEvidence ? t("근거·이력 접기", "Hide evidence and history") : t("근거·이력 보기", "Evidence and history"), showEvidence, () => setShowEvidence(v => !v))}
       {showEvidence && !!origin && <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{t("작업 세션", "Work session")} · {origin}</Text>}

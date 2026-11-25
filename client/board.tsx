@@ -19,6 +19,7 @@ import { latestMergeNotification } from "./merge-notification";
 import { decisionSummary } from "./decision-summary";
 import { matchesWorkspace } from "../shared/workspace-pull";
 import { ownerRunning } from "../shared/pull-judgments";
+import { changeRequestRecipient, takesChangeRequest } from "../shared/pull-change-requests";
 import { kanbanPull, linkedHosts, mergeHoldDetails, mergeRecordLinks, seenElsewhere, snapshotHoldSessions } from "../shared/merge-hold";
 import type { PullRequestItem } from "../shared/prs";
 import { getPaseoClient, type PluginScreenProps } from "@getpaseo/plugin/client";
@@ -28,8 +29,6 @@ import { ScrollView, Text, View } from "react-native";
 import { DecisionActions, type DecisionReceipt } from "./decision-actions";
 import { PendingRequests } from "./pending-request-forms";
 import { Clarification } from "./clarification";
-import { cardChoiceNotice, choiceRequest, decisionChoiceNotice, type ChoiceNotice } from "./choice-display";
-import { ledgerChoiceGaps } from "../shared/choice-gaps";
 import { clarificationKey, clarificationRecipient, sessionClarificationCard, trackedClarificationCard, type ClarificationCard } from "../shared/clarifications";
 import { SessionLinks } from "./session-links";
 import { useRemoteRunning, RemoteRunning } from "./remote-running";
@@ -259,18 +258,18 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     setInlineReceipts(previous => previous.some(entry => entry.actionKey === action.actionKey && entry.rowKey === action.rowKey)
       ? previous : [...previous, { ...action, order: orderedKeys, ...(action.status === "sent" ? { sentAt: Date.now() } : {}) }]);
   }
-  function questionFor(card: ClarificationCard | null, title: string, prior?: TrackedDecision["qa"], onDraftChange?: (active:boolean) => void, ownerId?: string | null, notice?: ChoiceNotice | null, part: "all" | "ask" | "history" = "all") {
+  // Cards have one input, so the question box ("ask") is left to approval request cards, where a question is all the
+  // board can send. Other cards show only the earlier questions and answers ("history").
+  function questionFor(card: ClarificationCard | null, title: string, part: "ask" | "history", prior?: TrackedDecision["qa"], ownerId?: string | null) {
     if (!snapshot) return null;
     const recipientId = card ? clarificationRecipient(card, snapshot) : null;
     const recipientTitle = ownerId && ownerId === recipientId ? t("운영 코디네이터", "Ledger owner") + " · " + ownerId
       : snapshot.sessions.find(row => row.id === recipientId)?.title;
-    const toCoordinator = !!recipientId && (recipientId === snapshot.coordinator || recipientId === ownerId);
-    return <Clarification key={card ? clarificationKey(card) : title} title={title} card={card} theme={theme} suggestion={choiceRequest(notice ?? null, toCoordinator)}
-      recipientId={recipientId} recipientTitle={recipientTitle} entries={snapshot.clarifications ?? []} prior={prior} onRefresh={onRefresh} onDraftChange={onDraftChange} part={part} />;
+    return <Clarification key={card ? clarificationKey(card) : title} title={title} card={card} theme={theme}
+      recipientId={recipientId} recipientTitle={recipientTitle} entries={snapshot.clarifications ?? []} prior={prior} onRefresh={onRefresh} part={part} />;
   }
   const renderDecision = (card: Card, embedded = false, rowKey?: string, priority?: string) => <DecisionActions key={JSON.stringify([card.session.projectId, card.session.id, card.session.decision?.version])}
-          clarification={embedded ? undefined : part => questionFor(sessionClarificationCard(card.session,card.note),card.session.title,undefined,undefined,undefined,
-            card.session.decision?.source === "conversation" ? decisionChoiceNotice(card.session.decision) : null, part)}
+          clarification={embedded ? undefined : part => questionFor(sessionClarificationCard(card.session,card.note),card.session.title,part)}
           embedded={embedded} priorityLabel={priority} card={card} hostLabel={card.session.assignment?.label ?? hostLabel} theme={theme} coordinator={snapshot!.coordinator} coordinatorTitle={snapshot!.sessions.find(s => s.id === snapshot!.coordinator)?.title}
           open={actions.onOpen} receipt={receipts.find(r => matches(r, card))}
           pendingRequests={card.session.nativePending && !card.session.serverId && hostId ? <PendingRequests key={JSON.stringify([hostId, card.session.id])} hostId={hostId}
@@ -313,6 +312,11 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     }
     return { owner, source: target && { kind: "unavailable" } };
   }
+  // Who takes a merge card's change request: the PR's work session, or the coordinator.
+  function changeTarget(pr: PullRequestItem) {
+    const recipient = changeRequestRecipient(pr, snapshot?.sessions ?? [], snapshot?.coordinator ?? null);
+    return recipient && { ...recipient, title: snapshot?.sessions.find(row => row.id === recipient.id)?.title };
+  }
   function renderPull(pr:PullRequestItem, projectId:string, decision=false, securityGate=false, embedded=false, rowKey?: string, scope: (string | null)[] = pr.projectIds, priority?: string) {
     const workSessions:WorkSessionLink[] = [];
     const localLink = (s:NonNullable<typeof snapshot>["sessions"][number]) => {
@@ -345,7 +349,13 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     const remoteSession = remoteTarget && onOpenHostSession ? {...remoteTarget, states: workSessionStates, fresh: freshWorkSessionStates, open: onOpenHostSession} : undefined;
     return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions} remoteSession={remoteSession} hold={pullHold(pr)}
       remoteElsewhere={seenElsewhere(holdDetails, pr, remoteTarget?.id)}
-      clarification={decision && !embedded && questionFor({kind:"pull",projectId,repo:pr.repo,number:pr.number,updatedAt:pr.updatedAt},pr.repo + " #" + pr.number)}
+      changeRecipient={decision && snapshot ? changeTarget(pr) : undefined} onRefresh={onRefresh}
+      onChangeRequested={sent => {
+        if (rowKey) remember({ rowKey, actionKey: JSON.stringify(["change", pr.repo, pr.number, sent.headSha]), projectIds: scope, status: "sent", kind: "change-request",
+          recipientId: sent.recipientId, title: pr.title, detail: sent.text || undefined,
+          match: { projectId, cardId: pullKey(pr.repo, pr.number), revision: sent.headSha } });
+        onRefresh();
+      }}
       decision={decision} showDivider={!decision || embedded} securityGate={securityGate} openCoordinator={openCoordinator} onResult={notice => {
         const { status } = notice;
         const merged = status === "merged" || status === "already-merged";
@@ -366,8 +376,8 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           // A card offers its fallback only when it has no recipient.
           const reaches = route?.recipientId ?? route?.fallbackId;
           return <TrackedDecisionCard links={recordLinks(item, !native, route?.fallbackId)} key={item.key} item={item} theme={theme}
-            renderClarification={(onDraftChange, part) => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined,
-              item.kind === "merge" ? null : cardChoiceNotice(ledgerChoiceGaps(item)), part)}
+            renderClarification={() => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,"history",item.qa,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined)}
+            pullTakesInput={!!pr && takesChangeRequest(pr, mentionsSecurityGate(item))}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
               : pr && renderPull(pr, pr.projectIds.includes(item.projectId ?? "") ? item.projectId! : pr.projectIds[0], true, mentionsSecurityGate(item), true, rowKey, [item.projectId])}
             route={route} keepsUnsent={!!rowKey}
@@ -382,7 +392,8 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
                   recipientId: status === "sent" ? recipientId : undefined,
                   // A sent reply's folded card opens to the reply itself, so it carries only what was sent.
                   title: item.title, detail: status === "sent" ? answer || undefined : answer || item.projectTitle || projectName(item.projectId),
-                  ...(status === "sent" ? { match: { projectId: item.projectId, cardId: item.id, revision } } : {}) });
+                  // What was sent may have been a question, so the folded card stays until the ledger takes the card down.
+                  ...(status === "sent" ? { match: { projectId: item.projectId, cardId: item.id, revision }, untilRemoved: true } : {}) });
               }
               if (rowKey && mode && answer && (reason === "removed" || reason === "conflict")) {
                 remember({ rowKey, actionKey: unsentActionKey(item), projectIds: [item.projectId], status: "unsent", title: item.title, detail: answer });

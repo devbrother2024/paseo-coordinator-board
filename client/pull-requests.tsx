@@ -1,6 +1,6 @@
 import { useDecisionInteraction } from "./decision-editing";
 import { useRpc } from "@getpaseo/plugin/client";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Text, TextInput, View } from "react-native";
 import { confirmPullRequestMerge, previewPullRequestMerge, readPullLifecycle, setProjectRepository, type MergeMethod, type MergePreview, type MergeReason, type MergeResult, type PullRequestView } from "../shared/prs";
 import { Button, SessionChip, type Theme } from "./controls";
@@ -13,6 +13,11 @@ import { confirmAfterLookup, mergeConfirmation, pullSessionNote, remoteSessionVi
 import { afterConfirm, announceBoardMerge, onBoardMerge, reopenPreview, reopensAfterMerge } from "./merge-flow";
 import type { MergeWaitReason } from "../shared/merge-card-place";
 import { mergeHoldWords, type MergeHold } from "../shared/merge-hold";
+import { changeRequestWords, requestPullChanges, takesChangeRequest, withdrawPullChangeRequest } from "../shared/pull-change-requests";
+import { cardInputPlaceholder, sendWords } from "./card-input";
+import { DecisionReplyInput } from "./decision-reply";
+import { PhotoComposer, usePhotoDraft } from "./photo-composer";
+import { SendButton } from "./send-input";
 
 type PullRequest = PullRequestView["items"][number];
 
@@ -142,8 +147,15 @@ export function WaitingMergeRow({repo, number, title, why, theme}: {repo:string;
   </View>;
 }
 
-export function PullRequestCard({ pr, projectId, theme, decision = false, showDivider = true, securityGate = false, openCoordinator, workSessions, remoteSession, onResult, clarification, priorityLabel, hold, remoteElsewhere = false }: {
-  pr: PullRequest; projectId: string; theme: Theme; workSessions: WorkSessionLink[]; remoteSession?: RemotePullSession; hold?: MergeHold; remoteElsewhere?: boolean; decision?: boolean; showDivider?: boolean; securityGate?: boolean; openCoordinator?: () => void; onResult: (notice: MergeNotice) => void; clarification?: ReactNode; priorityLabel?: string;
+// Who takes a merge card's change request. null: no work session or coordinator can.
+export type ChangeRequestTarget = { id: string; coordinator: boolean; title?: string } | null;
+
+export function PullRequestCard({ pr, projectId, theme, decision = false, showDivider = true, securityGate = false, openCoordinator, workSessions, remoteSession, onResult, changeRecipient, onChangeRequested, onRefresh, priorityLabel, hold, remoteElsewhere = false }: {
+  pr: PullRequest; projectId: string; theme: Theme; workSessions: WorkSessionLink[]; remoteSession?: RemotePullSession; hold?: MergeHold; remoteElsewhere?: boolean; decision?: boolean; showDivider?: boolean; securityGate?: boolean; openCoordinator?: () => void; onResult: (notice: MergeNotice) => void; priorityLabel?: string;
+  // The merge card's one input: a change request sent instead of merging. Left out, the card has no input.
+  changeRecipient?: ChangeRequestTarget;
+  onChangeRequested?: (sent: { recipientId: string; text: string; headSha: string }) => void;
+  onRefresh?: () => void;
 }) {
   const { t } = useBoardLanguage();
   const c = theme.colors;
@@ -153,7 +165,13 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   const [method, setMethod] = useState<MergeMethod | null>(null);
   const [notice, setNotice] = useState<MergeNotice | null>(null);
   const [lookupError, setLookupError] = useState(false);
-  const [busy, setBusy] = useState<"read" | "merge" | null>(null);
+  const [busy, setBusy] = useState<"read" | "merge" | "ask" | null>(null);
+  const ask = useRpc(requestPullChanges);
+  const withdraw = useRpc(withdrawPullChangeRequest);
+  const [changeText, setChangeText] = useState("");
+  const [changeError, setChangeError] = useState<readonly [string, string] | null>(null);
+  const changePhotos = usePhotoDraft();
+  const changeRetry = useRef({ signature: "", key: "" });
   const [runningPrompt, setRunningPrompt] = useState(false);
   // Shown above a preview the board read again on its own, and the recheck button after a stop.
   const [reopened, setReopened] = useState<readonly [string, string] | null>(null);
@@ -166,7 +184,9 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   const target = pr.repo + " #" + pr.number;
   const named = (label: string) => ({label, accessibilityLabel: target + " · " + label});
   const ready = !securityGate && !!projectId && pr.lane === "review" && pr.reason === "ready" && notice?.status !== "merged" && notice?.status !== "already-merged";
-  useDecisionInteraction(!!busy || runningPrompt || (ready && !!preview));
+  const inputFocus = useDecisionInteraction(!!busy || runningPrompt || (ready && !!preview) || !!changeText.trim() || changePhotos.blocked || !!changePhotos.photos.length);
+  const takesInput = decision && changeRecipient !== undefined && ready && takesChangeRequest(pr, securityGate);
+  const changeWords = sendWords("merge", changeRecipient ? (changeRecipient.coordinator ? "coordinator" : "session") : undefined);
   const words = pullStatusWords(pr);
   const lookup = useRemotePullSession(remoteSession);
   const remote = lookup?.shown;
@@ -251,6 +271,38 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
     if (feedback.status === "merged") announceBoardMerge(pr.repo, pr.number);
     setNotice(feedback); setRecheck(step === "recheck"); onResult(feedback);
   }
+  // Sends what the person wrote instead of merging. The board then takes this merge card down for this head.
+  async function requestChanges() {
+    const recipientId = changeRecipient?.id, headSha = pr.headSha;
+    if (!takesInput || !recipientId || !headSha || locked.current || changePhotos.blocksSubmit()) return;
+    const attachments = changePhotos.latest.current;
+    const text = changeText.trim();
+    if (!text && !attachments.length) return;
+    const signature = JSON.stringify([pr.repo, pr.number, headSha, recipientId, text, attachments.map(photo => photo.id)]);
+    if (changeRetry.current.signature !== signature) changeRetry.current = { signature, key: "change-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2) };
+    locked.current = true; setBusy("ask"); setChangeError(null);
+    try {
+      const result = await ask({ ...args, headSha, recipientId, text, requestKey: changeRetry.current.key,
+        ...(attachments.length ? { images: attachments.map(photo => photo.image) } : {}) });
+      if (result.status === "sent") {
+        setChangeText(""); changePhotos.clear(); setPreview(null); setMethod(null);
+        onChangeRequested?.({ recipientId: result.recipientId ?? recipientId, text, headSha });
+      } else {
+        setChangeError(changeRequestWords[result.status]);
+        if (result.status === "changed") onRefresh?.();
+      }
+    } catch { setChangeError(changeRequestWords.unconfirmed); }
+    finally { locked.current = false; setBusy(null); }
+  }
+  // Reopens the merge card after a change request. Nothing is sent.
+  async function reopenCard() {
+    if (locked.current || !pr.headSha) return;
+    locked.current = true; setBusy("ask");
+    try { await withdraw({ ...args, headSha: pr.headSha }); }
+    catch { /* The refreshed card shows whether it reopened. */ }
+    finally { locked.current = false; setBusy(null); onRefresh?.(); }
+  }
+  const sendChange = { disabled: !!busy || changePhotos.blocked || !changeRecipient || (!changeText.trim() && !changePhotos.photos.length), onPress: () => void requestChanges() };
   return <View style={[{gap: 6}, showDivider && {borderTopColor: c.border, borderTopWidth: 1, paddingVertical: 8}]}>
     <View style={{ ...wrap, alignItems: "baseline" }}>
       <GitHubPullLink repo={pr.repo} number={pr.number} theme={theme} />
@@ -301,9 +353,34 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
         <Button theme={theme} {...named(t("취소", "Cancel"))} disabled={!!busy} onPress={() => { setPreview(null); setMethod(null); }} />
       </View>
     </View>}
-    {((ready && !preview) || clarification) && <View style={wrap}>
-      {ready && !preview && !runningPrompt && <Button theme={theme} {...named(busy === "read" ? t("병합 정보 조회 중…", "Loading merge details…") : recheck ? t("최신 정보로 다시 확인", "Check the latest again") : t("보드에서 병합", "Merge on board"))} selected={decision} disabled={!!busy || gate === "wait"} onPress={() => void inspect()} />}
-      {clarification}
+    {ready && !preview && !runningPrompt && <View style={wrap}>
+      <Button theme={theme} {...named(busy === "read" ? t("병합 정보 조회 중…", "Loading merge details…") : recheck ? t("최신 정보로 다시 확인", "Check the latest again") : t("보드에서 병합", "Merge on board"))} selected={decision} disabled={!!busy || gate === "wait"} onPress={() => void inspect()} />
+    </View>}
+    {takesInput && !preview && (changeRecipient ? <View style={{gap: 6}}>
+      <PhotoComposer theme={theme} disabled={!!busy} draft={changePhotos}>
+        <DecisionReplyInput {...inputFocus} send={sendChange} theme={theme} value={changeText} onChangeText={setChangeText}
+          accessibilityLabel={named(t("수정 요청 내용", "Change request text")).accessibilityLabel}
+          placeholder={t(...cardInputPlaceholder.merge)} maxLength={4000} disabled={!!busy} />
+      </PhotoComposer>
+      <View style={{...wrap, alignItems: "center"}}>
+        <SendButton theme={theme} label={busy === "ask" ? t("보내는 중…", "Sending…") : t(...changeWords.label)}
+          accessibilityLabel={named(t(...changeWords.name)).accessibilityLabel} send={sendChange} />
+        {changeWords.to && <Text selectable style={{color: c.foregroundMuted, fontSize: 12}}>
+          {t(...changeWords.to)}{changeRecipient.title ? " · " + changeRecipient.title : ""}
+        </Text>}
+      </View>
+      <Text style={{color: c.foregroundMuted, fontSize: 12}}>
+        {t("보내면 이 병합 카드는 내려가고, 새 커밋이 올라오면 다시 판단을 거쳐 뜹니다.", "Sending takes this merge card down. A new commit goes through review again before it returns.")}
+      </Text>
+    </View> : <Text style={{color: c.foregroundMuted, fontSize: 12}}>
+      {t("수정 요청을 받을 작업 세션이나 코디네이터가 없습니다.", "No work session or coordinator can take a change request.")}
+    </Text>)}
+    {changeError && <Text accessibilityLiveRegion="polite" selectable style={{color: c.statusWarning}}>{t(changeError[0], changeError[1])}</Text>}
+    {pr.gate === "change-requested" && !!pr.headSha && !!projectId && onRefresh && <View style={{...wrap, alignItems: "center"}}>
+      <Text style={{color: c.foregroundMuted, fontSize: 13, flexShrink: 1}}>
+        {t("새 커밋이 올라오면 다시 판단을 거쳐 병합 카드가 뜹니다.", "A new commit goes through review again before the merge card returns.")}
+      </Text>
+      <Button theme={theme} {...named(t("병합 카드 다시 열기", "Reopen merge card"))} disabled={!!busy} onPress={() => void reopenCard()} />
     </View>}
     {lookupError && <Text accessibilityLiveRegion="polite" style={{color:c.statusWarning}}>{t("병합 정보를 불러오지 못했습니다. 다시 조회하거나 GitHub에서 확인하세요.", "Could not load merge details. Try again or open GitHub.")}</Text>}
     {notice && notice.status !== "merged" && notice.status !== "already-merged" && <MergeFeedback notice={notice} theme={theme} />}

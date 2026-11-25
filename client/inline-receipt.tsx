@@ -9,7 +9,7 @@ import { useBoardLanguage } from "./language";
 const statusLabel = {
   merged: ["병합 완료", "Merged"],
   "already-merged": ["이미 병합됨", "Already merged"],
-  sent: ["답장 보냄", "Reply sent"],
+  sent: ["보냄", "Sent"],
   "already-closed": ["이미 처리됨", "Already handled"],
   unsent: ["보내지 못한 답", "Reply not sent"],
 } as const;
@@ -21,7 +21,7 @@ export function InlineDecisionReceipt({ receipt, theme, onOpen, onDismiss, entry
   const { t, language } = useBoardLanguage();
   const [open, setOpen] = useState(false);
   const c = theme.colors;
-  const words = statusLabel[receipt.status];
+  const words = receipt.kind === "change-request" ? (["수정 요청 보냄", "Change request sent"] as const) : statusLabel[receipt.status];
   const delivery = mergeNotificationLabel(receipt.notification, t);
   const recipientId = receipt.status === "sent" && receipt.recipientId;
   const unsent = receipt.status === "unsent";

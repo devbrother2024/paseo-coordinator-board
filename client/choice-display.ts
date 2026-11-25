@@ -81,7 +81,7 @@ export function cardChoiceNotice(gaps: ChoiceGaps): ChoiceNotice | null {
 export type ChoiceRequest = { label: Bilingual; text: Bilingual };
 
 /**
- * The draft a button puts into an existing question box. A work session is asked to explain its options;
+ * The draft a button puts into the card's input. A work session is asked to explain its options;
  * a coordinator is asked to complete the card. The person still reads and sends it.
  */
 export function choiceRequest(notice: ChoiceNotice | null, toCoordinator: boolean): ChoiceRequest | null {

@@ -24,7 +24,8 @@ import {
   recordHeaderParts, stepText, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps, type Step,
 } from "./card-steps";
 import { ledgerChoiceGaps } from "../shared/choice-gaps";
-import { cardChoiceNotice } from "./choice-display";
+import { cardChoiceNotice, choiceRequest } from "./choice-display";
+import { cardInputPlaceholder, openQuestionsBlock, sendWords, withRequest } from "./card-input";
 
 import { TrackedSessionChips, type TrackedSessionLinks } from "./tracked-session-chips";
 
@@ -39,14 +40,16 @@ export type TrackedOutcome = {
 type Outcome = TrackedOutcome & { fingerprint: string };
 type Props = {
   item: TrackedDecision; theme: Theme; route?: TrackedReplyRoute; blockedNote?: string; links: TrackedSessionLinks; children?: ReactNode; pull?: ReactNode;
-  // "ask" is the question box beside the reply; "history" is the earlier questions and answers inside the evidence.
-  renderClarification?: (onDraftChange:((active:boolean) => void) | undefined, part: "ask" | "history") => ReactNode;
+  // The earlier questions and answers, shown inside the evidence. The card has one input, so there is no question box.
+  renderClarification?: () => ReactNode;
+  // The merge card inside this card takes the change request, so this card adds no input of its own.
+  pullTakesInput?: boolean;
   // The digest row keeps an unsent reply as a receipt after the card leaves the list.
   keepsUnsent?: boolean;
   onResolved: (outcome: TrackedOutcome) => Promise<void> | void;
 };
 const messages = {
-  sent: ["답을 전송하고 기록을 닫았습니다.", "Reply sent and record closed."],
+  sent: ["보냈습니다. 받는 세션이 처리하면 카드가 내려가고, 다시 물으면 새 내용으로 열립니다.", "Sent. The card comes down once the session handles it, and opens again with new content if it asks back."],
   queued: ["자동 전송 대기 중", "Queued for automatic delivery"],
   busy: ["받는 세션이 작업 중이거나 권한 확인을 기다립니다. 대기 상태가 되면 보낼 수 있습니다.", "The recipient is busy or waiting for permission. Send when it is idle."],
   unconfirmed: ["전송 결과를 아직 확인할 수 없습니다. 같은 답으로 다시 누르면 수신 내역을 확인합니다.", "Delivery is unconfirmed. Retry the same answer to check the recipient’s history."],
@@ -111,7 +114,7 @@ function focusNode(node: View | null) {
 }
 
 // Keyed by card, not revision, so a display-only update keeps the draft, photos, current question and focus.
-export function TrackedDecisionCard({ item, theme, links, route, blockedNote, onResolved, children, pull, renderClarification, keepsUnsent }: Props) {
+export function TrackedDecisionCard({ item, theme, links, route, blockedNote, onResolved, children, pull, renderClarification, keepsUnsent, pullTakesInput = false }: Props) {
   const { t } = useBoardLanguage();
   const resolve = useRpc(resolveTrackedDecision);
   const cancel = useRpc(cancelQueuedReply);
@@ -140,7 +143,6 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   },[queue,result]);
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [hasQuestionDraft, setHasQuestionDraft] = useState(false);
   const attachments = usePhotoDraft();
   const pending = useRef(false);
   const c = theme.colors;
@@ -150,6 +152,8 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const headline = isMerge ? undefined : item.ask[0];
   const securityGate = mentionsSecurityGate(item);
   const choiceNotice = isMerge ? null : cardChoiceNotice(ledgerChoiceGaps(item));
+  // A ready request for a card that names options without carrying them. It only fills the card's input.
+  const completion = choiceRequest(choiceNotice, item.where !== "session");
   const articleChoice = item.questions.length === 1 && /(?:글|블로그|blog|article)/i.test(item.questions[0].text);
   const followupTitle = articleChoice ? t("글 작성 선택", "Article writing choice") : t("후속 질문", "Follow-up questions");
   const source = item.projectTitle || item.projectId;
@@ -162,7 +166,9 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const template = /<[^>]+>/.test(example);
   const suggestion = trackedSuggestion(item, t("확인했어요", "I checked this"));
   const freeReply = editedReply ?? "";
-  const { freeEditor, carried, orphaned } = trackedDraftLayout(item, freeReply, attachments.photos);
+  const { freeEditor, carried, orphaned } = trackedDraftLayout(item, freeReply, attachments.photos, pullTakesInput);
+  // Without questions and with the merge card taking the input, this card has nothing of its own to send.
+  const ownsInput = freeEditor || carried || item.questions.length > 0;
   const questionText = item.questions.map((question, index) => typed[index] ?? question.options
     .filter(option => selected[index]?.includes(optionId(option)))
     .map(option => option.key + " · " + option.text).join(", "));
@@ -174,11 +180,13 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
     return [text, positions.length ? t("첨부 사진 ", "Attached photos ") + positions.join(", ") : ""].filter(Boolean).join(" · ");
   });
   const answered = replies.map((value, index) => !!value || !!skipped[index]);
-  const outstanding = answered.some(done => !done);
   const hasPhotos = attachments.photos.length > 0;
+  // Open questions hold the send button only while the card's input is empty: a question or a change request written
+  // there goes out without answering them.
+  const outstanding = openQuestionsBlock(answered.some(done => !done), freeEditor || carried ? freeReply : "",
+    attachments.photos.filter(photo => photo.questionIndex === undefined).length);
   const lead = trackedAnswerLead(item, replies, freeReply, hasPhotos);
   const answer = trackedAnswerText(item, replies, freeReply, leadRemoved ? "" : lead);
-  const followupOnly = isMerge && item.questions.length > 0;
   const owned = usesSourceCoordinator(item);
   const coordinatorCard = item.where === "manager" || item.where === "human";
   const recipientId = route?.recipientId ?? null;
@@ -189,14 +197,10 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const changedOwner = owned && ownerChanged;
   const fallbackOwnerChanged = item.sourceCoordinatorId !== undefined && ownerChanged;
   const fallbackName = item.sourceCoordinatorId !== undefined ? t("운영 코디네이터", "ledger owner") : t("코디네이터", "coordinator");
-  const sendLabel = owned
-    ? followupOnly ? t("운영 코디네이터에 후속 답장 보내기", "Send follow-up reply to ledger owner") : t("운영 코디네이터에 답장 보내기", "Send reply to ledger owner")
-    : item.where === "session"
-    ? followupOnly ? t("작업 세션에 후속 답장 보내기", "Send follow-up reply to work session") : t("작업 세션에 답장 보내기", "Send reply to work session")
-    : followupOnly ? t("코디네이터에 후속 답장 보내기", "Send follow-up reply to coordinator") : t("코디네이터에 답장 보내기", "Send reply to coordinator");
+  const words = sendWords("decision", owned ? "owner" : item.where === "session" ? "session" : "coordinator");
   const hasAnswer = Boolean(answer || hasPhotos);
   const tooLong = answer.length > 4000;
-  const hasDraft = hasQuestionDraft || hasPhotos || !!editedReply?.trim() || questionText.some(value => !!value.trim());
+  const hasDraft = hasPhotos || !!editedReply?.trim() || questionText.some(value => !!value.trim());
   const hasAnswerDraft = hasPhotos || !!editedReply?.trim() || questionText.some(value => !!value.trim()) || Object.values(skipped).some(Boolean);
   const basis = trackedReplyBasis(item, trackedBasisRecipient(item, route, redirected));
   const [confirmedBasis, setConfirmedBasis] = useState(basis);
@@ -204,7 +208,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const basisChanged = hasAnswerDraft && basis !== confirmedBasis;
   const answerDisabled = busy || attachments.blocked || !hasAnswer || outstanding || tooLong || basisChanged || awaitingRevision || orphaned.length > 0;
   const sendReply = { disabled: !canReply || !recipientId || redirected || !recordActions || answerDisabled || changedOwner || !!blockedNote, onPress: () => void acknowledge("send") };
-  const offer = trackedReplyOffer(route, redirected, hasAnswerDraft || hasQuestionDraft);
+  const offer = trackedReplyOffer(route, redirected, hasAnswerDraft);
   const offersFallback = offer.fallback;
   const unreachable = !offer.form;
   const stepped = usesSteps(item.questions, canReply);
@@ -442,6 +446,13 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
         onPress={() => setAskOpen(open => !open)} />}
     </View>}
     {choiceNotice && <Text accessibilityLiveRegion="polite" selectable style={{ color: c.statusWarning, fontSize: 13 }}>{t(...choiceNotice.notice)}</Text>}
+    {completion && canReply && showForm && !unreachable && (freeEditor || item.questions.length === 1) && <View style={wrap}>
+      <Button theme={theme} disabled={busy} {...named(t(...completion.label))} onPress={() => {
+        const request = t(...completion.text);
+        if (freeEditor) setEditedReply(current => withRequest(current ?? "", request));
+        else setAnswers(draft => typeAnswer(draft, 0, withRequest(draft.typed[0] ?? "", request)));
+      }} />
+    </View>}
     {canReply && children}
     {!isMerge && !!item.recommend.filter(line => line !== headline).length && <View style={{ ...wrap, alignItems: "baseline", flexWrap: "nowrap" }}>
       <Text style={{ color: c.foregroundMuted, fontSize: 12, fontWeight: "600", flexShrink: 0 }}>{t("추천", "Recommendation")}</Text>
@@ -493,10 +504,10 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
           {t("질문이 생기기 전에 쓴 답입니다. 질문의 답과 함께 보내니 고치거나 빼 주세요.", "You wrote this before the card had questions. It is sent with your answers, so edit or remove it.")}
         </Text>}
         <PhotoComposer theme={theme} disabled={busy} draft={attachments}>
-          <DecisionReplyInput {...inputFocus} send={stepping ? { disabled: true, onPress: () => {} } : sendReply} theme={theme}
-            accessibilityLabel={item.title + " · " + (carried ? t("질문이 생기기 전에 쓴 답", "Reply written before the questions") : t("답장 내용", "Reply text"))}
+          <DecisionReplyInput {...inputFocus} send={sendReply} theme={theme}
+            accessibilityLabel={item.title + " · " + (carried ? t("질문이 생기기 전에 쓴 답", "Reply written before the questions") : t("보낼 내용", "Message text"))}
             value={freeReply} disabled={busy} maxLength={4000} onChangeText={value => setEditedReply(value)}
-            placeholder={example ? t("예시 · ", "Example · ") + example : t("내 답을 입력하세요", "Write your reply")} />
+            placeholder={example ? t("예시 · ", "Example · ") + example : t(...cardInputPlaceholder.decision)} />
         </PhotoComposer>
         {carried && <View style={wrap}><Button theme={theme} disabled={busy} {...named(t("이 답 빼기", "Remove this reply"))}
           onPress={() => {
@@ -528,14 +539,16 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
         <View style={wrap}><Button theme={theme} {...named(t("바뀐 내용 확인했어요", "I reviewed the changes"))} disabled={busy}
           onPress={() => { setConfirmedBasis(basis); setOutcome(null); }} /></View>
       </View>}
-      {canReply && (!stepped || step === "summary") && <View style={{ gap: 6 }}>
+      {canReply && ownsInput && <View style={{ gap: 6 }}>
         {owned && !links.owner && item.sourceCoordinatorId && <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>
           {t("원장 소유 세션", "Ledger owner session")} · {item.sourceCoordinatorId}
         </Text>}
         {!recipientId && !item.matchedSessionId && <Text style={{color:c.foregroundMuted,fontSize:12}}>{routeText()}</Text>}
         {((changedOwner && recipientId) || (fallbackOwnerChanged && offersFallback)) &&
           <Button theme={theme} label={t("변경된 운영 코디네이터 확인", "Confirm new ledger owner")} onPress={() => setConfirmedOwner(item.sourceCoordinatorId)} />}
-        {outstanding && <Text style={{ color: c.foregroundMuted }}>{t("각 질문에 답하거나 건너뛰기를 선택하세요.", "Answer or explicitly skip each question.")}</Text>}
+        {outstanding && <Text style={{ color: c.foregroundMuted }}>{freeEditor
+          ? t("질문에 모두 답하거나 건너뛰면 보낼 수 있습니다. 질문이나 수정 요청만 보내려면 위 입력창에 적어 주세요.", "Answer or skip every question to send. To send only a question or a change request, write it in the box above.")
+          : t("각 질문에 답하거나 건너뛰기를 선택하세요.", "Answer or explicitly skip each question.")}</Text>}
         {!!lead && recordActions && <View style={{ ...wrap, alignItems: "center" }}>
           <Text selectable style={{ color: leadRemoved ? c.foregroundMuted : c.foreground, fontSize: 12, flexShrink: 1 }}>
             {(leadRemoved ? t("첫 줄 없이 보냄", "Sent without the first line") : t("첫 줄로 함께 보냄", "Sent as the first line")) + " · " + lead}
@@ -544,15 +557,15 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
             onPress={() => setLeadRemoved(removed => !removed)} />
         </View>}
         {blockedNote && (recipientId || fallbackId) && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning, fontSize: 12 }}>{blockedNote}</Text>}
-        {recordActions && <View style={wrap}>
-          {offer.send && <SendButton theme={theme} {...named(sendLabel)} send={sendReply} selected={!sendReply.disabled} />}
+        {recordActions && <View style={{ ...wrap, alignItems: "center" }}>
+          {offer.send && <SendButton theme={theme} label={t(...words.label)} accessibilityLabel={item.title + " · " + t(...words.name)} send={sendReply} selected={!sendReply.disabled} />}
+          {offer.send && words.to && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{t(...words.to)}</Text>}
           {offersFallback && <Button theme={theme} {...named(t(fallbackName + "에게 대신 보내기", "Send to " + fallbackName + " instead"))}
             selected={!answerDisabled && !fallbackOwnerChanged && !blockedNote} disabled={answerDisabled || fallbackOwnerChanged || !!blockedNote}
             onPress={() => void acknowledge("fallback")} />}
         </View>}
       </View>}
     </View>}
-    {canReply && showForm && renderClarification && <View style={{ ...wrap, alignItems: "center" }}>{renderClarification(setHasQuestionDraft, "ask")}</View>}
     <TextButton theme={theme} expanded={expanded} label={expanded ? t("근거·이력 접기", "Hide evidence and history") : t("근거·이력 보기", "Evidence and history")}
       accessibilityLabel={named(expanded ? t("결정 상세 접기", "Hide decision details") : t("결정 상세 보기", "View decision details")).accessibilityLabel}
       onPress={() => setExpanded(value => !value)} />
@@ -580,7 +593,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
           <Text selectable style={{ color: c.foregroundMuted }}>{entry.a ? [t("답", "Answer"), entry.answeredAt, entry.a].filter(Boolean).join(" · ") : t("답변 대기", "Awaiting reply")}</Text>
         </View>)}
       </View>}
-      {canReply && showForm && renderClarification?.(undefined, "history")}
+      {canReply && showForm && renderClarification?.()}
       <Lines theme={theme} pullRepository={pullRepository} title={t("이전 답변", "Previous replies")} lines={item.replyHistory.map(entry => [entry.at, entry.text].filter(Boolean).join(" · "))} />
     </View>}
     {notice && <Text accessibilityLiveRegion="polite" style={{ color: isClosed ? c.statusSuccess : c.statusWarning }}>{notice}</Text>}

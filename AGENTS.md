@@ -19,10 +19,10 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 ### Immutable
 
 - 플러그인 서버가 스스로 시작하는 전송에는 반드시 `sourceAgentId`를 붙인다. 출처 없는 전송은 받는 세션 기록에 사람이 쓴 말과 같은 꼴로 남고, 받는 쪽은 그것을 승인으로 읽을 수 있다. 출처 없는 `send`는 사용자가 화면에서 쓰고 누른 글에만 쓴다(받는 세션이 바빠 대기열에 넣었다가 나중에 보내는 답 포함). 보드가 만든 문장을 그 길로 보내지 않는다.
-  - 근거(비대칭): 보드가 만든 문장을 보내는 `server/board-facts.ts:220`과 `server/merge-notifications.ts:115`는 `sourceAgentId`를 붙인다. 원격 배정의 첫 지시는 `server/dispatch.ts:274`에서 `sourceAgentServerId`도 붙인다. 사용자 글을 보내는 `server/decisions.ts:158`, `server/digest.ts:64`, `server/tracked-decisions.ts:410`, 대기 답장의 `index.server.ts:345`는 붙이지 않는다.
+  - 근거(비대칭): 보드가 만든 문장을 보내는 `server/board-facts.ts:220`과 `server/merge-notifications.ts:115`는 `sourceAgentId`를 붙인다. 원격 배정의 첫 지시는 `server/dispatch.ts:274`에서 `sourceAgentServerId`도 붙인다. 사용자 글을 보내는 `server/decisions.ts:158`, `server/digest.ts:64`, `server/tracked-decisions.ts:412`, 병합 카드 수정 요청의 `server/pull-change-requests.ts:142`, 대기 답장의 `index.server.ts:352`는 붙이지 않는다. 카드 글 앞의 카드 정보(JSON)에는 값만 넣고(`mayBe` 등) 보드가 지은 문장을 넣지 않는다.
   - `server/board-facts.ts:219` 주석대로, 출처를 붙인 전송이 실패하면 출처 없는 전송으로 다시 보내지 않는다. 자동 재시도도 하지 않는다.
 - 권한 요청을 기다리는 세션에는 보내지 않는다. Paseo는 메시지를 받은 세션의 대기 중 권한 요청을 지운다. 새 전송 경로를 만들 때 같은 검사를 넣는다.
-  - 근거(이중 방어): `server/discovery.ts:17`(`canReceiveBoardInput`), `server/merge-notifications.ts:110`, `server/board-facts.ts:201`.
+  - 근거(이중 방어): `server/discovery.ts:17`(`canReceiveBoardInput`), `server/merge-notifications.ts:110`, `server/board-facts.ts:201`, `server/pull-change-requests.ts:120`.
 - 보드는 세션을 다시 띄우지(`reload`) 않고, `/clear`·`/compact`를 대신 보내지 않는다. 코디네이터 대화는 처음 받은 보드 도구 정의를 기억하므로(Claude Code가 대화 기록에 저장해 이어받기에도 다시 보낸다) 다시 띄워도 새 도구를 받지 못하고, 새 대화로 바꾸는 일은 사람이 한다(교체 또는 `/clear` 직접 입력).
   - 근거(테스트 경계): `test/coordinator-tools.test.ts`가 소스에 세션 다시 띄우기 호출과 `/clear`·`/compact` 전송이 없는지 폴더를 내려가며 검사한다. 옛 도구 판정은 코디네이터 대화(`persistence.sessionId`)별 첫 보드 도구 호출 때의 도구 정의 지문과 지금 지문의 비교다(`server/coordinator-tools.ts`). 판단할 수 없으면 알리지 않는다.
 - 코디네이터 도구의 입력 형식을 바꿀 때 새 필드는 선택 항목으로 더하고, 있던 필드를 지우거나 이름을 바꾸지 않으며, 있던 필드의 형식을 좁히지 않는다(`refine`, `max`, `enum` 줄이기 등). 옛 정의를 기억하는 대화는 옛 모양으로 부른다. strict 도구는 그 호출을 형식 검사에서 거절하고, strict가 아닌 도구(`read_board_conversation`, `classify_board_conversation`)는 지운 필드를 조용히 버린다. 어느 쪽이든 보드가 옛 도구 안내를 도구 응답에 붙일 기회가 없다. 도구 이름, 설명, 입력 형식이 바뀌면 지문이 바뀌어 보드가 교체를 안내한다(키 순서, 필수 필드 이름 순서, 설명 공백만 바뀐 것은 같은 지문).
@@ -36,7 +36,7 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 - 외부 명령은 `server/prs.ts:99`의 `run`처럼 `shell:false`, 시간 제한, `maxBuffer`, 대화형 프롬프트를 끈 환경 변수(`GH_PROMPT_DISABLED`, `GIT_TERMINAL_PROMPT`)로 실행한다. 인자는 배열로 넘긴다.
 - GitHub에서 읽은 글(PR 제목 등)은 화면에 내기 전에 제어 문자와 양방향 제어 문자를 지우고 길이를 자른다(`server/prs.ts:64`).
 - 병합은 사용자가 확인한 head 커밋에 고정한다. `expectedHeadOid`로 보내고 SHA는 40자 hex로 검증한다(`server/pr-merge.ts:31`, `server/pr-merge.ts:35`).
-- 플러그인 데이터 파일은 임시 파일에 쓴 뒤 `renameSync`로 바꾸고 `mode: 0o600`을 준다(`server/preferences.ts:175`, `server/notes.ts:47`, `server/session-photos.ts:37`).
+- 플러그인 데이터 파일은 임시 파일에 쓴 뒤 `renameSync`로 바꾸고 `mode: 0o600`을 준다(`server/preferences.ts:178`, `server/notes.ts:47`, `server/session-photos.ts:37`).
 - 화면 문구는 `client/language.tsx`의 `t(한국어, 영어)`로 두 언어를 함께 쓴다. 한쪽만 바꾸지 않는다.
 - 브라우저 전용 API(`document`, `navigator`, `FileReader`, DOM 요소)는 `Platform.OS === "web"`과 `typeof` 검사 뒤에서만 쓴다. 같은 클라이언트가 모바일 앱에서도 돈다(`client/photo-composer.tsx:88`, `client/send-input.tsx:9`).
 - 로직은 `client/*.ts`, `shared/*.ts`, `server/*.ts`에 두고 `.tsx`에는 화면만 둔다. 테스트가 `.tsx`를 하나도 불러오지 않는다(테스트 경계). 시험할 판단을 `.tsx` 안에 쓰면 검증 밖으로 빠진다.

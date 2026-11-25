@@ -602,6 +602,26 @@ test("a reply or photo kept from before the card had questions stays on screen u
   expect(trackedDraftLayout({...item, matchedSessionId: "worker"}, "Use the dark theme", [])).toEqual({freeEditor: false, carried: false, orphaned: []});
 });
 
+test("a card has one input: its own, its single question's, or the merge card's", () => {
+  const item = trackedDecisionSchema.parse({source: "production", projectId: "studio", id: "theme", title: "Theme", key: "t",
+    fingerprint: "c".repeat(64), matchedSessionId: null, matchedPull: null, kind: "answer", where: "manager"});
+  const question = (id: string) => ({id, text: "Which " + id + "?", multi: false, options: []});
+  // No questions: the card's own input.
+  expect(trackedDraftLayout(item, "", []).freeEditor).toBe(true);
+  // One question: that question's input is the card's input, so no second one is added.
+  expect(trackedDraftLayout({...item, questions: [question("Q1")]}, "", []).freeEditor).toBe(false);
+  // Several questions: the card's input stays under them for a question, a change request or a note, and what is
+  // written there is not something left over from before the questions.
+  const several = {...item, questions: [question("Q1"), question("Q2")]};
+  expect(trackedDraftLayout(several, "Why not both?", [{questionIndex: undefined}])).toEqual({freeEditor: true, carried: false, orphaned: []});
+  // A card tied to a session question with questions of its own keeps its input; without them the session card has it.
+  expect(trackedDraftLayout({...several, matchedSessionId: "worker"}, "", []).freeEditor).toBe(true);
+  expect(trackedDraftLayout({...item, matchedSessionId: "worker"}, "", []).freeEditor).toBe(false);
+  // While the merge card takes the change request, the ledger side adds no input of its own.
+  expect(trackedDraftLayout(item, "", [], true).freeEditor).toBe(false);
+  expect(trackedDraftLayout(several, "", [], true).freeEditor).toBe(false);
+});
+
 test("the example answer is only a placeholder; the recommendation is inserted on request", () => {
   const item = trackedDecisionSchema.parse({source: "ledger", projectId: "studio", id: "cleanup", title: "Remove branch", key: "k",
     fingerprint: "a".repeat(64), matchedSessionId: null, matchedPull: null, kind: "answer",

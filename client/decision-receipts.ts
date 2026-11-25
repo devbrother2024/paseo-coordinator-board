@@ -23,6 +23,10 @@ export type CompletedAction = {
   // When the reply was sent, and the card revision that finds its entry in reply history.
   sentAt?: number;
   match?: { projectId: string | null; cardId: string; revision: string };
+  // A change request sent from a merge card instead of merging.
+  kind?: "change-request";
+  // A ledger card's reply: the card may still be open after the session answers, so it stays until the card is taken down.
+  untilRemoved?: boolean;
 };
 // `settled`: a refresh has shown the reply's follow-up or its card taken down, so the next refresh folds it.
 export type InlineReceipt = CompletedAction & { order: readonly string[]; hidden?: boolean; settled?: boolean };
@@ -73,11 +77,13 @@ export function receiptEntry(receipt: Pick<InlineReceipt, "match" | "recipientId
 }
 
 // Run on each refresh. A sent reply folds a day after sending. Once its recipient has answered or its card was taken down
-// from the ledger, that refresh marks it so the follow-up shows once, and the next refresh folds it.
+// from the ledger, that refresh marks it so the follow-up shows once, and the next refresh folds it. A ledger card's
+// reply may have been a question, so an answer alone does not fold it: it stays, showing the answer, until the card is
+// taken down. A card raised again with new content opens beside it.
 export function settleReceipt(receipt: InlineReceipt, entry: Pick<ReplyEntry, "response" | "cardRemoved"> | undefined, now: number): InlineReceipt {
   if (receipt.hidden || receipt.status !== "sent") return receipt;
   if (receipt.sentAt !== undefined && now - receipt.sentAt >= RECEIPT_KEEP_MS) return { ...receipt, hidden: true };
-  if (!entry?.response && !entry?.cardRemoved) return receipt;
+  if (!entry?.cardRemoved && (receipt.untilRemoved || !entry?.response)) return receipt;
   return receipt.settled ? { ...receipt, hidden: true } : { ...receipt, settled: true };
 }
 
