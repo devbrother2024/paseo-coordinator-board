@@ -102,7 +102,7 @@ RPC `board.request-pull-changes`:
 - 자리: 글의 마지막이어야 한다. 블록 뒤에 다른 글이 있으면 블록으로 읽지 않는다. 글의 코드 펜스를 처음부터 따라가며, 다른 펜스 밖에 있고 닫힌 마지막 블록 하나만 본다. 본문 중간에 인용한 옛 블록은 예시로 남고 끝의 블록이 질문이 된다. 다른 펜스 안에 든 블록(바깥 펜스가 닫히지 않은 경우 포함), 닫히지 않은 블록, 들여쓴 블록은 읽지 않는다.
 - 맞는 블록이면: 그 글은 블록을 뺀 나머지로 읽고, 블록 앞 글에 질문 문장이 없어도 결정 카드가 된다(제목은 첫 질문). 글에서 이름표를 찾는 안내는 내지 않는다.
 - RPC 계약: 세션의 `decision`에 선택 필드 `block`(위 모양을 정리한 값). 카드 판본(`version`)에는 넣지 않는다(판본은 대화 근거에 묶여 있다).
-- 화면: 질문마다 선택지를 원장 카드처럼 그린다. 고르면 입력창에 `Q1 · 캐시를 어디에 둘까요?: A · 메모리` 같은 줄이 채워진다(`applyBlockChoice`). 고른 표시는 입력창의 글에서 읽는다(`blockPicks`). 그래서 사람이 그 줄을 고치거나 지우면 표시도 따라 바뀐다. 사람이 그 줄 뒤에 덧붙인 글(조건, 직접 쓴 답)은 다른 선택지를 고르거나 고른 것을 풀어도 남는다. **추천대로 모두 고르기**는 아직 고르지 않은 질문에 추천 선택지를 채우고, **추천 답 넣기**는 `recommendedReply`를 입력창에 넣는다. `does`·`pros`·`cons`는 **근거·이력 보기**를 펼치면 보인다.
+- 화면: 질문마다 선택지를 원장 카드처럼 그린다. 고르면 입력창에 `Q1 · 캐시를 어디에 둘까요?: A · 메모리` 같은 줄이 채워진다(`applyBlockChoice`). 고른 표시는 입력창의 글에서 읽는다(`blockPicks`). 그래서 사람이 그 줄을 고치거나 지우면 표시도 따라 바뀐다. 사람이 그 줄 뒤에 덧붙인 글(조건, 직접 쓴 답)은 다른 선택지를 고르거나 고른 것을 풀어도 남는다. **추천 답 넣기**는 `recommendedReply`를 입력창에 넣는다. **추천대로 모두 고르기**는 원장 카드와 질문 블록 카드 모두에서 없앤다(유지관리자 요청): 선택지 옆 **추천** 표시와 카드의 추천 줄은 그대로 두고, 질문마다 사람이 직접 고른다. `does`·`pros`·`cons`는 **근거·이력 보기**를 펼치면 보인다.
 
 ## 3. 경계와 실패 처리
 
@@ -136,7 +136,7 @@ RPC `board.request-pull-changes`:
 | R16 | 틀린 블록, 상한을 넘는 블록, 끝이 아닌 블록은 쓰지 않는다 | 같은 파일 "a malformed, oversized or misplaced block is ignored" |
 | R17 | 제어 문자와 양방향 제어 문자는 지워진다 | 같은 파일 "control characters are removed before the block is shown" |
 | R18 | 선택지를 고르면 입력창의 그 질문 줄이 채워지고, 고른 표시는 글에서 읽는다 | 같은 파일 "choosing an option writes that question's line, and the text says what is chosen" |
-| R19 | 추천대로 모두 고르기는 고르지 않은 질문만 채운다 | 같은 파일 "recommended options fill only unanswered questions" |
+| R19 | **추천대로 모두 고르기** 버튼과 그 판정은 없다(원장 카드, 질문 블록 카드). 추천 표시와 **추천 답 넣기**는 남는다 | 화면 확인(R21), 판정 함수 제거 |
 | R20 | 블록이 있는 글은 질문 문장이 없어도 결정 카드가 되고 `decision.block`이 실린다 | `test/conversation.test.ts` "a message ending in a question block becomes a decision card with its options" |
 | R22 | 거둔 뒤의 요청은 열쇠와 글이 같아도 새 메시지로 나가고, `pending`인 요청도 거둘 수 있다 | `test/pull-change-requests.test.ts` "a request sent again after the card was reopened is a new request, even with the same key and words" |
 | R23 | 지금 머리에 요청(`sent`, `pending`)이 있으면 보드의 병합 미리보기와 확정이 거절되고, 거두기와 다른 머리에서만 풀린다(같은 머리의 새 판단으로는 풀리지 않는다) | `test/pr-merge.test.ts` "a PR with a change request on its head is not merged from the board until the card is reopened" |

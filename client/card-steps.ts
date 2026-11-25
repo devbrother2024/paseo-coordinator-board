@@ -41,14 +41,6 @@ export function clampStep(step: Step, count: number): Step {
 // Choosing moves on only when one choice is the whole answer. A multi-choice question waits for Next.
 export const advancesOnChoice = (question: Question) => !question.multi && question.options.length > 0;
 
-// Recommend-all needs a recommendation the board can pick on every question. It fills only the questions the
-// person has not answered, and disappears once nothing is left.
-export function recommendAllPicks(questions: readonly Question[], answered: readonly boolean[]) {
-  const usable = recommendedChoices({ questions }, () => false);
-  if (Object.keys(usable).length !== questions.length || answered.every(Boolean)) return null;
-  return recommendedChoices({ questions }, index => !!answered[index]);
-}
-
 const oneLine = (text: string, limit: number) => {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > limit ? flat.slice(0, limit - 1).trimEnd() + "…" : flat;

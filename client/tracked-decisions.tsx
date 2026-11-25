@@ -21,7 +21,7 @@ import {
 } from "./tracked-reply-draft";
 import {
   advancesOnChoice, answerSummary, applyPicks, chooseAnswer, emptyAnswers, photoPlacement, skipQuestion, startWriting, stepAfterAnswer, typeAnswer,
-  type AnswerDrafts, clampStep, foldsAsk, nextOpenStep, openingStep, recommendAllPicks, trackedChipSide,
+  type AnswerDrafts, clampStep, foldsAsk, nextOpenStep, openingStep, trackedChipSide,
   recordHeaderParts, stepText, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps, type Step,
 } from "./card-steps";
 import { ledgerChoiceGaps } from "../shared/choice-gaps";
@@ -219,7 +219,6 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
     (hasDraft || editedReply !== null || Object.values(typed).some(value => value !== undefined) ||
       attachments.blocked || busy || Object.values(skipped).some(Boolean)));
   const picks = recommendedChoices(item, index => answered[index]);
-  const allPicks = stepped ? recommendAllPicks(item.questions, answered) : null;
   const askLines = isMerge ? [] : item.ask.filter(line => line !== item.title);
   const askFolds = foldsAsk(askLines);
   const steps = visibleSteps(item.steps, stepsOpen);
@@ -245,9 +244,8 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
     setAnswers(draft => skipQuestion(draft, index));
     moveAfter(index, skipping ? "skip" : "unskip");
   }
-  function chooseRecommended(fill: Record<number, string[]>, toSummary: boolean) {
+  function chooseRecommended(fill: Record<number, string[]>) {
     setAnswers(draft => applyPicks(draft, fill));
-    if (toSummary) go("summary");
   }
   function clearDraft() {
     attachments.clear(); setEditedReply(null); setAnswers(emptyAnswers); setMore({}); setLeadRemoved(false);
@@ -477,12 +475,9 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
     {showForm && canReply && recordActions && unreachable && <Text style={{color:c.foregroundMuted,fontSize:12}}>{routeText()}</Text>}
     {showForm && !unreachable && <View style={{ gap: 8 }}>
       {isMerge && !!item.questions.length && <Text accessibilityRole="header" style={{color:c.foreground, borderTopWidth:1, borderTopColor:c.border, paddingTop:10, fontSize:16, fontWeight:"600"}}>{followupTitle}</Text>}
-      {stepped && canReply && allPicks && <View style={wrap}>
-        <Button theme={theme} disabled={busy} {...named(t("추천대로 모두 고르기", "Choose all recommendations"))} onPress={() => chooseRecommended(allPicks, true)} />
-      </View>}
       {stepped && canReply && progressDots(step)}
       {!stepped && canReply && Object.keys(picks).length > 0 && <View style={wrap}><Button theme={theme} disabled={busy} {...named(t("추천 선택지 고르기", "Choose recommended options"))}
-        onPress={() => chooseRecommended(picks, false)} /></View>}
+        onPress={() => chooseRecommended(picks)} /></View>}
       {stepped ? step !== "summary" && renderQuestion(step) : item.questions.map((_, index) => renderQuestion(index))}
       {stepped && step === "summary" && <View style={{ gap: 4 }}>
         <View ref={questionHead} tabIndex={-1} accessible accessibilityRole="header" accessibilityLiveRegion="polite">

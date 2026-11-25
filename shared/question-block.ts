@@ -160,20 +160,3 @@ export function applyBlockChoice(text: string, block: QuestionBlock, index: numb
   const next = current.includes(key) ? current.filter(other => other !== key) : item.multi ? [...current, key] : [key];
   return writeLine(text, block, index, next);
 }
-
-export function applyBlockPicks(text: string, block: QuestionBlock, picks: Readonly<Record<number, readonly string[]>>) {
-  return Object.entries(picks).reduce((current, [index, keys]) => writeLine(current, block, Number(index), keys), text);
-}
-
-// The recommended options of every question that has no line yet. A question the person answered, in options or in
-// their own words, is left alone.
-export function recommendedBlockPicks(block: QuestionBlock, text: string): Record<number, string[]> | null {
-  const rows = text.split("\n");
-  const picks: Record<number, string[]> = {};
-  block.questions.forEach((item, index) => {
-    const recommended = item.options.filter(choice => choice.recommended);
-    if (lineOf(rows, item) >= 0 || !recommended.length || (!item.multi && recommended.length > 1)) return;
-    picks[index] = recommended.map(choice => choice.key);
-  });
-  return Object.keys(picks).length ? picks : null;
-}

@@ -17,7 +17,7 @@ import { QuestionContext } from "./question-context";
 import { choiceRequest, decisionChoiceNotice } from "./choice-display";
 import { foldsAsk } from "./card-steps";
 import { cardInputPlaceholder, sendWords, withRequest } from "./card-input";
-import { applyBlockChoice, applyBlockPicks, blockPicks, blockQuestionLabel, recommendedBlockPicks } from "../shared/question-block";
+import { applyBlockChoice, blockPicks, blockQuestionLabel } from "../shared/question-block";
 
 type Action = DecisionInput["action"];
 type CoordinationDraft = { text: string; recipientId: string };
@@ -146,7 +146,6 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   // A question block the session ended its message with. Its options fill the input, and the input's text says what is chosen.
   const block = formal ? undefined : decision?.block;
   const picks = block ? blockPicks(reply.text, block) : {};
-  const allPicks = block ? recommendedBlockPicks(block, reply.text) : null;
   const fill = (text: string) => { setSelection(null); setReviewedReply(null); setError(null); setDraft(text); };
   const canRestore = !!decision?.recommendation && !decision.needsInput && (selection !== null || draft !== null);
   const sourceExcerpts = evidence.filter(text => text !== headline);
@@ -230,11 +229,8 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
             <Text style={{ color: c.foregroundMuted, fontSize: 12, fontWeight: "600", flexShrink: 0 }}>{t("추천", "Recommendation")}</Text>
             <View style={{ flexShrink: 1 }}><HistoryMarkdown theme={theme} source={block.recommend} /></View>
           </View>}
-          {(allPicks || (!!block.recommendedReply && !reply.text.includes(block.recommendedReply))) && <View style={wrap}>
-            {allPicks && <Button theme={theme} disabled={busy} {...named(t("추천대로 모두 고르기", "Choose all recommendations"))}
-              onPress={() => fill(applyBlockPicks(reply.text, block, allPicks))} />}
-            {!!block.recommendedReply && !reply.text.includes(block.recommendedReply) && <Button theme={theme} disabled={busy}
-              {...named(t("추천 답 넣기", "Use recommendation"))} onPress={() => fill(withRequest(reply.text, block.recommendedReply!))} />}
+          {!!block.recommendedReply && !reply.text.includes(block.recommendedReply) && <View style={wrap}>
+            <Button theme={theme} disabled={busy} {...named(t("추천 답 넣기", "Use recommendation"))} onPress={() => fill(withRequest(reply.text, block.recommendedReply!))} />
           </View>}
         </View>}
         {explanation && <View style={wrap}>

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  advancesOnChoice, answerSummary, clampStep, firstOpenStep, foldsAsk, isHumanCheck, nextOpenStep, openingStep, recommendAllPicks,
+  advancesOnChoice, answerSummary, clampStep, firstOpenStep, foldsAsk, isHumanCheck, nextOpenStep, openingStep,
   applyPicks, chooseAnswer, emptyAnswers, photoPlacement, recordHeaderParts, skipQuestion, startWriting, stepAfterAnswer, stepText, typeAnswer,
   trackedChipSide, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps,
 } from "../client/card-steps";
@@ -66,28 +66,6 @@ test("choosing moves on only for a single-choice question with options", () => {
   expect(advancesOnChoice(question("one", [option("A", "a")]))).toBe(true);
   expect(advancesOnChoice(question("many", [option("A", "a")], true))).toBe(false);
   expect(advancesOnChoice(question("free", []))).toBe(false);
-});
-
-test("recommend-all appears only when every question has a usable recommendation", () => {
-  const all = recommendAllPicks(ten, ten.map(() => false));
-  expect(Object.keys(all ?? {})).toHaveLength(10);
-  expect(all?.[3]).toEqual([optionId(option("A", "first"))]);
-  // One question without a recommendation hides the button.
-  const missing = [...ten.slice(0, 9), question("Q10", [option("A", "first"), option("B", "second")])];
-  expect(recommendAllPicks(missing, missing.map(() => false))).toBeNull();
-  // A single-choice question with two recommendations cannot be filled.
-  expect(recommendAllPicks([ten[0], question("two", [option("A", "a", true), option("B", "b", true)])], [false, false])).toBeNull();
-  // A free-text question has nothing to pick.
-  expect(recommendAllPicks([ten[0], question("free", [])], [false, false])).toBeNull();
-  // Multi-choice questions take every recommended option.
-  const multi = question("many", [option("A", "a", true), option("B", "b"), option("C", "c", true)], true);
-  expect(recommendAllPicks([ten[0], multi], [false, false])?.[1]).toEqual([optionId(option("A", "a")), optionId(option("C", "c"))]);
-});
-
-test("recommend-all keeps the person's own answers and hides once everything is answered", () => {
-  const picks = recommendAllPicks(ten.slice(0, 3), [false, true, false]);
-  expect(Object.keys(picks ?? {})).toEqual(["0", "2"]);
-  expect(recommendAllPicks(ten.slice(0, 3), [true, true, true])).toBeNull();
 });
 
 test("an answered question folds into one summary line", () => {

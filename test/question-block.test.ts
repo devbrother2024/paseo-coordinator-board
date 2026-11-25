@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import {
-  applyBlockChoice, applyBlockPicks, blockPicks, MAX_BLOCK_LENGTH, questionBlockSchema, recommendedBlockPicks, splitQuestionBlock,
+  applyBlockChoice, blockPicks, MAX_BLOCK_LENGTH, questionBlockSchema, splitQuestionBlock,
 } from "../shared/question-block";
 
 const fence = (body: unknown) => "```board-question\n" + (typeof body === "string" ? body : JSON.stringify(body, null, 2)) + "\n```";
@@ -127,17 +127,4 @@ test("choosing an option writes that question's line, and the text says what is 
   expect(applyBlockChoice(qualified, block, 1, "A")).toBe("Q2 · Which checks should run?: but do not run against production");
   expect(applyBlockChoice("Q1 · Where should the cache live?: neither, use Redis", block, 0, "B")).toBe("Q1 · Where should the cache live?: B · Disk, neither, use Redis");
   expect(blockPicks("Q1 · Where should the cache live?: B · Disk, neither, use Redis", block)).toEqual({ 0: ["B"] });
-});
-
-test("recommended options fill only unanswered questions", () => {
-  expect(recommendedBlockPicks(block, "")).toEqual({ 0: ["A"], 1: ["A", "B"] });
-  const picked = "Q1 · Where should the cache live?: B · Disk";
-  expect(recommendedBlockPicks(block, picked)).toEqual({ 1: ["A", "B"] });
-  expect(applyBlockPicks(picked, block, recommendedBlockPicks(block, picked)!))
-    .toBe("Q1 · Where should the cache live?: B · Disk\nQ2 · Which checks should run?: A · Unit, B · Lint");
-  // A question the person answered in their own words counts as answered.
-  expect(recommendedBlockPicks(block, "Q1 · Where should the cache live?: Redis\nQ2 · Which checks should run?: C · End to end")).toBeNull();
-  // A single-choice question with two recommendations has no one answer to fill in.
-  const two = splitQuestionBlock(fence({ questions: [{ text: "Q", options: [{ key: "A", text: "x", recommended: true }, { key: "B", text: "y", recommended: true }] }] })).block!;
-  expect(recommendedBlockPicks(two, "")).toBeNull();
 });
