@@ -6,6 +6,49 @@ const shell = (command: string) => permissionSummary({ kind: "tool", name: "Bash
 const ko = (korean: string) => korean;
 const en = (_: string, english: string) => english;
 
+test("ANSI-C and locale quoting fail closed while literal quote text stays readable", () => {
+  expect(shell(String.raw`echo $'\'' ; rm y ; echo $'\'' #'`).risk).toBe("unknown");
+  expect(shell('echo $"translated"').risk).toBe("unknown");
+  expect(shell('echo \'$"literal"\'').risk).toBe("read");
+});
+
+test("only known safe options qualify as reads, including combined and abbreviated options", () => {
+  for (const [command, risk] of [
+    ["uniq in out", "write"], ["sort -uo out in", "write"], ["sort -ro out in", "write"],
+    ["sort --out=out in", "write"], ["sort --compress-prog=sh", "execute"],
+    ["awk -E prog.awk", "execute"], ["awk -o x", "write"], ["awk --profile=x", "write"], ["awk -d x", "write"],
+    ["git diff --ext-di", "execute"], ["git log --outp=o", "write"],
+    ["sort --unverified in", "unknown"], ["uniq -Z in", "unknown"], ["awk --profiled '{print}' in", "unknown"],
+    ["git log --unverified", "unknown"], ["rg --unverified text in", "unknown"],
+    ["sort -ur in", "read"], ["uniq -ci in", "read"], ["git log -4 --oneline", "read"],
+    ["git diff --no-ext-diff --no-textconv", "read"], ["cat -- -output.txt", "read"],
+  ]) expect([command, shell(command).risk]).toEqual([command, risk]);
+});
+
+test("sensitive files and reads outside the working folder are surfaced", () => {
+  for (const command of ["cat ~/.ssh/id_rsa", "cat .env", "head -n 5 'config/.env.local'", "cat < .env", "git log -- .env", "git show HEAD:.env", "rg token -- .env", "grep -f .env notes.txt"]) {
+    expect([command, shell(command).risk]).toEqual([command, "sensitive-read"]);
+  }
+  for (const command of ["cat ../notes.txt", "cat /etc/hosts", "wc -l ../notes.txt", "cat <../notes.txt", "git -C ../other status", "cd ../other && cat notes.txt"]) {
+    expect([command, shell(command).risk]).toEqual([command, "outside-read"]);
+  }
+  expect(shell("git diff --no-index --color ../outside.txt README.md").risk).toBe("outside-read");
+  expect(shell("ls --color ../outside.txt").risk).toBe("outside-read");
+  expect(classifyShellPermission(String.raw`cat 'C:\Users\you\.ssh\id_ed25519'`, String.raw`C:\Users\you\alpha`).risk).toBe("sensitive-read");
+  expect(shell("cd ../other && cd ./alpha | cat notes.txt").risk).toBe("outside-read");
+  expect(shell("cat src/../README.md").risk).toBe("read");
+  expect(shell("rg '.env' README.md").risk).toBe("read");
+  expect(permissionHeading(shell("cat .env"), ko)).toContain("민감한 파일 읽기");
+  expect(permissionHeading(shell("cat ../notes.txt"), en)).toContain("Read outside the working folder");
+  expect(permissionHeading(shell("cat ~/.ssh/id_rsa"), en)).toContain("Read sensitive files · Read outside the working folder");
+});
+
+test("the title keeps visible dangers alongside an unknown command", () => {
+  const summary = shell("rm sample && mystery");
+  expect(summary.risk).toBe("unknown");
+  expect(permissionHeading(summary, en)).toContain("Unknown command · Delete or revert");
+});
+
 test("the shell classifier takes only command text and cwd and preserves individual operations", () => {
   const command = `cd '${cwd}' && git status | cat; git status >>build/history.txt`;
   expect(classifyShellPermission(command, cwd)).toEqual({ cwd, risk: "write", count: 3, commands: [

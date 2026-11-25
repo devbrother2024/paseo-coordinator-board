@@ -1,8 +1,10 @@
 import { shellCommands, type ShellCommand, type ShellWord } from "./shell-permission-command";
+import { gitSubcommandIndex, hasLongOption, readCommandOperands } from "./permission-read-options";
+import { readPathRisks, resolveReadPath } from "./permission-read-paths";
 
-const risks = ["read", "write", "network", "execute", "destructive", "unknown"] as const;
+const risks = ["read", "outside-read", "sensitive-read", "write", "network", "execute", "destructive", "unknown"] as const;
 export type PermissionRisk = typeof risks[number];
-type Operation = { name: string; risk: PermissionRisk | "folder"; detail?: string };
+type Operation = { name: string; risk: PermissionRisk | "folder"; detail?: string; readRisks?: PermissionRisk[] };
 type Group = Operation & { count: number };
 export type ShellPermissionClassification = {
   risk: PermissionRisk;
@@ -11,7 +13,7 @@ export type ShellPermissionClassification = {
   commands: (Operation & { setsWorkingFolder?: true })[];
 };
 type ShellSummary = { kind: "shell"; risk: PermissionRisk; command: string; cwd?: string; count: number; groups: Group[] };
-type ToolSummary = { kind: "read" | "edit" | "write" | "delete" | "mcp" | "fetch" | "unknown"; risk: PermissionRisk; target?: string };
+type ToolSummary = { kind: "read" | "edit" | "write" | "delete" | "mcp" | "fetch" | "unknown"; risk: PermissionRisk; target?: string; readRisks?: PermissionRisk[] };
 export type PermissionSummary = ShellSummary | ToolSummary;
 type Translate = (ko: string, en: string) => string;
 type Request = {
@@ -24,7 +26,6 @@ const fileCommands = new Set(["mkdir", "touch", "cp", "mv", "tee", "rm", "rmdir"
 const interpreters = new Set(["python", "python3", "node", "bun", "bash", "sh"]);
 const gitRead = new Set(["log", "show", "diff", "status", "rev-parse", "merge-base", "blame"]);
 const gitWrite = new Set(["add", "commit", "checkout", "switch", "stash", "merge", "rebase"]);
-const sensitiveArgs = new Set(["git", "sips", "sort", "rg", "find", "sed", "awk", "file"]);
 const moreRisk = (a: PermissionRisk, b: PermissionRisk) => risks.indexOf(a) >= risks.indexOf(b) ? a : b;
 const str = (value: unknown) => typeof value === "string" && value.trim() ? value : undefined;
 const firstLine = (value?: string) => value?.split(/\r?\n/, 1)[0];
@@ -70,13 +71,14 @@ function fileTargets(name: string, words: ShellWord[], cwd?: string) {
     return targets(expression < 0 ? paths : paths.slice(0, expression), cwd);
   }
   if (name === "sort" || name === "sips") {
-    const option = name === "sort" ? /^(-o|--output(?:=|$))/ : /^--out(?:=|$)/;
+    const option = name === "sort" ? /^(?:-[bdfghiMmnRrsuVz]*o|--ou(?:t(?:p(?:u(?:t)?)?)?)?(?:=|$))/ : /^--out(?:=|$)/;
     const index = words.findIndex(word => option.test(word.value));
     if (index < 0) return undefined;
     const word = words[index];
     const inline = word.value.replace(option, "");
     return targets(inline ? [{ ...word, value: inline }] : words.slice(index + 1, index + 2), cwd);
   }
+  if (name === "uniq") return targets((readCommandOperands(name, words.map(word => word.value)) ?? []).slice(1).map(value => ({ value, dynamic: false })), cwd);
   if (name === "sed") return targets(operands(words).filter(word => word.value).slice(1), cwd);
   if (fileCommands.has(name) || name.startsWith("git ")) {
     const sub = words.findIndex(word => "git " + word.value === name);
@@ -87,23 +89,23 @@ function fileTargets(name: string, words: ShellWord[], cwd?: string) {
 
 function gitCommand(args: string[]): { risk: PermissionRisk; name: string } {
   if (args.length === 1 && ["--version", "--help"].includes(args[0])) return { risk: "read", name: "git" };
-  let index = 0;
-  while (args[index] === "--no-pager" || args[index] === "-C" && args[index + 1]) {
-    index += args[index] === "-C" ? 2 : 1;
-  }
+  const index = gitSubcommandIndex(args);
   const sub = args[index];
   const flags = args.slice(index + 1);
   const name = sub && /^[a-z][a-z-]*$/.test(sub) ? "git " + sub : "git";
-  if (flags.includes("--ext-diff") || flags.includes("--textconv")) return { risk: "execute", name };
+  // Explicit external diff and textconv options request execution. Other git
+  // calls still depend on host config (diff drivers, pagers, fsmonitor, etc.).
+  if (hasLongOption(flags, "--ext-diff") || hasLongOption(flags, "--textconv")) return { risk: "execute", name };
   if (["reset", "clean", "restore", "rm"].includes(sub) || sub === "branch" && flags.some(flag => /^-[^-]*[dD]|^--delete$/.test(flag)) ||
     sub === "push" && flags.some(flag => /^--(?:force(?:$|[=-])|mirror$|prune$|delete$)|^-[^-]*[fd]|^[+:]/.test(flag))) return { risk: "destructive", name };
   if (["fetch", "pull", "push"].includes(sub) || sub === "ls-remote" || sub === "clone") return { risk: "network", name };
-  if (flags.some(flag => /^--output(?:=|$)/.test(flag) || flag === "--output-directory")) return { risk: "write", name };
+  if (hasLongOption(flags, "--output") || hasLongOption(flags, "--output-directory")) return { risk: "write", name };
   if (gitWrite.has(sub)) return { risk: "write", name };
   if (sub === "branch") {
     if (flags.some(flag => /^(?:-[^-]*[mcMCu]|--(?:move|copy|edit-description|set-upstream-to|unset-upstream))/.test(flag))) return { risk: "write", name };
-    return { risk: !flags.length || flags.every(flag => ["-a", "-r", "-l", "-v", "-vv", "--list", "--all", "--remotes", "--show-current"].includes(flag))
-      ? "read" : flags[0] && !flags[0].startsWith("-") ? "write" : "unknown", name };
+    const operands = readCommandOperands(name, args);
+    if (!operands) return { risk: "unknown", name };
+    return { risk: operands.length && !flags.includes("--list") ? "write" : "read", name };
   }
   return { risk: gitRead.has(sub) ? "read" : "unknown", name };
 }
@@ -115,13 +117,17 @@ function commandRisk(name: string, args: string[]): PermissionRisk {
   if (interpreters.has(name) || name === "eval") return "execute";
   if (name === "rm" || name === "rmdir" || name === "find" && args.includes("-delete")) return "destructive";
   if (name === "find" && args.some(arg => /^-(?:exec|ok)(?:dir)?$/.test(arg))) return "execute";
-  if (name === "awk" && args.some(arg => /\bsystem\s*\(|\||@(?:include|load)|^-(?:f|i|l|W)|^--(?:file|include|load|exec)/.test(arg))) return "execute";
-  if (name === "rg" && args.some(arg => /^--(?:pre|hostname-bin)(?:=|$)/.test(arg))) return "execute";
-  if (name === "sort" && args.some(arg => /^--compress-program(?:=|$)/.test(arg))) return "execute";
+  if (name === "awk" && (args.some(arg => /\bsystem\s*\(|\||@(?:include|load)|^-(?:E|f|i|l|W)/.test(arg)) ||
+    ["--file", "--include", "--load", "--exec"].some(option => hasLongOption(args, option)))) return "execute";
+  if (name === "rg" && ["--pre", "--hostname-bin"].some(option => hasLongOption(args, option))) return "execute";
+  if (name === "sort" && hasLongOption(args, "--compress-program")) return "execute";
   if (fileCommands.has(name) ||
     name === "find" && args.some(arg => /^-f(?:ls|print|print0|printf)$/.test(arg)) ||
-    name === "sort" && args.some(arg => /^-o|^--output(?:=|$)/.test(arg)) ||
-    name === "awk" && args.some(arg => arg.includes(">")) || name === "file" && args.some(arg => arg === "--compile" || /^-[^-]*C/.test(arg)) ||
+    name === "sort" && (args.some(arg => /^-[bdfghiMmnRrsuVz]*o/.test(arg)) || hasLongOption(args, "--output")) ||
+    name === "uniq" && (readCommandOperands(name, args)?.length ?? 0) >= 2 ||
+    name === "awk" && (args.some(arg => arg.includes(">") || /^-[od]/.test(arg)) ||
+      ["--pretty-print", "--profile", "--dump-variables"].some(option => hasLongOption(args, option))) ||
+    name === "file" && args.some(arg => arg === "--compile" || /^-[^-]*C/.test(arg)) ||
     name === "sips" && args.some(arg => /^--(?:out|setProperty|deleteProperty|rotate|resample|crop|pad|flip|matchTo|embedProfile)|^-(?:s|d|o|r|z|Z|c|p|f|m|M|e|E)/.test(arg))) return "write";
   if (name === "sips") {
     const query = /^(?:-g|--getProperty(?:=.+)?)$/;
@@ -139,7 +145,21 @@ function commandRisk(name: string, args: string[]): PermissionRisk {
   return readCommands.has(name) ? "read" : "unknown";
 }
 
-function classify(command: ShellCommand, cwd?: string): Operation {
+function readTargets(name: string, args: string[], cwd?: string) {
+  const files = readCommandOperands(name, args);
+  if (!files) return null;
+  if (!name.startsWith("git ")) {
+    const implicitFolder = !files.length && ["ls", "find"].includes(name);
+    return { cwd, files: implicitFolder ? ["."] : files };
+  }
+  for (let index = 0; index < gitSubcommandIndex(args); index++) {
+    if (args[index] === "-C") cwd = resolveReadPath(args[++index], cwd);
+  }
+  const paths = name === "git show" ? files.map(file => /^[^:]*:(?:[0-3]:)?(.+)$/.exec(file)?.[1] ?? file) : files;
+  return { cwd, files: [".", ...paths] };
+}
+
+function classify(command: ShellCommand, cwd?: string, workspace?: string, earlierFolderRisks: readonly PermissionRisk[] = []): Operation {
   const [program, ...words] = command.words;
   let name = concise(firstLine(program?.value)) || "";
   const args = words.map(word => word.value);
@@ -151,7 +171,7 @@ function classify(command: ShellCommand, cwd?: string): Operation {
   } else if (program.dynamic || !/^[\w.-]+$/.test(name) || program.value !== name) {
     risk = "unknown";
     name = program.dynamic ? "" : name;
-  } else if (name === "cd" && !command.redirects.length && !command.substitutions.length &&
+  } else if (name === "cd" && !command.redirects.length && !command.inputs.length && !command.substitutions.length &&
     words.length === 1 && !args[0].startsWith("-") && !words[0].dynamic) {
     return { name, risk: "folder", detail: displayPath(args[0], cwd) };
   } else if (name === "git") {
@@ -159,7 +179,13 @@ function classify(command: ShellCommand, cwd?: string): Operation {
   } else {
     risk = commandRisk(name, args);
   }
-  if (risk === "read" && sensitiveArgs.has(program.value) && words.some(word => word.dynamic)) risk = "unknown";
+  const read = risk === "read" ? readTargets(name, args, cwd) : null;
+  const dynamicRead = words.some(word => word.dynamic) && !["echo", "printf"].includes(name);
+  if (risk === "read" && (!read || dynamicRead || command.inputs.some(word => word.dynamic))) risk = "unknown";
+  const paths = [...(read?.files.map(value => ({ value, cwd: read.cwd })) ?? []),
+    ...command.inputs.filter(word => !word.dynamic).map(word => ({ value: word.value, cwd }))];
+  const warnings = paths.map(path => ({ ...path, risks: readPathRisks(path.value, path.cwd, workspace) })).filter(path => path.risks.length);
+  const readRisks = [...new Set([...warnings.flatMap(path => path.risks), ...(paths.length ? earlierFolderRisks : [])])];
   if (command.redirects.length) {
     risk = moreRisk(risk, "write");
     detail = targets(command.redirects, cwd);
@@ -169,7 +195,9 @@ function classify(command: ShellCommand, cwd?: string): Operation {
   } else if (risk === "write" || risk === "destructive") {
     detail = fileTargets(name, words, cwd);
   }
-  return { name, risk, ...(detail ? { detail } : {}) };
+  const highest = readRisks.reduce(moreRisk, risk);
+  if (!detail && warnings.length) detail = concise(warnings.map(path => displayPath(path.value, path.cwd)).join(", "));
+  return { name, risk: highest, ...(readRisks.some(item => item !== highest) ? { readRisks } : {}), ...(detail ? { detail } : {}) };
 }
 
 // Classifies literal command text without executing it or consulting the shell's
@@ -184,24 +212,30 @@ export function classifyShellPermission(command: string, initialCwd?: string): S
     classified.push(operation);
     if (operation.risk !== "folder") risk = moreRisk(risk, operation.risk);
   };
-  const list = (commands: ShellCommand[], nested = false) => {
+  const list = (commands: ShellCommand[], currentDir?: string, earlierFolderRisks = new Set<PermissionRisk>(), nested = false) => {
     for (const [index, item] of commands.entries()) {
-      const group = classify(item, cwd);
+      const group = classify(item, currentDir, initialCwd, [...earlierFolderRisks]);
       if (group.risk !== "folder") count++;
       // A leading cd in a chain gives the intended working folder. Keep other
       // changes visible without assuming that conditional branches will run.
       const directory = item.words[1]?.value;
-      if (!nested && index === 0 && group.risk === "folder" && directory && /^(?:[a-z]:[\\/]|[~/])/i.test(directory)) {
-        cwd = directory;
-        add({ ...group, setsWorkingFolder: true });
-      } else add(group);
+      if (group.risk === "folder" && directory) {
+        for (const folderRisk of readPathRisks(directory, currentDir, initialCwd)) earlierFolderRisks.add(folderRisk);
+        currentDir = resolveReadPath(directory, currentDir);
+        if (!nested && index === 0) {
+          cwd = currentDir;
+          add({ ...group, setsWorkingFolder: true });
+        } else add(group);
+      } else {
+        add(group);
+      }
       for (const inner of item.substitutions) {
         add({ name: "$()", risk: "execute" });
-        list(inner, true);
+        list(inner, currentDir, new Set(earlierFolderRisks), true);
       }
     }
   };
-  if (parsed?.length) list(parsed);
+  if (parsed?.length) list(parsed, initialCwd);
   else add({ name: "", risk: "unknown" });
   return { risk, cwd, count, commands: classified };
 }
@@ -237,7 +271,11 @@ export function permissionSummary(request: Request, sessionCwd?: string): Permis
   if (tool === "delete" || tool === "delete_file") return { kind: "delete", risk: "destructive", target };
   if (detail?.type === "edit" || edits.has(tool)) return { kind: "edit", risk: "write", target };
   if (detail?.type === "write" || writes.has(tool)) return { kind: "write", risk: "write", target };
-  if (detail?.type === "read" || reads.has(tool)) return { kind: "read", risk: "read", target };
+  if (detail?.type === "read" || reads.has(tool)) {
+    const readRisks = path ? readPathRisks(path, cwd, sessionCwd ?? cwd) : [];
+    const risk = readRisks.reduce<PermissionRisk>(moreRisk, "read");
+    return { kind: "read", risk, target, ...(readRisks.length > 1 ? { readRisks } : {}) };
+  }
   if (detail?.type === "fetch") return { kind: "fetch", risk: "network", target: concise(detail.url) };
   return { kind: "unknown", risk: "unknown", target: concise(firstLine(name)) };
 }
@@ -245,6 +283,8 @@ export function permissionSummary(request: Request, sessionCwd?: string): Permis
 function riskLabel(risk: Group["risk"], t: Translate) {
   const labels = {
     read: ["읽기만", "Read only"],
+    "sensitive-read": ["민감한 파일 읽기", "Read sensitive files"],
+    "outside-read": ["작업 폴더 밖 읽기", "Read outside the working folder"],
     folder: ["폴더 이동", "Change folder"],
     write: ["파일 쓰기·변경", "Write or modify files"],
     network: ["네트워크 접근", "Network access"],
@@ -261,14 +301,19 @@ export function permissionHeading(summary: PermissionSummary, t: Translate) {
     const folder = summary.cwd && folderName(summary.cwd);
     const count = summary.count > 0 && t(`명령 ${summary.count}개`, `${summary.count} command${summary.count === 1 ? "" : "s"}`);
     const risk = summary.risk === "read" && !summary.count ? "folder" : summary.risk;
-    return [riskLabel(risk, t), count, folder && t(`${folder} 작업 폴더`, `${folder} working folder`)].filter(Boolean).join(" · ");
+    const observed = new Set(summary.groups.flatMap(group => [group.risk, ...(group.readRisks ?? [])]));
+    const additional = [...risks].reverse().filter(item => item !== summary.risk && item !== "read" && observed.has(item));
+    return [riskLabel(risk, t), ...additional.map(item => riskLabel(item, t)), count,
+      folder && t(`${folder} 작업 폴더`, `${folder} working folder`)].filter(Boolean).join(" · ");
   }
   const labels = {
     read: ["파일 읽기", "Read file"], edit: ["파일 편집", "Edit file"], write: ["파일 쓰기", "Write file"], delete: ["파일 삭제", "Delete file"],
     mcp: ["MCP 도구 실행", "Run MCP tool"], fetch: ["네트워크 접근", "Network access"], unknown: ["도구 실행 요청", "Tool request"],
   } as const;
   const [ko, en] = labels[summary.kind];
-  return [t(ko, en), summary.target].filter(Boolean).join(" · ");
+  return [...(summary.kind === "read" && summary.risk !== "read"
+    ? [...new Set([summary.risk, ...(summary.readRisks ?? [])])].map(risk => riskLabel(risk, t)) : [t(ko, en)]),
+    summary.target].filter(Boolean).join(" · ");
 }
 
 export function permissionGroup(group: Group, t: Translate) {

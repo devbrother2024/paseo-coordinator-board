@@ -9,8 +9,9 @@ export function PermissionRequestSummary({ summary, theme }: { summary: Permissi
   const [expanded, setExpanded] = useState(false);
   const c = theme.colors;
   const title = permissionHeading(summary, t);
-  const color = summary.risk === "destructive" ? c.statusDanger
-    : summary.risk === "unknown" || summary.risk === "execute" ? c.statusWarning : c.foreground;
+  const destructive = summary.risk === "destructive" || summary.kind === "shell" && summary.groups.some(group => group.risk === "destructive");
+  const warning = ["unknown", "execute", "sensitive-read", "outside-read"].includes(summary.risk);
+  const color = destructive ? c.statusDanger : warning ? c.statusWarning : c.foreground;
   const label = expanded ? t("명령 전문 접기", "Hide full command") : t("명령 전문 보기", "View full command");
   const groupLimit = 12;
   return <View style={{ gap: 7, minWidth: 0 }}>

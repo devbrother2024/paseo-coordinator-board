@@ -4,6 +4,7 @@ export type ShellWord = { value: string; dynamic: boolean };
 export type ShellCommand = {
   words: ShellWord[];
   redirects: ShellWord[];
+  inputs: ShellWord[];
   substitutions: ShellCommand[][];
 };
 
@@ -45,6 +46,7 @@ export function shellCommands(source: string): ShellCommand[] | null {
     while (index < source.length) {
       const ch = character();
       if (!quote && (/[ \t\r\n;&|<>]/.test(ch) || (depth > 0 && ch === ")"))) break;
+      if (!quote && ch === "$" && /^(?:\$['"]|\$(?:\\\n)+['"({])/.test(source.slice(index))) return invalid();
       if (ch === "\\" && quote !== "'") {
         next();
         const escaped = next();
@@ -81,13 +83,13 @@ export function shellCommands(source: string): ShellCommand[] | null {
   function sequence(depth: number, nested = false): ShellCommand[] {
     if (depth > 8) return invalid();
     const commands: ShellCommand[] = [];
-    let command: ShellCommand = { words: [], redirects: [], substitutions: [] };
+    let command: ShellCommand = { words: [], redirects: [], inputs: [], substitutions: [] };
     let needsCommand = false;
     const heredocs: { delimiter: string; tabs: boolean; expand: boolean; command: ShellCommand }[] = [];
     const finish = () => {
-      if (!command.words.length && !command.redirects.length && !command.substitutions.length) return false;
+      if (!command.words.length && !command.redirects.length && !command.inputs.length && !command.substitutions.length) return false;
       commands.push(command);
-      command = { words: [], redirects: [], substitutions: [] };
+      command = { words: [], redirects: [], inputs: [], substitutions: [] };
       needsCommand = false;
       return true;
     };
@@ -113,9 +115,9 @@ export function shellCommands(source: string): ShellCommand[] | null {
         if (/^\d*<<-?$/.test(operator)) {
           if (target.dynamic || !target.value) return invalid();
           heredocs.push({ delimiter: target.value, tabs: operator.endsWith("-"), expand: !target.quoted, command });
-        } else if (operator.includes(">") &&
-          (!operator.endsWith("&") || !/^\d+$|^-$/.test(target.value))) {
-          command.redirects.push(target);
+        } else {
+          if (operator.includes(">") && (!operator.endsWith("&") || !/^\d+$|^-$/.test(target.value))) command.redirects.push(target);
+          if (/^\d*<(?:>|$)/.test(operator)) command.inputs.push(target);
         }
         continue;
       }

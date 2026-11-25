@@ -163,7 +163,7 @@ function RequestForm({ request, cwd, theme, sessionTitle, busy, canRespond, outc
       <Text style={{ color: c.foregroundMuted }}>{summary
         ? t("승인 여부는 작업 세션에서 선택합니다.", "Choose whether to approve in the work session.")
         : t("이 요청은 작업 세션에서 답합니다.", "Answer this request in the work session.")}</Text>
-      {!summary && <View style={wrap}>{openSession}</View>}
+      <View style={wrap}>{openSession}</View>
     </>}
     {status}
   </>;
