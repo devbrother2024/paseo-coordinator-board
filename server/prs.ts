@@ -10,6 +10,7 @@ import { githubRepository } from "../shared/github-repository";
 export { githubRepository } from "../shared/github-repository";
 import { readPages } from "./discovery";
 import { MergeabilityChecks } from "./pull-mergeability";
+import { settledKey, type SettledState } from "../shared/merge-card-place";
 import type { Preferences, PreferenceStore } from "./preferences";
 
 type Sdk = Pick<PluginHandlerContext["paseo"],"projects"|"workspaces">;
@@ -34,7 +35,8 @@ const ttl = 60_000;
 // GitHub's PR list can report mergeability as UNKNOWN until someone asks for that PR alone.
 // retryMs: wait before asking again. attempts: single reads per round. perRead: single reads one board read may start.
 // resolvedMs: how long a single answer stands in for a list that still says UNKNOWN. restMs: pause after a round gives up.
-export const mergeabilityRetry = { retryMs: 15_000, attempts: 4, perRead: 3, resolvedMs: ttl, restMs: 5 * 60_000 };
+// waitMs: the most a board read waits for a single read before it shows "computing" and lets the read finish later.
+export const mergeabilityRetry = { retryMs: 15_000, attempts: 4, perRead: 3, resolvedMs: ttl, restMs: 5 * 60_000, waitMs: 2_000 };
 
 function judge(p: z.output<typeof rawPull>):{reason:Reason; detail?:PullDetail} {
   const why = (reason:Reason, detail?:PullDetail) => detail ? {reason,detail} : {reason};
@@ -146,6 +148,9 @@ export class ProjectPullRequests {
   private readonly waiting: (() => void)[] = [];
   private running = 0;
   private readonly mergeability: MergeabilityChecks;
+  // Merged or closed is final. Anything else is asked again after a minute.
+  private readonly settled = new Map<string, SettledState | {retryAt:number; inflight?:true}>();
+  private invalidated?: () => void;
   constructor(private store:PreferenceStore,private readonly deps:{localOrigin:typeof localOrigin; githubPulls:typeof githubPulls; githubPull?:typeof githubPull; now:()=>number} = {localOrigin,githubPulls,githubPull,now:Date.now},
     private readonly mergeApi=githubMergeApi(args=>run("gh",args)), private readonly lookupLifecycle=githubLifecycle) {
     this.mergeability = new MergeabilityChecks(deps.githubPull ?? githubPull, deps.now, mergeabilityRetry, pullLookupFailure);
@@ -190,7 +195,35 @@ export class ProjectPullRequests {
     } catch { return {state:"UNKNOWN" as const, why:"lookup-failed" as const}; }
   }
 
+  // Which merge-card PRs are confirmed merged or closed. Lookups run in the background, a few per read,
+  // so a board read never waits on GitHub here. A finished lookup refreshes the board count.
+  settledStates(paseo:Sdk, targets:readonly {repo:string; number:number; projectId:string}[], known:(repo:string, number:number) => SettledState | undefined) {
+    const result = new Map<string,SettledState>();
+    const now = this.deps.now();
+    let started = 0;
+    for (const target of targets) {
+      const key = settledKey(target.repo, target.number);
+      const recorded = known(target.repo, target.number);
+      if (recorded) { result.set(key, recorded); continue; }
+      const entry = this.settled.get(key);
+      if (entry && "state" in entry) { result.set(key, entry); continue; }
+      if (entry && (entry.inflight || entry.retryAt > now)) continue;
+      if (started >= mergeabilityRetry.perRead) continue;
+      started++;
+      this.settled.set(key, {retryAt:Infinity, inflight:true});
+      void this.explainLifecycle(paseo, target).then(({state}) => {
+        if (state === "MERGED" || state === "CLOSED") {
+          this.settled.set(key, {state, at:new Date(this.deps.now()).toISOString()});
+          this.invalidated?.();
+        } else this.settled.set(key, {retryAt:this.deps.now() + ttl});
+      }, () => this.settled.set(key, {retryAt:this.deps.now() + ttl}));
+    }
+    while (this.settled.size > 500) this.settled.delete(this.settled.keys().next().value!);
+    return result;
+  }
+
   register(server:PluginServerContext,onInvalidated?:()=>void,notifications?:MergeNotifications) {
+    this.invalidated = onInvalidated;
     const merges = new PullMerges(this.mergeApi, this.deps.now, repo => {
       this.sources.delete(repo);
       onInvalidated?.();

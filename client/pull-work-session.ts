@@ -26,3 +26,10 @@ export function pullSessionNote(linked: number, remote: { checking: boolean; fou
   if (remote?.checking) return "checking";
   return remote?.found ? "none" : "unverified";
 }
+
+// Whether the merge button may open the preview. A remote work session still being looked up could be
+// running, so the button waits for the answer instead of skipping the running-session confirmation.
+export function mergeGate(localRunning: boolean, remote: { pending: boolean; running: boolean } | undefined): "wait" | "confirm" | "open" {
+  if (remote?.pending) return "wait";
+  return localRunning || remote?.running ? "confirm" : "open";
+}

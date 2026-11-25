@@ -9,7 +9,7 @@ import { mergeNotificationLabel } from "./merge-notification";
 import { useBoardLanguage, type Translate } from "./language";
 import { githubStatusWords, needsRunningConfirmation, pullStatusWords, unknownStatusWords } from "../shared/pull-judgments";
 import { findRemoteWorkSessionState, type RemoteWorkSession, type WorkSessionHost, type WorkSessionStates } from "./tracked-session-targets";
-import { pullSessionNote } from "./pull-work-session";
+import { mergeGate, pullSessionNote } from "./pull-work-session";
 import { afterConfirm, afterReopen, announceBoardMerge, onBoardMerge, reopenDelayMs, reopenedWords } from "./merge-flow";
 import type { MergeWaitReason } from "../shared/merge-card-place";
 
@@ -159,13 +159,14 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   const words = pullStatusWords(pr);
   const status = securityGate && pr.reason === "ready" ? t("열린 PR · 보안 게이트 통과 여부 확인 필요", "Open · Security gate unverified") : t(words[0], words[1]);
   const remote = useRemotePullSession(remoteSession);
-  const working = ready && (needsRunningConfirmation(workSessions) || !!remote?.running);
+  const gate = mergeGate(needsRunningConfirmation(workSessions), remoteSession ? { pending: remote === undefined, running: !!remote?.running } : undefined);
+  const working = ready && gate === "confirm";
   const sessionNote = pullSessionNote(workSessions.length, remoteSession ? { checking: remote === undefined, found: !!remote } : undefined);
   const remoteLabel = remote && [t("작업 세션", "Work session"), remote.host.label, ...(remote.running ? [t("진행 중", "Running")] : [])].join(" · ");
   const args = { projectId, repo: pr.repo, number: pr.number };
 
   async function inspect(confirmedRunning = false) {
-    if (locked.current || !ready) return;
+    if (locked.current || !ready || gate === "wait") return;
     // A running work session may still push. Ask once more before showing the merge preview.
     if (working && !confirmedRunning) { setRunningPrompt(true); return; }
     setRunningPrompt(false);
@@ -274,7 +275,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
       </View>
     </View>}
     {((ready && !preview) || clarification) && <View style={wrap}>
-      {ready && !preview && !runningPrompt && <Button theme={theme} {...named(busy === "read" ? t("병합 정보 조회 중…", "Loading merge details…") : recheck ? t("최신 정보로 다시 확인", "Check the latest again") : t("보드에서 병합", "Merge on board"))} selected={decision} disabled={!!busy} onPress={() => void inspect()} />}
+      {ready && !preview && !runningPrompt && <Button theme={theme} {...named(busy === "read" ? t("병합 정보 조회 중…", "Loading merge details…") : recheck ? t("최신 정보로 다시 확인", "Check the latest again") : t("보드에서 병합", "Merge on board"))} selected={decision} disabled={!!busy || gate === "wait"} onPress={() => void inspect()} />}
       {clarification}
     </View>}
     {lookupError && <Text accessibilityLiveRegion="polite" style={{color:c.statusWarning}}>{t("병합 정보를 불러오지 못했습니다. 다시 조회하거나 GitHub에서 확인하세요.", "Could not load merge details. Try again or open GitHub.")}</Text>}

@@ -10,7 +10,8 @@ export const repositoryMode = z.enum(["auto", "manual", "off"]);
 export const repositoryOverride = z.discriminatedUnion("mode", [
   z.object({ mode:z.literal("manual"), repo:repositorySlug }), z.object({mode:z.literal("off")}),
 ]);
-// "computing": GitHub has not finished working out mergeability yet. "unknown": the board could not read it.
+// "computing": GitHub has not finished working out mergeability yet. "unknown": the board could not read
+// the PR or could not judge what GitHub reported; the item's detail says which.
 export const pullReason = z.enum(["ready","draft","conflict","checks-failed","checks-pending","changes-requested","review-required","blocked","computing","unknown","auto-merge"]);
 export const commitSha = z.string().regex(/^[a-f0-9]{40}$/);
 // Why the board shows a PR as status unknown. The gh-* and lookup values say why GitHub could not be read.

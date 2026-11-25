@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ledgerPullSession, pullSessionNote } from "../client/pull-work-session";
+import { ledgerPullSession, mergeGate, pullSessionNote } from "../client/pull-work-session";
 import { createRemoteWorkSessionLookup, createRemoteWorkSessionStates, findRemoteWorkSessionState, workSessionPresence } from "../client/tracked-session-targets";
 import { trackedDecisionSchema } from "../shared/tracked-decisions";
 
@@ -58,4 +58,13 @@ test("the PR row says no verified session only when nothing was found", () => {
   expect(pullSessionNote(0, { checking: false, found: true })).toBe("none");
   expect(pullSessionNote(0, { checking: false, found: false })).toBe("unverified");
   expect(pullSessionNote(0, undefined)).toBe("unverified");
+});
+
+test("the merge button waits for a remote work session lookup before it can skip the running confirmation", () => {
+  expect(mergeGate(false, { pending: true, running: false })).toBe("wait");
+  expect(mergeGate(true, { pending: true, running: false })).toBe("wait");
+  expect(mergeGate(false, { pending: false, running: true })).toBe("confirm");
+  expect(mergeGate(true, undefined)).toBe("confirm");
+  expect(mergeGate(false, { pending: false, running: false })).toBe("open");
+  expect(mergeGate(false, undefined)).toBe("open");
 });

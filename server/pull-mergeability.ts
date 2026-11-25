@@ -2,7 +2,7 @@ import type { PullDetail, PullRequestItem } from "../shared/prs";
 
 type Pull = Omit<PullRequestItem, "projectIds">;
 type Limit = <T>(task: () => Promise<T>) => Promise<T>;
-export type MergeabilityOptions = { retryMs: number; attempts: number; perRead: number; resolvedMs: number; restMs: number };
+export type MergeabilityOptions = { retryMs: number; attempts: number; perRead: number; resolvedMs: number; restMs: number; waitMs: number };
 type Entry = { attempts: number; nextAt: number; item?: Pull; inflight?: Promise<void> };
 
 const keyOf = (pr: Pull) => JSON.stringify([pr.repo, pr.number, pr.headSha ?? pr.updatedAt]);
@@ -29,7 +29,13 @@ export class MergeabilityChecks {
         const current = entry;
         current.inflight = limit(() => this.check(pr, current)).finally(() => { current.inflight = undefined; });
       }
-      if (entry.inflight) await entry.inflight;
+      // A quick answer is used in this read. A slow one keeps running and serves a later read,
+      // so this read never waits for the full gh timeout.
+      if (entry.inflight) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([entry.inflight, new Promise<void>(resolve => { timer = setTimeout(resolve, this.options.waitMs); })]);
+        clearTimeout(timer);
+      }
       return entry.item ?? pr;
     }));
   }

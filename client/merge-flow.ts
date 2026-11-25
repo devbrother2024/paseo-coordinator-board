@@ -1,11 +1,13 @@
 import type { MergePreview, MergeResult } from "../shared/prs";
 
 // What the PR card does after the person pressed Confirm merge.
-// reopen: the head is the one reviewed but details moved, so read a new preview right there.
+// reopen: the head is the one reviewed but details moved, or GitHub is still recomputing, so read a new preview right there.
 // recheck: stop, and offer to check the latest state inside the same card.
 export function afterConfirm(result: Pick<MergeResult, "status" | "reason">): "done" | "reopen" | "recheck" {
   if (result.status === "merged" || result.status === "already-merged") return "done";
   if (result.status === "changed" && result.reason === "outdated") return "reopen";
+  // Right after another merge GitHub recomputes this PR. Wait a moment and read the preview again.
+  if (result.status === "blocked" && result.reason === "computing") return "reopen";
   return "recheck";
 }
 

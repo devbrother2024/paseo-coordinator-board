@@ -24,7 +24,7 @@ function fixture(ids = ["root","checkout","runtime"], lookupLifecycle?: Construc
     ["runtime",[{projectId:"runtime", workspaceDirectory:"/missing-runtime",gitRuntime:{remoteUrl:"git@github.com:org/Other.git"}}]],
     ["unselected",[{projectId:"unselected",workspaceDirectory:"/ignored"}]],
   ]);
-  const log={local:[] as string[],gh:[] as string[],single:[] as string[],lookups:[] as string[],native:0,active:0,max:0};
+  const log={local:[] as string[],gh:[] as string[],single:[] as string[],lookups:[] as string[],native:0,active:0,max:0,invalidated:0};
   let now=0;
   const behavior={fail:false, delay:async (_repo:string)=>{}, beforeOrigin:async (_path:string)=>{}, after:()=>{}, rows:[raw()],
     single:new Map<number,unknown>() as Map<number,unknown>, singleFail:false};
@@ -43,11 +43,11 @@ function fixture(ids = ["root","checkout","runtime"], lookupLifecycle?: Construc
     }};
   const prs=new ProjectPullRequests(store,deps,undefined,lookupLifecycle);
   let onMapping, onLifecycle;
-  prs.register({handle:(rpc,fn)=>{if(rpc.name===setProjectRepository.name)onMapping=fn; if(rpc.name===readPullLifecycle.name)onLifecycle=fn;}});
+  prs.register({handle:(rpc,fn)=>{if(rpc.name===setProjectRepository.name)onMapping=fn; if(rpc.name===readPullLifecycle.name)onLifecycle=fn;}},()=>{log.invalidated++;});
   const update=(input)=>onMapping(setProjectRepository.input.parse(input));
   const read=(refresh=false)=>prs.read(sdk,{refresh});
   const lifecycle = (input) => onLifecycle(readPullLifecycle.input.parse(input), {paseo:sdk});
-  return {store,sdk,read,log,behavior,roots,spaces,update,lifecycle,tick:n=>{now+=n;}};
+  return {store,sdk,read,log,behavior,roots,spaces,update,lifecycle,service:prs,tick:n=>{now+=n;}};
 }
 test("GitHub remotes normalize one owner/repo and reject credentials, extra components and shell input",()=>{
   for(const remote of ["https://github.com/Dev-Team/Repo.git","ssh://git@github.com/Dev-Team/Repo","git@github.com:Dev-Team/Repo.git"])
@@ -301,4 +301,48 @@ test("a repository whose PR list cannot be read reports why", async () => {
   const f = fixture(["root"]);
   f.behavior.fail = true;
   expect((await f.read()).projects[0]).toMatchObject({status:"unavailable", failure:"lookup-failed"});
+});
+
+test("merged or closed merge-card PRs are confirmed in the background without slowing a read", async () => {
+  const states = new Map<number,string>([[1,"MERGED"],[2,"CLOSED"],[3,"OPEN"]]);
+  let release = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const asked: number[] = [];
+  const f = fixture(["root"], async ({number}) => { asked.push(number); await gate; return states.get(number) as never; });
+  const targets = [1,2,3,4].map(number => ({repo:"org/example", number, projectId:"root"}));
+  const read = () => f.service.settledStates(f.sdk, targets, (_repo: string, number: number) => number === 4 ? {state:"MERGED", at:"2026-11-25T00:00:00.000Z"} : undefined);
+  // The board's own merge record answers at once; nothing else is known yet and the read does not wait.
+  expect([...read().entries()]).toEqual([["org/example#4", {state:"MERGED", at:"2026-11-25T00:00:00.000Z"}]]);
+  release();
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const second = read();
+  expect(second.get("org/example#1")?.state).toBe("MERGED");
+  expect(second.get("org/example#2")?.state).toBe("CLOSED");
+  expect(second.has("org/example#3")).toBe(false);
+  // Each confirmed merge or close refreshes the board count.
+  expect(f.log.invalidated).toBe(2);
+  // Final answers are kept; an open PR is asked again only after a minute.
+  expect(asked.sort()).toEqual([1,2,3]);
+  read(); expect(asked).toHaveLength(3);
+  f.tick(60_001); read(); await new Promise(resolve => setTimeout(resolve, 5));
+  expect(asked).toEqual([1,2,3,3]);
+});
+
+test("a slow single read does not hold up the board: this read says computing, a later read uses the answer", async () => {
+  const { MergeabilityChecks } = await import("../server/pull-mergeability");
+  let release = () => {};
+  const slow = new Promise<void>(resolve => { release = resolve; });
+  const reads: number[] = [];
+  const checks = new MergeabilityChecks(async (repo, number) => { reads.push(number); await slow; return parseOpenPull(repo, JSON.stringify(raw(number))); },
+    () => 0, { ...mergeabilityRetry, waitMs: 5 }, () => "lookup-failed");
+  const pending = parseOpenPulls("org/example", JSON.stringify([raw(1,{mergeable:"UNKNOWN"})])).items;
+  const run = <T,>(task: () => Promise<T>) => task();
+  const started = Date.now();
+  expect((await checks.apply(pending, run, () => true, {left:3}))[0].reason).toBe("computing");
+  expect(Date.now() - started).toBeLessThan(1_000);
+  // Another read while it is still running neither waits long nor asks GitHub again.
+  expect((await checks.apply(pending, run, () => true, {left:3}))[0].reason).toBe("computing");
+  release(); await slow; await new Promise(resolve => setTimeout(resolve, 0));
+  expect((await checks.apply(pending, run, () => true, {left:3}))[0].reason).toBe("ready");
+  expect(reads).toEqual([1]);
 });

@@ -7,7 +7,8 @@ test("an outdated confirmation reopens the preview; a moved head or other stop o
   expect(afterConfirm({ status: "changed", reason: "outdated" })).toBe("reopen");
   expect(afterConfirm({ status: "changed", reason: "changed" })).toBe("recheck");
   expect(afterConfirm({ status: "changed", reason: "expired" })).toBe("recheck");
-  expect(afterConfirm({ status: "blocked", reason: "computing" })).toBe("recheck");
+  expect(afterConfirm({ status: "blocked", reason: "computing" })).toBe("reopen");
+  expect(afterConfirm({ status: "blocked", reason: "conflict" })).toBe("recheck");
   expect(afterConfirm({ status: "unconfirmed", reason: "unconfirmed" })).toBe("recheck");
   expect(afterConfirm({ status: "merged", reason: "merged" })).toBe("done");
 });

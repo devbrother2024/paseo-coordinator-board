@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { waitingMergeCard } from "../shared/merge-card-place";
+import { closedMergeTarget, settleMergeCards, settledKey, waitingMergeCard } from "../shared/merge-card-place";
 import { decisionCount } from "../shared/decision-count";
 import { trackedDecisionSchema } from "../shared/tracked-decisions";
 import type { PullRequestItem, PullRequestView } from "../shared/prs";
@@ -28,7 +28,7 @@ test("a merge card stays in My decisions once GitHub confirms the PR ready", () 
   expect(waitingMergeCard(card(), view([pull({ reason: "ready", lane: "review" })]))).toBeNull();
 });
 
-test("a merge card for a PR that is no longer open keeps its follow-up questions in My decisions", () => {
+test("a merge card for a PR no longer open stays in My decisions until its merge or close is confirmed", () => {
   expect(waitingMergeCard(card(), view([]))).toBeNull();
   // Other kinds and boards without PR data are unaffected.
   expect(waitingMergeCard(card({ kind: "answer" }), view([pull()]))).toBeNull();
@@ -49,4 +49,26 @@ test("the decision count leaves waiting merge cards out", () => {
   const ready = view([pull({ reason: "ready", lane: "review" })]);
   const matched = { items: [card({ matchedPull: { repo: "example/app", number: 12 } }), items[1]], status: "ok" as const };
   expect(decisionCount({ sessions: [], notes: {}, trackedDecisions: matched, pullRequests: ready })).toBe(2);
+});
+
+test("a merge card whose PR merged or closed leaves My decisions; an unconfirmed one stays", () => {
+  const merged = card();
+  const closed = card({ id: "closed", key: "ledger-closed", mergeTarget: { repo: "example/app", number: 13 } });
+  const unsure = card({ id: "unsure", key: "ledger-unsure", mergeTarget: { repo: "example/app", number: 14 } });
+  const other = card({ id: "answer", key: "ledger-answer", kind: "answer", mergeTarget: null });
+  const states = new Map([[settledKey("example/app", 12), { state: "MERGED" as const, at: "2026-11-25T01:00:00.000Z" }],
+    [settledKey("example/app", 13), { state: "CLOSED" as const, at: "2026-11-25T02:00:00.000Z" }]]);
+  const { items, settled } = settleMergeCards([merged, closed, unsure, other], view([]), states);
+  expect(items.map(item => item.key)).toEqual(["ledger-unsure", "ledger-answer"]);
+  expect(settled.map(({ item, state }) => [item.key, state])).toEqual([["ledger-merge", "MERGED"], ["ledger-closed", "CLOSED"]]);
+  // The badge counts only what is left.
+  expect(decisionCount({ sessions: [], notes: {}, trackedDecisions: { items, status: "ok" }, pullRequests: view([]) })).toBe(2);
+  expect(decisionCount({ sessions: [], notes: {}, trackedDecisions: { items: [merged, closed, unsure, other], status: "ok" }, pullRequests: view([]) })).toBe(4);
+});
+
+test("only a PR missing from a fully read open list is a merge or close candidate", () => {
+  expect(closedMergeTarget(card(), view([]))).toEqual({ repo: "example/app", number: 12, projectId: "studio" });
+  expect(closedMergeTarget(card(), view([pull()]))).toBeNull();
+  for (const status of ["unavailable", "truncated", "unmapped", "off"] as const) expect(closedMergeTarget(card(), view([], status))).toBeNull();
+  expect(closedMergeTarget(card({ matchedPull: { repo: "example/app", number: 12 } }), view([]))).toBeNull();
 });
