@@ -166,4 +166,4 @@ Spec: [spec.md](spec.md)
 
 | 이름 | 상태 | 경로 | 한 줄 |
 |---|---|---|---|
-| [intent-workflow](intent-workflow/intent.md) | 승인 | 세션 | 이 저장소에 intent·spec·plan 구조를 들이고, 세션 경로와 접수 경로를 정한다 |
+| [intent-workflow](intent-workflow/intent.md) | 구현됨 (PR #52) | 세션 | 이 저장소에 intent·spec·plan 구조를 들이고, 세션 경로와 접수 경로를 정한다 |
