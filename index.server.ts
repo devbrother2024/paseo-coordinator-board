@@ -20,7 +20,7 @@ import { attachReportTool } from "./server/reporting";
 import { ConversationReader, excerpt } from "./server/conversation";
 import { isManagedCoordinator, pruneDispatchReceipts, setCoordinator, PreferenceStore } from "./server/preferences";
 import { closeKeptQuestion } from "./shared/kept-question";
-import { applyRecordedQuestions, questionDetails, scanOf } from "./server/conversation";
+import { applyRecordedQuestions, questionDetails, recordedSessionRows, scanOf } from "./server/conversation";
 import { closeQuestionByPerson, ledgerQuestionsBySession, recordDisplay, saveScan } from "./server/open-questions";
 import { trackedReviewTool } from "./server/tracked-review";
 import { attachCoordinatorTools } from "./server/coordinator";
@@ -137,18 +137,25 @@ export default function contribute(server: PluginServerContext) {
     // Questions the board raised stay until something shows they were handled: sessions it did not read show them from
     // the record, and sessions it can no longer find show them as ended.
     const questionsAt = Date.now();
-    const ledgerFor = (id: string) => ledger ? ledger.get(id) ?? new Set<string>() : undefined;
-    for (const row of visible) applyRecordedQuestions(row, latest, ledgerFor(row.id), questionsAt);
-    for (const [id, saved] of Object.entries(latest.raisedQuestions)) {
-      if (discovered.has(id) || !selected.has(saved.projectId)) continue;
-      const row: SessionRow = { id, title: saved.title, projectId: saved.projectId, projectTitle: saved.projectTitle, workspaceTitle: saved.workspaceTitle,
-        model: null, status: "closed", lane: "idle", detail: "", ...(saved.serverId ? { serverId: saved.serverId } : {}) };
-      if (applyRecordedQuestions(row, latest, ledgerFor(id), questionsAt) && row.lane === "human") visible.push(row);
+    for (const row of visible) applyRecordedQuestions(row, latest, ledger, questionsAt);
+    visible.push(...recordedSessionRows(latest, selected, discovered, ledger, questionsAt));
+    const visibleNotes = notes.visible(new Set(visible.map(s => s.id)));
+    const personClosed: [string, string][] = [];
+    // A person's done note on the card's question closes it as handled by the person.
+    for (const row of visible) {
+      const note = visibleNotes[row.id];
+      if (row.keptQuestion && note?.origin === "person" && note.kind === "done" && note.evidenceId && note.evidenceId === row.evidenceId) {
+        personClosed.push([row.id, row.keptQuestion.key]);
+      }
     }
     const scanned = visible.filter(row => scanOf(row));
-    const save = (scope: typeof latest) => scanned.map(row => saveScan(scope, row, scanOf(row)!, item => recordDisplay(questionDetails(item)), questionsAt)).some(Boolean);
-    if (save(structuredClone(latest))) prefs.change(save);
-    const visibleNotes = notes.visible(new Set(visible.map(s => s.id)));
+    const save = (scope: typeof latest) => [
+      ...scanned.map(row => saveScan(scope, row, scanOf(row)!, item => recordDisplay(questionDetails(item)), questionsAt)),
+      ...personClosed.map(([id, key]) => !Object.hasOwn(scope.closedQuestions, key) && (closeQuestionByPerson(scope, id, key, questionsAt), true)),
+    ].some(Boolean);
+    // Saving the record must not stop the board from showing. The next snapshot saves again.
+    try { if (save(structuredClone(latest))) prefs.change(save); }
+    catch { console.warn("Could not save the board's question records."); }
     facts.decorate(visible, evidence, visibleNotes);
     for (const row of visible) {
       decorateDecision(row, visibleNotes[row.id], latest, evidence.get(row.id));
@@ -319,7 +326,8 @@ export default function contribute(server: PluginServerContext) {
     // The ledger is read first so a question that moved to a ledger card closes only once that card is gone.
     // A ledger the board cannot read in full leaves every moved question open.
     const ledgerView = tracked.read(new Set(scope.projects), [], { items: [], projects: [] });
-    const ledger = ledgerView.status === "ok" ? ledgerQuestionsBySession(ledgerView.items) : undefined;
+    const resolved = tracked.resolvedKeys();
+    const ledger = ledgerView.status === "ok" ? { questions: ledgerQuestionsBySession(ledgerView.items), ...(resolved ? { resolved } : {}) } : undefined;
     const [evidence, roots] = await Promise.all([
       reader.decorate(paseo, sessions, scope, ledger),
       projectRoots.describe(projects, new Set(scope.projects)),

@@ -8,7 +8,7 @@ import { withAssignmentHost } from "./host-assignment";
 import { waitsForIdle } from "../shared/busy-delivery";
 import { questionIn, turnQuestion } from "./turn-question";
 import { questionContext, questionNotice, scanQuestions, settlingLines, type AssistantEvent, type FoundQuestion, type QuestionContext,
-  type QuestionEvent, type QuestionScan } from "./open-questions";
+  type LedgerView, type QuestionEvent, type QuestionScan } from "./open-questions";
 
 type Sdk = PluginHandlerContext["paseo"];
 type Page = Awaited<ReturnType<ReturnType<Sdk["agents"]["ref"]>["timeline"]["refetch"]>>;
@@ -182,7 +182,8 @@ export function classify(e: Evidence, row: SessionRow, decision?: Preferences["j
   const scan = scanQuestions(withEvents(e), isCoordinator, options);
   scans.set(row, scan);
   const last = e.turns.at(-1);
-  if (decision?.evidenceId === e.id) {
+  // A coordinator judgment that no person is needed does not hide a question still waiting for the person.
+  if (decision?.evidenceId === e.id && (decision.kind === "question" || !scan.open.length)) {
     const askedAt = decision.kind === "question" && (last?.role === "assistant" && turnQuestion(last, isCoordinator) ? last.at ?? decision.requestedAt : decision.requestedAt);
     return { lane: decision.kind === "question" ? "human" : decision.kind, detail: "코디네이터 판단 · " + decision.text,
       ...(askedAt ? {decisionRequestedAt:askedAt} : {}) };
@@ -202,13 +203,31 @@ function asked(scan: QuestionScan, ended: boolean, now?: number): Candidate | nu
  * A session the board did not read (working, ended, unreachable or its excerpt failed) still shows the questions the
  * board raised before. A pending permission request takes the card while it waits.
  */
-export function applyRecordedQuestions(row: SessionRow, prefs: Preferences, ledger?: ReadonlySet<string>, now = Date.now()) {
+export function applyRecordedQuestions(row: SessionRow, prefs: Preferences, ledger?: LedgerView, now = Date.now()) {
   if (scans.has(row) || row.nativePending || !prefs.raisedQuestions?.[row.id]?.questions.length) return false;
   const scan = scanQuestions(null, row.id === prefs.coordinator, questionContext(prefs, row.id, ledger, now));
   scans.set(row, scan);
   const card = asked(scan, row.status === "closed", now);
-  if (card) Object.assign(row, card);
+  // A working session keeps its lane and status line, so what reads "running" (merge holds, progress) still sees it.
+  // Its card still counts in My decisions (`displayLane`).
+  if (card && row.lane === "running") Object.assign(row, { keptQuestion: card.keptQuestion, ...(card.decisionRequestedAt ? { decisionRequestedAt: card.decisionRequestedAt } : {}) });
+  else if (card) Object.assign(row, card);
   return true;
+}
+
+/**
+ * Sessions with questions not handled that the board can no longer find (archived, deleted, or on a host it cannot
+ * reach). They stay as ended cards. A session still listed elsewhere (another project) is left to that scope.
+ */
+export function recordedSessionRows(prefs: Preferences, selected: ReadonlySet<string>, discovered: ReadonlySet<string>, ledger?: LedgerView, now = Date.now()) {
+  const rows: SessionRow[] = [];
+  for (const [id, saved] of Object.entries(prefs.raisedQuestions ?? {})) {
+    if (discovered.has(id) || !selected.has(saved.projectId)) continue;
+    const row: SessionRow = { id, title: saved.title, projectId: saved.projectId, projectTitle: saved.projectTitle, workspaceTitle: saved.workspaceTitle,
+      model: null, status: "closed", lane: "idle", detail: "", ...(saved.serverId ? { serverId: saved.serverId } : {}) };
+    if (applyRecordedQuestions(row, prefs, ledger, now) && row.lane === "human") rows.push(row);
+  }
+  return rows;
 }
 
 // The board reads excerpts only for resting sessions without an error to review.
@@ -216,7 +235,7 @@ export function usesConversationEvidence(row: Pick<SessionRow, "lane" | "detail"
   return (row.lane === "idle" || row.lane === "review") && !row.detail.includes("오류");
 }
 
-export function applyConversationEvidence(evidence: Evidence, row: SessionRow, prefs: Preferences, ledger?: ReadonlySet<string>, now?: number) {
+export function applyConversationEvidence(evidence: Evidence, row: SessionRow, prefs: Preferences, ledger?: LedgerView, now?: number) {
   if (!usesConversationEvidence(row)) return false;
   const judgment = prefs.judgments[row.id];
   Object.assign(row, classify(evidence, row, judgment?.projectId === row.projectId ? judgment : undefined, row.id === prefs.coordinator,
@@ -261,7 +280,7 @@ export class ConversationReader {
     }
   }
 
-  async decorate(paseo: Sdk, rows: SessionRow[], prefs: Preferences, ledger?: ReadonlyMap<string, ReadonlySet<string>>) {
+  async decorate(paseo: Sdk, rows: SessionRow[], prefs: Preferences, ledger?: LedgerView) {
     this.retain(new Set([...rows.map(row => row.id), ...(prefs.coordinator ? [prefs.coordinator] : [])]));
     const observed = new Map<string, Evidence>();
     let cursor = 0;
@@ -270,7 +289,7 @@ export class ConversationReader {
         const row = rows[cursor++];
         try {
           const evidence = await this.read(paseo, row);
-          if (evidence && applyConversationEvidence(evidence, row, prefs, ledger?.get(row.id) ?? (ledger ? new Set() : undefined))) {
+          if (evidence && applyConversationEvidence(evidence, row, prefs, ledger)) {
             observed.set(row.id, evidence);
           }
         } catch {

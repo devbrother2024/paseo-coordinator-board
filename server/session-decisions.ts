@@ -14,12 +14,12 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
   let content: Omit<Decision, "version">;
   if (row.nativePending) {
     content = { source: "permission", question: row.detail };
-  } else if (((row.status === "idle" && row.evidenceId) || row.keptQuestion) && !dismissed && row.lane === "human") {
+  } else if (((row.status === "idle" && row.evidenceId && row.lane === "human") || row.keptQuestion) && !dismissed) {
     const judgment = prefs.judgments[row.id];
     const structured = judgment?.kind === "question" && judgment.evidenceId === row.evidenceId && judgment.projectId === row.projectId;
     content = structured
       ? { ...judgment.content, source: "coordinator", question: judgment.content?.question || judgment.text }
-      : { source: "conversation", question: row.detail.replace(/^세션의 확인 요청 · /, "") };
+      : { source: "conversation", question: (row.keptQuestion && scanOf(row)?.open.at(-1)?.question) || row.detail.replace(/^세션의 확인 요청 · /, "") };
   } else if (noteQuestion && !answeredNote && row.status === "idle" && row.evidenceId) {
     content = { source: note.origin === "agent" ? "agent-note" : "person-note", question: note.text };
   } else {
@@ -35,8 +35,11 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
   ])).digest("hex");
   if (content.source !== "permission" && answer?.version === version) {
     row.decisionAnswered = true;
-    row.lane = "review";
-    row.detail = "답장을 보냈습니다. 작업 세션의 결과를 기다립니다.";
+    // A working session keeps its lane, so what reads "running" still sees it.
+    if (row.lane !== "running") {
+      row.lane = "review";
+      row.detail = "답장을 보냈습니다. 작업 세션의 결과를 기다립니다.";
+    }
   } else {
     row.decision = { ...content, version };
     if (content.source !== "permission" && evidence?.deliverWhenIdle) row.decision.deliverWhenIdle = true;

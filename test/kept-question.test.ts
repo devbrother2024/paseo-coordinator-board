@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyConversationEvidence, applyRecordedQuestions, classify, ConversationReader, excerpt, questionDetails, scanOf, wantsOlder } from "../server/conversation";
+import { applyConversationEvidence, applyRecordedQuestions, classify, ConversationReader, excerpt, questionDetails, recordedSessionRows, scanOf, wantsOlder } from "../server/conversation";
+import { displayLane } from "../shared/decision-count";
+import { snapshotHoldSessions } from "../shared/merge-hold";
 import { decorateDecision } from "../server/session-decisions";
 import { PreferenceStore } from "../server/preferences";
 import { answersChoices, closeQuestionByPerson, questionContext, recordDisplay, saveScan, settlingLines } from "../server/open-questions";
@@ -32,8 +34,12 @@ const judge = (e: ReturnType<typeof evidence>, scope = blank(), target = row()) 
 const blockAsk: Step = ["assistant", "Pick a cache.\n\n```board-question\n" + JSON.stringify({ questions: [{ id: "Q1", text: "Where should the cache live?",
   options: [{ key: "A", text: "Memory", recommended: true }, { key: "B", text: "Disk" }] }], recommendedReply: "Use memory for now." }) + "\n```", 1];
 
+type Ledger = { cards: Record<string, string>; resolved?: string[] };
+const ledgerView = (ledger?: Ledger) => ledger && { questions: new Map([["worker", new Map(Object.entries(ledger.cards))]]),
+  ...(ledger.resolved ? { resolved: new Set(ledger.resolved) } : {}) };
 /** Shows the card the way a snapshot does, and saves what it found. */
-function snapshot(scope: any, e: ReturnType<typeof evidence> | null, target = row(), ledger?: Set<string>) {
+function snapshot(scope: any, e: ReturnType<typeof evidence> | null, target = row(), ledgerCards?: Ledger) {
+  const ledger = ledgerView(ledgerCards);
   if (e) applyConversationEvidence(e, target, scope, ledger, NOW);
   else applyRecordedQuestions(target, scope, ledger, NOW);
   decorateDecision(target, undefined, scope, e ?? undefined);
@@ -68,21 +74,30 @@ test("closes (b): the session says on its own line that the decision was applied
   expect(result).toMatchObject({ lane: "human", detail: expect.stringContaining("Which region") });
 });
 
-test("closes (c): a question that moved to a ledger card closes once that card is gone, not before", () => {
+test("closes (c): a question that moved to a ledger card closes only when that card has a resolution", () => {
   const scope = blank();
   const e = evidence(ask, report, reply);
-  const moved = snapshot(scope, e, row(), new Set(["Shall I publish it now?"]));
+  const moved = snapshot(scope, e, row(), { cards: { "Shall I publish it now?": "card-1" }, resolved: [] });
   expect(moved.decision?.source).toBe("conversation");
-  expect(scope.raisedQuestions.worker.questions[0].moved).toBe(true);
-  // A ledger the board could not read leaves it open.
+  expect(scope.raisedQuestions.worker.questions[0]).toMatchObject({ moved: true, movedTo: "card-1" });
+  // A ledger the board could not read leaves it open and moved.
   expect(snapshot(scope, e, row(), undefined).decision?.source).toBe("conversation");
-  const gone = snapshot(scope, e, row(), new Set());
+  expect(scope.raisedQuestions.worker.questions[0].moved).toBe(true);
+  // The card left the ledger without a resolution: the question goes back to the conversation card.
+  const back = snapshot(scope, e, row(), { cards: {}, resolved: ["another-card"] });
+  expect(back.decision?.source).toBe("conversation");
+  expect(scope.raisedQuestions.worker.questions[0].moved).toBeUndefined();
+  // Resolutions the board could not read leave it as it is.
+  const unread = blank();
+  snapshot(unread, e, row(), { cards: { "Shall I publish it now?": "card-1" }, resolved: [] });
+  expect(snapshot(unread, e, row(), { cards: {} }).decision?.source).toBe("conversation");
+  expect(unread.raisedQuestions.worker.questions[0].moved).toBe(true);
+  // The card was resolved: the question closes.
+  const done = blank();
+  snapshot(done, e, row(), { cards: { "Shall I publish it now?": "card-1" }, resolved: [] });
+  const gone = snapshot(done, e, row(), { cards: {}, resolved: ["card-1"] });
   expect(gone.decision).toBeUndefined();
-  expect(scope.closedQuestions[moved.keptQuestion.key]?.reason).toBe("ledger");
-  // A ledger card on another question of the session does not close it.
-  const other = blank();
-  snapshot(other, e, row(), new Set(["Something else?"]));
-  expect(snapshot(other, e, row(), new Set()).decision?.source).toBe("conversation");
+  expect(done.closedQuestions[moved.keptQuestion.key]?.reason).toBe("ledger");
 });
 
 test("closes (d): the person pressed Close as handled", () => {
@@ -137,9 +152,12 @@ test("does not close (5): a session that works, ends, is archived or cannot be f
   const scope = blank();
   const first = snapshot(scope, evidence(ask));
   const key = first.keptQuestion.key;
-  // Working: the board does not read it, the record keeps the card.
+  // Working: the board does not read it, the record keeps the card. The session still reads as running.
   const working = snapshot(scope, null, row({ status: "running", lane: "running", detail: "Working" }));
-  expect(working).toMatchObject({ lane: "human", keptQuestion: { key }, decision: { source: "conversation", question: "Shall I publish it now?", version: first.decision.version } });
+  expect(working).toMatchObject({ lane: "running", detail: "Working", keptQuestion: { key },
+    decision: { source: "conversation", question: "Shall I publish it now?", version: first.decision.version } });
+  expect(displayLane(working, undefined)).toBe("human");
+  expect(snapshotHoldSessions([working])[0].running).toBe(true);
   expect(working.decision.contextMarkdown).toContain("Release 0.9 is ready.");
   // Ended, or gone from the list (archived, host unreachable): the card stays as ended.
   const ended = snapshot(scope, null, row({ status: "closed", lane: "idle" }));
@@ -244,5 +262,81 @@ test("regression: a question asked 26 hours ago is still a card, only dimmed, fr
   const shown = snapshot(scope, evidence(old, report, ["assistant", "Noted.", 25]));
   expect(shown).toMatchObject({ lane: "human", keptQuestion: { stale: true }, decision: { source: "conversation" } });
   const fromRecord = snapshot(scope, null, row({ status: "running", lane: "running", detail: "Working" }));
-  expect(fromRecord).toMatchObject({ lane: "human", keptQuestion: { key: shown.keptQuestion.key, stale: true }, decision: { version: shown.decision.version } });
+  expect(fromRecord).toMatchObject({ lane: "running", keptQuestion: { key: shown.keptQuestion.key, stale: true }, decision: { version: shown.decision.version } });
+});
+
+test("open questions are never cut by count: 70 stay", () => {
+  const scope = blank();
+  const asks = Array.from({ length: 70 }, (_, i): Step => ["assistant", `Shall I publish build ${i}?`, 2]);
+  const shown = snapshot(scope, evidence(...asks));
+  expect(scope.raisedQuestions.worker.questions).toHaveLength(70);
+  expect(shown.keptQuestion.older).toHaveLength(10);
+  // From the record alone, after they all scrolled out, all 70 are still open.
+  const later = snapshot(scope, excerpt(page([reply], {}, 1000)));
+  expect(scanOf(later)!.open).toHaveLength(70);
+  expect(Object.keys(scope.closedQuestions)).toHaveLength(0);
+});
+
+test("a coordinator judgment that no person is needed does not hide a question still waiting", () => {
+  const e = evidence(ask, report, reply);
+  for (const kind of ["review", "idle"] as const) {
+    const result = classify(e, row(), { kind, text: "Handled by delegation", evidenceId: e.id } as any, false, { now: NOW });
+    expect(result).toMatchObject({ lane: "human", detail: expect.stringContaining("Shall I publish") });
+  }
+  // Without an open question the judgment applies as before.
+  const quiet = evidence(["assistant", "Done. Tests pass.", 1]);
+  expect(classify(quiet, row(), { kind: "review", text: "Check the report", evidenceId: quiet.id } as any).lane).toBe("review");
+  // A coordinator question still becomes its card.
+  expect(classify(e, row(), { kind: "question", text: "Publish now?", evidenceId: e.id } as any).detail).toBe("코디네이터 판단 · Publish now?");
+});
+
+test("an answer that fits two open questions closes neither", () => {
+  const first: Step = ["assistant", "Two ways for the cache:\n(a) Memory.\n(b) Disk.\nShall I go with (a) or (b)?", 3];
+  const second: Step = ["assistant", "Two ways for logs:\n(a) Keep.\n(b) Drop.\nShall I go with (a) or (b)?", 2];
+  const result = judge(evidence(first, second, ["user", "a", 1]));
+  expect(result).toMatchObject({ lane: "human", keptQuestion: { maybeAnswered: true, older: [{ question: expect.stringContaining("(a) or (b)") }] } });
+  // With one open question it closes that one.
+  expect(judge(evidence(first, ["user", "a", 1])).lane).toBe("idle");
+});
+
+test("a block with several questions closes only when every question is answered", () => {
+  const block = (questions: number) => ["assistant", "Choices.\n\n```board-question\n" + JSON.stringify({
+    questions: Array.from({ length: questions }, (_, i) => ({ id: "Q" + (i + 1), text: `Question ${i + 1}?`, options: [{ key: "A", text: "Yes" }, { key: "B", text: "No" }] })),
+  }) + "\n```", 1] as Step;
+  expect(judge(evidence(block(2), ["user", "Q1 A", 0.5]))).toMatchObject({ lane: "human", keptQuestion: { maybeAnswered: true } });
+  expect(judge(evidence(block(2), ["user", "Q1 A, Q2 B", 0.5])).lane).toBe("idle");
+  expect(judge(evidence(block(2), ["user", "Q1 · Question 1?: A · Yes\nQ2 · Question 2?: B · No", 0.5])).lane).toBe("idle");
+  expect(answersChoices("Q1 · Question 1?: A · Yes", { block: (JSON.parse((block(2)[1] as string).split("```board-question\n")[1].split("\n```")[0])) })).toBe(false);
+});
+
+test("records are read question by question, and a save keeps questions another snapshot added meanwhile", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kept-question-"));
+  const good = { key: "k1", epoch: "e1", seq: 3, question: "Shall I publish?", raisedAt: at(1), later: 0 };
+  writeFileSync(join(dir, "scope.json"), JSON.stringify({ projects: ["p"], coordinator: null, judgments: {},
+    raisedQuestions: { worker: { projectId: "p", title: "t", projectTitle: "P", workspaceTitle: "w", questions: [good, { key: "" }, { ...good, key: "k2" }] } } }));
+  expect(new PreferenceStore(join(dir, "scope.json")).read().raisedQuestions.worker.questions.map(q => q.key)).toEqual(["k1", "k2"]);
+  // A scan made from an older read does not drop a question saved after it, and the project follows the session.
+  const scope = blank();
+  const e = evidence(ask);
+  const target = row();
+  applyConversationEvidence(e, target, scope, undefined, NOW);
+  scope.raisedQuestions.worker = { projectId: "old", title: "t", projectTitle: "P", workspaceTitle: "w", questions: [{ ...good, key: "from-other-snapshot" }] };
+  saveScan(scope, target, scanOf(target)!, () => ({}), NOW);
+  expect(scope.raisedQuestions.worker.questions.map((q: any) => q.key)).toContain("from-other-snapshot");
+  expect(scope.raisedQuestions.worker.questions).toHaveLength(2);
+  expect(scope.raisedQuestions.worker.projectId).toBe("p");
+});
+
+test("sessions the board can no longer find stay as ended cards, within the selected projects only", () => {
+  const scope = blank();
+  snapshot(scope, evidence(ask));
+  scope.raisedQuestions.elsewhere = { ...scope.raisedQuestions.worker, projectId: "q" };
+  const rows = recordedSessionRows(scope, new Set(["p"]), new Set(), undefined, NOW);
+  expect(rows.map(r => r.id)).toEqual(["worker"]);
+  expect(rows[0]).toMatchObject({ status: "closed", lane: "human", title: "Release prep", keptQuestion: { ended: true } });
+  // A session still listed (in another project now) is left to that scope.
+  expect(recordedSessionRows(scope, new Set(["p"]), new Set(["worker"]), undefined, NOW)).toEqual([]);
+  const card = rows[0];
+  decorateDecision(card, undefined, scope, undefined);
+  expect(card.decision).toMatchObject({ source: "conversation", question: "Shall I publish it now?" });
 });

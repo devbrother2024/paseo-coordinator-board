@@ -174,6 +174,13 @@ export class TrackedDecisionStore {
     return rows.size===parsed.data.items.length?rows:null;
   }
 
+  /** Keys of ledger cards with a resolution on record (closed, not waiting to send). Null when the record cannot be read. */
+  resolvedKeys(): Set<string> | null {
+    const resolved = this.recorded();
+    if (!resolved) return null;
+    return new Set([...resolved.values()].filter(receipt => !receipt.pending && !receipt.queue).map(receipt => receipt.key));
+  }
+
   mergeRecipient(target: MergeTarget, coordinator: string | null): string | null {
     // Include rows just archived by a simultaneous refresh. Approval belongs to
     // the configured importer, never a session ID written into a decision.

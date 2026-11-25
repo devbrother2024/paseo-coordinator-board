@@ -14,7 +14,8 @@ export function displayLane(session: SessionRow, note: Note | undefined): Sessio
   if (session.decisionAnswered) {
     return session.lane === "running" || session.lane === "unknown" ? session.lane : "review";
   }
-  if (session.lane === "human" || note?.kind === "question") return "human";
+  // A question from the conversation stays in My decisions even while its session works.
+  if (session.lane === "human" || note?.kind === "question" || (session.keptQuestion && session.decision?.source === "conversation")) return "human";
   if (session.lane === "running") return "running";
   if (session.lane === "review" || note?.kind === "review" || (note?.kind === "done" && note.origin === "agent")) return "review";
   if (note?.kind === "done") return "done";

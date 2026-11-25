@@ -31,14 +31,16 @@ export type QuestionContext = {
   boardMessageIds?: ReadonlySet<string>;
   clarificationIds?: ReadonlySet<string>;
   records?: readonly RaisedQuestion[];
-  // Questions ledger cards carry for this session. Undefined when the ledger was not read.
-  ledgerQuestions?: ReadonlySet<string>;
+  // Questions ledger cards carry for this session, with the key of the card. Undefined when the ledger was not read.
+  ledgerQuestions?: ReadonlyMap<string, string>;
+  // Keys of ledger cards with a resolution on record. Undefined when the resolutions could not be read.
+  ledgerResolved?: ReadonlySet<string>;
   now?: number;
 };
 
 export type FoundQuestion = {
   key: string; epoch: string; seq: number; question: string; markdown: string; context: string; askedAt?: string;
-  later: number; countedSeq?: number; maybeAnswered?: true; moved?: true;
+  later: number; countedSeq?: number; maybeAnswered?: true; moved?: true; movedTo?: string;
   turn?: AssistantEvent; earlier?: AssistantEvent[]; record?: RaisedQuestion;
 };
 export type QuestionScan = { epoch?: string; open: FoundQuestion[]; closed: { key: string; reason: ClosedReason; epoch: string; seq: number }[] };
@@ -46,7 +48,6 @@ export type QuestionScan = { epoch?: string; open: FoundQuestion[]; closed: { ke
 const HOUR = 60 * 60 * 1000;
 // Display only: a question reads as old after this many later messages or this long. It never leaves for that.
 export const OLD_QUESTION = { later: 15, ageMs: 12 * HOUR };
-export const MAX_OPEN_PER_SESSION = 64;
 export const MAX_CLOSED = 4000;
 
 const applied = /^(?:결정\s*반영|decision\s+applied)\s*[:：]\s*\S/iu;
@@ -97,9 +98,16 @@ export function answersChoices(text: string, question: { block?: QuestionBlock; 
   const block = question.block;
   if (block) {
     if (block.recommendedReply && norm(written) === norm(block.recommendedReply)) return true;
-    if (Object.keys(blockPicks(written, block)).length) return true;
-    const pieces = parts(written);
-    return pieces.length > 0 && pieces.every(part => block.questions.some((item, index) => answersBlockPart(part, item, index, block.questions.length)));
+    // Every question of the block has to be answered. An answer to some of them leaves the card open.
+    const all = (answered: ReadonlySet<number>) => block.questions.every((_, index) => answered.has(index));
+    if (all(new Set(Object.keys(blockPicks(written, block)).map(Number)))) return true;
+    const answered = new Set<number>();
+    for (const part of parts(written)) {
+      const index = block.questions.findIndex((item, at) => answersBlockPart(part, item, at, block.questions.length));
+      if (index < 0) return false;
+      answered.add(index);
+    }
+    return all(answered);
   }
   const choices = question.choices ?? [];
   const pieces = parts(written);
@@ -116,7 +124,8 @@ function choicesOf(item: FoundQuestion) {
 function fromRecord(record: RaisedQuestion): FoundQuestion {
   return { key: record.key, epoch: record.epoch, seq: record.seq, question: record.question, markdown: record.markdown ?? record.question,
     context: record.context ?? "", askedAt: record.askedAt, later: record.later, countedSeq: record.countedSeq ?? record.seq,
-    ...(record.maybeAnswered ? { maybeAnswered: true as const } : {}), ...(record.moved ? { moved: true as const } : {}), record };
+    ...(record.maybeAnswered ? { maybeAnswered: true as const } : {}), ...(record.moved ? { moved: true as const } : {}),
+    ...(record.movedTo ? { movedTo: record.movedTo } : {}), record };
 }
 
 /** The questions still open in a session, from its recent conversation (if read) and the questions the board raised before. */
@@ -165,7 +174,7 @@ export function scanQuestions(evidence: { epoch?: string; events?: readonly Ques
         list.push({ key: event.key, epoch, seq: event.seq, question: asked?.question ?? record!.question, markdown: asked?.markdown ?? base!.markdown,
           context: asked?.context ?? base!.context, askedAt: event.at ?? record?.askedAt, later: 0, countedSeq: event.seq,
           ...(record?.maybeAnswered ? { maybeAnswered: true as const } : {}), ...(record?.moved ? { moved: true as const } : {}),
-          turn: event, earlier: [...assistants], ...(record ? { record } : {}), closed: Object.hasOwn(closedKeys, event.key) });
+          ...(record?.movedTo ? { movedTo: record.movedTo } : {}), turn: event, earlier: [...assistants], ...(record ? { record } : {}), closed: Object.hasOwn(closedKeys, event.key) });
       }
       assistants.push(event);
       continue;
@@ -177,15 +186,21 @@ export function scanQuestions(evidence: { epoch?: string; events?: readonly Ques
       close(open.at(-1)!, "board");
       continue;
     }
-    const match = [...open].reverse().find(item => answersChoices(event.text, choicesOf(item)));
-    if (match) close(match, "choice");
+    // An answer that fits more than one open question cannot tell which one it answers, so it closes none.
+    const matches = open.filter(item => answersChoices(event.text, choicesOf(item)));
+    if (matches.length === 1) close(matches[0], "choice");
     else for (const item of open) item.maybeAnswered = true;
   }
+  // A question that moved to a ledger card closes only when that card has a resolution on record. A card that left the
+  // ledger without one gives the question back to the conversation card.
   if (context.ledgerQuestions) {
     for (const item of list) {
       if (item.closed) continue;
-      if (context.ledgerQuestions.has(item.question)) item.moved = true;
-      else if (item.moved) close(item, "ledger");
+      const card = context.ledgerQuestions.get(item.question);
+      if (card) { item.moved = true; item.movedTo = card; continue; }
+      if (!item.moved) continue;
+      if (item.movedTo && context.ledgerResolved?.has(item.movedTo)) close(item, "ledger");
+      else if (context.ledgerResolved) { delete item.moved; delete item.movedTo; }
     }
   }
   return { epoch, open: list.filter(item => !item.closed).map(({ closed: _closed, ...item }) => item), closed };
@@ -203,8 +218,9 @@ export function questionNotice(scan: QuestionScan, ended: boolean, now = Date.no
 }
 
 /** The context a session's scan needs from the host settings. */
+export type LedgerView = { questions: ReadonlyMap<string, ReadonlyMap<string, string>>; resolved?: ReadonlySet<string> };
 export function questionContext(scope: Pick<Preferences, "closedQuestions" | "raisedQuestions" | "decisionReceipts" | "clarifications">, sessionId: string,
-  ledgerQuestions?: ReadonlySet<string>, now?: number): QuestionContext {
+  ledger?: LedgerView, now?: number): QuestionContext {
   const boardMessageIds = new Set<string>();
   for (const [id, receipt] of Object.entries(scope.decisionReceipts ?? {})) {
     if (receipt.sessionId !== sessionId) continue;
@@ -213,17 +229,19 @@ export function questionContext(scope: Pick<Preferences, "closedQuestions" | "ra
   }
   const closed = Object.fromEntries(Object.entries(scope.closedQuestions ?? {}).filter(([, entry]) => entry.sessionId === sessionId));
   return { closed, boardMessageIds, clarificationIds: new Set(Object.keys(scope.clarifications ?? {})),
-    records: scope.raisedQuestions?.[sessionId]?.questions ?? [], ...(ledgerQuestions ? { ledgerQuestions } : {}), ...(now === undefined ? {} : { now }) };
+    records: scope.raisedQuestions?.[sessionId]?.questions ?? [],
+    ...(ledger ? { ledgerQuestions: ledger.questions.get(sessionId) ?? new Map(), ...(ledger.resolved ? { ledgerResolved: ledger.resolved } : {}) } : {}),
+    ...(now === undefined ? {} : { now }) };
 }
 
-/** Questions ledger cards carry, by session. */
-export function ledgerQuestionsBySession(items: readonly { sessionMatch?: { sessionId: string; question: string } | null }[]) {
-  const map = new Map<string, Set<string>>();
+/** Questions ledger cards carry, by session: question to the card's key. */
+export function ledgerQuestionsBySession(items: readonly { key: string; sessionMatch?: { sessionId: string; question: string } | null }[]) {
+  const map = new Map<string, Map<string, string>>();
   for (const item of items) {
     if (!item.sessionMatch) continue;
-    const set = map.get(item.sessionMatch.sessionId) ?? new Set<string>();
-    set.add(item.sessionMatch.question);
-    map.set(item.sessionMatch.sessionId, set);
+    const questions = map.get(item.sessionMatch.sessionId) ?? new Map<string, string>();
+    questions.set(item.sessionMatch.question, item.key);
+    map.set(item.sessionMatch.sessionId, questions);
   }
   return map;
 }
@@ -231,40 +249,49 @@ export function ledgerQuestionsBySession(items: readonly { sessionMatch?: { sess
 type SessionLabel = Pick<SessionRow, "id" | "projectId" | "serverId" | "title" | "projectTitle" | "workspaceTitle">;
 
 /**
- * Saves what a scan found: open questions stay recorded (new ones are added), closed ones leave with the reason that
- * closed them. Returns whether anything changed. Only a scan's own evidence removes a record.
+ * Saves what a scan found, question by question: open questions are added or updated, closed ones leave the record with
+ * the reason that closed them. Questions this scan did not see (added by another snapshot meanwhile) stay as they are.
+ * Open questions are never cut by count. Returns whether anything changed.
  */
 export function saveScan(scope: Preferences, row: SessionLabel, scan: QuestionScan, display: (item: FoundQuestion) => Partial<RaisedQuestion>, now = Date.now()) {
-  const before = JSON.stringify([scope.raisedQuestions[row.id] ?? null, scan.closed.map(item => scope.closedQuestions[item.key] ?? null)]);
+  const snapshot = () => JSON.stringify([scope.raisedQuestions[row.id] ?? null, scan.closed.map(item => scope.closedQuestions[item.key] ?? null)]);
+  const before = snapshot();
   const at = new Date(now).toISOString();
   for (const item of scan.closed) {
     if (!Object.hasOwn(scope.closedQuestions, item.key)) scope.closedQuestions[item.key] = { sessionId: row.id, at, reason: item.reason, epoch: item.epoch, seq: item.seq };
   }
   const saved = scope.raisedQuestions[row.id];
-  const questions = scan.open.map((item): RaisedQuestion => {
-    const kept = item.record;
+  const questions = new Map((saved?.questions ?? []).map(question => [question.key, question]));
+  for (const item of scan.open) {
+    if (Object.hasOwn(scope.closedQuestions, item.key)) continue;
+    const kept = questions.get(item.key) ?? item.record;
     const core: RaisedQuestion = {
-      ...(kept ?? {}),
       key: item.key, epoch: item.epoch, seq: item.seq, question: item.question.slice(0, 2000),
-      ...(item.askedAt ? { askedAt: item.askedAt } : {}), raisedAt: kept?.raisedAt ?? at,
+      ...(item.askedAt && item.askedAt.length <= 64 ? { askedAt: item.askedAt } : {}), raisedAt: kept?.raisedAt ?? at,
       later: item.later, ...(item.countedSeq !== undefined ? { countedSeq: item.countedSeq } : {}),
       ...(item.maybeAnswered ? { maybeAnswered: true as const } : {}), ...(item.moved ? { moved: true as const } : {}),
+      ...(item.movedTo ? { movedTo: item.movedTo } : {}),
     };
     // Display fields that do not fit the record are left out. The question itself is always kept.
-    const full = raisedQuestionSchema.safeParse({ ...core, ...display(item) });
-    return full.success ? full.data : core;
-  }).slice(-MAX_OPEN_PER_SESSION);
-  if (questions.length) {
-    scope.raisedQuestions[row.id] = { projectId: saved?.projectId ?? row.projectId, ...(row.serverId ?? saved?.serverId ? { serverId: row.serverId ?? saved?.serverId } : {}),
+    // The scan's flags replace the saved ones; the saved display fields stay unless the scan has new ones.
+    const { moved: _moved, movedTo: _movedTo, maybeAnswered: _maybe, ...shown } = kept ?? {};
+    const full = raisedQuestionSchema.safeParse({ ...shown, ...core, ...display(item) });
+    const plain = raisedQuestionSchema.safeParse(core);
+    questions.set(item.key, full.success ? full.data : plain.success ? plain.data : { ...core, epoch: core.epoch.slice(0, 4096) });
+  }
+  for (const item of scan.closed) questions.delete(item.key);
+  for (const key of [...questions.keys()]) if (Object.hasOwn(scope.closedQuestions, key)) questions.delete(key);
+  if (questions.size) {
+    scope.raisedQuestions[row.id] = { projectId: row.projectId || saved?.projectId || "", ...(row.serverId ?? saved?.serverId ? { serverId: row.serverId ?? saved?.serverId } : {}),
       title: (row.title || saved?.title || "").slice(0, 400), projectTitle: (row.projectTitle || saved?.projectTitle || "").slice(0, 400),
-      workspaceTitle: (row.workspaceTitle || saved?.workspaceTitle || "").slice(0, 400), questions };
+      workspaceTitle: (row.workspaceTitle || saved?.workspaceTitle || "").slice(0, 400), questions: [...questions.values()] };
   } else delete scope.raisedQuestions[row.id];
   const entries = Object.entries(scope.closedQuestions);
   if (entries.length > MAX_CLOSED) {
     entries.sort(([, a], [, b]) => a.at.localeCompare(b.at));
     for (const [key] of entries.slice(0, entries.length - MAX_CLOSED)) delete scope.closedQuestions[key];
   }
-  return JSON.stringify([scope.raisedQuestions[row.id] ?? null, scan.closed.map(item => scope.closedQuestions[item.key] ?? null)]) !== before;
+  return snapshot() !== before;
 }
 
 /** The display fields a record keeps, so the card reads the same after the message leaves the excerpt. */

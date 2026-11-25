@@ -29,24 +29,30 @@ function tolerantRecord<T extends z.ZodType>(entry: T) {
   });
 }
 export const raisedQuestionSchema = z.object({
-  key: z.string().min(1).max(64), epoch: z.string().max(512), seq: z.number(),
+  key: z.string().min(1).max(64), epoch: z.string().max(4096), seq: z.number(),
   question: z.string().min(1).max(2000), markdown: z.string().max(2000).optional(), context: z.string().max(2000).optional(),
   choices: decisionSchema.shape.choices, block: decisionSchema.shape.block,
   askedAt: z.string().max(64).optional(), raisedAt: z.iso.datetime(),
   // How many times the session spoke after the question, counted up to `countedSeq`.
   later: z.number().int().nonnegative(), countedSeq: z.number().optional(),
   maybeAnswered: z.literal(true).optional(), moved: z.literal(true).optional(),
+  // The ledger card the question moved to.
+  movedTo: z.string().max(6000).optional(),
 });
 export type RaisedQuestion = z.output<typeof raisedQuestionSchema>;
 const raisedSession = z.object({
   projectId: z.string(), serverId: z.string().optional(), title: z.string().max(400), projectTitle: z.string().max(400), workspaceTitle: z.string().max(400),
-  questions: z.array(raisedQuestionSchema).max(64),
+  // Read question by question: one that cannot be read is left out, the others stay. Open questions are not cut by count.
+  questions: z.array(z.unknown()).transform(saved => saved.flatMap(entry => {
+    const parsed = raisedQuestionSchema.safeParse(entry);
+    return parsed.success ? [parsed.data] : [];
+  })),
 });
 export type RaisedSession = z.output<typeof raisedSession>;
 const closedQuestion = z.object({
   sessionId: z.string(), at: z.iso.datetime(), reason: z.enum(["board", "session", "choice", "ledger", "person"]),
   // Where the question was in its timeline, so a later settling line still finds it after the record is gone.
-  epoch: z.string().max(512).optional(), seq: z.number().optional(),
+  epoch: z.string().max(4096).optional(), seq: z.number().optional(),
 });
 export type ClosedReason = z.output<typeof closedQuestion>["reason"];
 

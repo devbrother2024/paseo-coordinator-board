@@ -31,7 +31,8 @@ test("텍스트 요청과 근거를 보여주고, 후속 메시지는 대조 대
   expect(classify(evidence(["assistant_message","> 실행해 주세요\n검증했습니다."]),row).lane).toBe("idle");
   expect(classify(evidence(["reasoning","승인해 주세요"]),row).lane).toBe("idle");
   expect(classify(evidence(["tool_call","확인해 주실 것"]),row).lane).toBe("idle");
-  expect(classify(e,row,{kind:"review",text:"위임 범위로 해결",evidenceId:e.id}).lane).toBe("review");
+  // A coordinator judgment that no person is needed does not hide a question still waiting for the person.
+  expect(classify(e,row,{kind:"review",text:"위임 범위로 해결",evidenceId:e.id}).lane).toBe("human");
   expect(classify(e,row,{kind:"review",text:"옛 판단",evidenceId:"old"}).lane).toBe("human");
 });
 test("닫힌 세션을 깨우지 않고, 변경 시 다시 읽고, 한 세션 읽기 실패를 격리한다",async()=>{
