@@ -126,6 +126,10 @@ test("a decision heading and a reply guide are requests", () => {
     "Just reply with \"ship\" to go ahead.",
     "Reply **\"merge\"** or **\"keep\"**.",
     "Reply *\"merge\"* or _\"keep\"_.",
+    "You can reply \"merge\" to go ahead.",
+    "Simply reply **\"keep\"** to leave it.",
+    "- Reply \"merge\" or \"keep\"",
+    "Done. Please reply with \"ship\".",
     "Please reply with __\"merge\"__ to go ahead.",
     "Reply with ***\"merge\"*** or `keep`.",
   ]) expect([line, asksForDecision(line)]).toEqual([line, true]);
@@ -155,6 +159,10 @@ test("reports, offers, quotes and empty decisions are not requests", () => {
     "I'll reply \"done\" when the upload ends.",
     "I'll reply **\"done\"** when the upload ends.",
     "We will reply *\"done\"* once it ships.",
+    "The server will reply \"OK\" when the job ends.",
+    "It replies **\"OK\"** to every ping.",
+    "The bot should reply with \"pong\" to a ping.",
+    "Clients that reply \"no\" are skipped.",
     "The log says \"Decision needed: none\" in the header.",
   ]) expect([line, asksForDecision(line)]).toEqual([line, false]);
   expect(classify(evidence("편집본을 정리했습니다.\n\n결정할 것은 없습니다. 답을 받고 반영했습니다."), row).lane).toBe("idle");
