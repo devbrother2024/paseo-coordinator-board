@@ -280,7 +280,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
               if (rowKey) remember({ rowKey, actionKey: sessionRowKey(card), projectIds: [card.session.projectId], status: result.handled ? "already-closed" : "sent", recipientId: card.session.id,
                 title: card.session.title + " · " + result.title, detail: result.detail || undefined });
             }} /> : undefined}
-          onQueued={onRefresh}
+          onQueued={onRefresh} onClosed={onRefresh}
           onSent={result => {
             if (rowKey && result.action === "reply") remember({
               rowKey, actionKey: sessionRowKey(card), projectIds: [result.projectId], status: "sent", recipientId: result.recipientId,

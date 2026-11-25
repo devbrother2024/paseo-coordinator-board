@@ -13,6 +13,9 @@ type Page = Awaited<ReturnType<ReturnType<Sdk["agents"]["ref"]>["timeline"]["ref
 // `definitions` keeps option definitions such as "(a) …" from the part of a long turn that `text` cuts off.
 // `block` is the question block the message ended with. `text` no longer holds it.
 export type Turn = { role: "user" | "assistant"; text: string; truncated?: boolean; at?: string; definitions?: LabelDefinition[]; block?: QuestionBlock };
+// An assistant turn after the person's last input. `key` names the message for the card that stays open on it.
+// `closes` marks a message with a line that says the open question is settled.
+export type SinceTurn = Turn & { role: "assistant"; key: string; closes?: true };
 type ClarificationObservation = { bodyHash: string; response?: string };
 export type Evidence = {
   id: string; turns: Turn[]; deliverWhenIdle?:true;
@@ -24,8 +27,27 @@ export type Evidence = {
   deliveries?: { id: string; sender: string; bodyHash: string }[];
   // Sender of the most recent agent message when it is the latest input.
   lastInputSender?: string;
+  // The assistant turns after the person's last input, oldest first, when the last turn is the session's.
+  since?: SinceTurn[];
 };
-type Candidate = Pick<SessionRow, "lane" | "detail" | "decisionRequestedAt">;
+export type KeptQuestion = NonNullable<SessionRow["keptQuestion"]>;
+type QuestionOptions = { closedKey?: string; now?: number };
+
+const HOUR = 60 * 60 * 1000;
+// A question stays open for this many later messages and this long, and reads as old after half of either.
+export const KEPT_LIMIT = { later: 30, ageMs: 24 * HOUR };
+const SINCE_TURNS = KEPT_LIMIT.later + 1;
+const OLDER_PAGES = 2;
+const OLDER_LIMIT = 96;
+
+// A full line that says the question is settled, or that it moved to a ledger card.
+const closingLine = /^(?:질문\s*닫음|question\s+(?:resolved|closed)|질문(?:은|을)?\s+(?:원장\s+)?카드\s*\S{1,80}?\s*(?:으로|로)\s+옮(?:김|겼습니다|겼어요)|(?:the\s+)?question\s+(?:was\s+)?moved\s+to\s+(?:the\s+)?(?:ledger\s+)?card\b.{0,80}?)$/iu;
+// The line, or its last sentence ("Merged the notes. 질문은 카드 k1로 옮김"), is the settling line.
+export function closesQuestion(text: string) {
+  const settles = (part: string) => closingLine.test(part.trim().replace(/^\*\*(.*)\*\*$/, "$1").trim().replace(/[.。]$/, "").trim());
+  return text.split("\n").some(line => settles(line) || settles(line.trim().split(/(?<=[.!?。！？])\s+/).at(-1) ?? ""));
+}
+type Candidate = Pick<SessionRow, "lane" | "detail" | "decisionRequestedAt" | "keptQuestion">;
 
 export function excerpt(page: Page): Evidence {
   if (page.error || page.gap || page.staleCursor) throw new Error("대화 발췌를 확인할 수 없습니다.");
@@ -39,6 +61,7 @@ export function excerpt(page: Page): Evidence {
   let messageIds: string[] = [];
   let clarification: ClarificationObservation | undefined;
   let lastInputSender: string | undefined;
+  let since: SinceTurn[] = [];
   const clarificationMessages = new Map<string, ClarificationObservation>();
   for (const { item, seqEnd, timestamp } of page.entries) {
     if (item.type === "tool_call" && (item.agentMessage || item.name === "heartbeat")) {
@@ -58,6 +81,7 @@ export function excerpt(page: Page): Evidence {
     const text = item.text.trim();
     if (item.type === "user_message") {
       lastInputSender = undefined;
+      since = [];
       messageIds = [item.messageId, item.clientMessageId].filter((id): id is string => !!id);
       if (messageIds.length) {
         const hash=createHash("sha256").update(item.text).digest("hex");
@@ -82,23 +106,44 @@ export function excerpt(page: Page): Evidence {
     turns.push({ role, text: shown.slice(-2000), ...(timestamp ? { at:timestamp } : {}), ...(shown.length > 2000 ? { truncated: true } : {}),
       ...(split.block ? { block: split.block } : {}) });
     full.set(turns.at(-1)!, item.text);
+    if (role === "assistant") {
+      const key = createHash("sha256").update(JSON.stringify([page.epoch, seqEnd, item.text])).digest("hex").slice(0, 24);
+      since.push({ ...turns.at(-1)!, role, key, ...(closesQuestion(text) ? { closes: true as const } : {}) });
+      full.set(since.at(-1)!, item.text);
+    }
     digest.update(JSON.stringify([seqEnd, role, text]));
   }
   if (laterInputs.length) digest.update(JSON.stringify(laterInputs));
   const kept = turns.slice(-4);
+  const last = turns.at(-1);
+  const after = last?.role === "assistant" ? since.slice(-SINCE_TURNS) : [];
   // Only the turns the excerpt keeps: long ones keep the definitions their cut-off start holds.
-  for (const turn of kept) {
+  for (const turn of [...kept, ...after]) {
     if (turn.role !== "assistant" || !turn.truncated) continue;
     const definitions = labelDefinitions(full.get(turn)!.trim());
     if (definitions.length) turn.definitions = definitions;
   }
-  const last = turns.at(-1);
   return { ...(last?.role === "assistant" && waitsForIdle(full.get(last) ?? "") ? {deliverWhenIdle:true} : {}), id: digest.digest("hex").slice(0, 24), turns: kept,
     ...(clarification && messageIds.length ? { lastInputIds: messageIds } : {}),
     ...(clarificationMessages.size ? { clarificationMessages } : {}),
     ...(boardMessageHashes.size ? {boardMessageHashes} : {}),
     ...(replies.size ? { replies } : {}), ...(laterInputs.length ? {laterInput:true} : {}), ...(deliveries.length ? {deliveries} : {}),
-    ...(lastInputSender ? { lastInputSender } : {}) };
+    ...(lastInputSender ? { lastInputSender } : {}), ...(after.length ? { since: after } : {}) };
+}
+
+// Whether to read further back: no input from the person, no question and no settling line in what was read, and within the limits.
+export function wantsOlder(page: Pick<Page, "entries" | "hasOlder" | "startCursor">, now = Date.now()) {
+  if (!page.hasOlder || !page.startCursor) return false;
+  let assistants = 0;
+  for (const { item } of page.entries) {
+    if (item.type === "user_message") return false;
+    if (item.type !== "assistant_message" || !item.text.trim()) continue;
+    const split = splitQuestionBlock(item.text.trim());
+    if (split.block || questionIn(split.text) || closesQuestion(item.text)) return false;
+    if (++assistants >= SINCE_TURNS) return false;
+  }
+  const oldest = page.entries.find(entry => entry.timestamp)?.timestamp;
+  return !oldest || !(now - Date.parse(oldest) > KEPT_LIMIT.ageMs);
 }
 
 function questionIn(text: string, coordinatorDigest = false) {
@@ -145,18 +190,47 @@ export function lastConversationQuestion(evidence: Evidence, coordinatorDigest =
   return last?.role === "assistant" ? turnQuestion(last, coordinatorDigest) : null;
 }
 
-/** The last question with the text before it and the options it names, looked up in this and earlier assistant turns. */
-export function conversationQuestionDetails(evidence: Evidence, coordinatorDigest = false) {
-  const question = lastConversationQuestion(evidence, coordinatorDigest);
+/**
+ * The question the person has not answered yet. It is the last turn's question, or an earlier one the session asked after
+ * the person's last input (`kept`), until a message settles it, the person closes it, or it passes the limits.
+ * Messages from other sessions are not input from the person, so they do not answer it.
+ */
+export function openQuestion(evidence: Evidence, coordinatorDigest = false, { closedKey, now = Date.now() }: QuestionOptions = {}) {
   const last = evidence.turns.at(-1);
-  if (!question || !last) return null;
-  // A block carries its own options, so the labels in the text are not looked up.
-  if (last.block) return { ...question, choices: [], missingLabels: [], block: last.block };
-  const earlier = evidence.turns.slice(0, -1).filter(turn => turn.role === "assistant").reverse();
-  return { ...question, ...questionChoices({ question: question.markdown, context: question.context, message: last, earlier }), block: undefined };
+  if (last?.role !== "assistant") return null;
+  const found = turnQuestion(last, coordinatorDigest);
+  const earlierTurns = () => evidence.turns.slice(0, -1).filter(turn => turn.role === "assistant").reverse();
+  if (found) return { ...found, turn: last, kept: undefined as KeptQuestion | undefined, earlier: earlierTurns() };
+  const since = evidence.since ?? [];
+  if (since.at(-1)?.closes) return null;
+  for (let index = since.length - 2; index >= 0; index--) {
+    const turn = since[index];
+    const asked = turnQuestion(turn, coordinatorDigest);
+    if (!asked) {
+      if (turn.closes) return null;
+      continue;
+    }
+    const later = since.length - 1 - index;
+    const age = turn.at ? now - Date.parse(turn.at) : NaN;
+    if (later > KEPT_LIMIT.later || age > KEPT_LIMIT.ageMs || turn.key === closedKey) return null;
+    const stale = later > KEPT_LIMIT.later / 2 || age > KEPT_LIMIT.ageMs / 2;
+    const kept: KeptQuestion = { key: turn.key, later, ...(stale ? { stale: true as const } : {}) };
+    return { ...asked, turn, kept, earlier: since.slice(0, index).reverse() };
+  }
+  return null;
 }
 
-export function classify(e: Evidence, row: SessionRow, decision?: Preferences["judgments"][string], isCoordinator = false): Candidate {
+/** The open question with the text before it and the options it names, looked up in its turn and earlier assistant turns. */
+export function conversationQuestionDetails(evidence: Evidence, coordinatorDigest = false, options: QuestionOptions = {}) {
+  const open = openQuestion(evidence, coordinatorDigest, options);
+  if (!open) return null;
+  const { turn, earlier, kept: _kept, ...question } = open;
+  // A block carries its own options, so the labels in the text are not looked up.
+  if (turn.block) return { ...question, choices: [], missingLabels: [], block: turn.block };
+  return { ...question, ...questionChoices({ question: question.markdown, context: question.context, message: turn, earlier }), block: undefined };
+}
+
+export function classify(e: Evidence, row: SessionRow, decision?: Preferences["judgments"][string], isCoordinator = false, options: QuestionOptions = {}): Candidate {
   if (row.lane === "human" || row.lane === "running" || row.lane === "unknown" || row.detail.includes("오류")) return row;
   const last = e.turns.at(-1);
   if (decision?.evidenceId === e.id) {
@@ -166,8 +240,9 @@ export function classify(e: Evidence, row: SessionRow, decision?: Preferences["j
   }
   if (!last) return row;
   if (last.role === "assistant") {
-    const question = turnQuestion(last, isCoordinator);
-    if (question) return { lane: "human", detail: "세션의 확인 요청 · " + question.question, ...(last.at ? {decisionRequestedAt:last.at} : {}) };
+    const question = openQuestion(e, isCoordinator, options);
+    if (question) return { lane: "human", detail: "세션의 확인 요청 · " + question.question, ...(question.turn.at ? {decisionRequestedAt:question.turn.at} : {}),
+      ...(question.kept ? { keptQuestion: question.kept } : {}) };
   } else {
     const previous = e.turns.slice(0, -1).findLast(t => t.role === "assistant");
     if (previous && turnQuestion(previous, isCoordinator)) {
@@ -182,12 +257,32 @@ export function usesConversationEvidence(row: Pick<SessionRow, "lane" | "detail"
   return (row.lane === "idle" || row.lane === "review") && !row.detail.includes("오류");
 }
 
+// What a row would show without its kept question, so a ledger card that covers the session can take the question's place.
+const withoutKept = new WeakMap<SessionRow, Candidate>();
+export function keptFallback(row: SessionRow) {
+  return withoutKept.get(row);
+}
+
 export function applyConversationEvidence(evidence: Evidence, row: SessionRow, prefs: Preferences) {
   if (!usesConversationEvidence(row)) return false;
   const judgment = prefs.judgments[row.id];
-  Object.assign(row, classify(evidence, row, judgment?.projectId === row.projectId ? judgment : undefined, row.id === prefs.coordinator),
-    { evidenceId: evidence.id });
+  const before = { lane: row.lane, detail: row.detail, ...(row.decisionRequestedAt ? { decisionRequestedAt: row.decisionRequestedAt } : {}) };
+  const result = classify(evidence, row, judgment?.projectId === row.projectId ? judgment : undefined, row.id === prefs.coordinator,
+    { closedKey: prefs.closedQuestions?.[row.id]?.key });
+  if (result.keptQuestion) withoutKept.set(row, before);
+  Object.assign(row, result, { evidenceId: evidence.id });
   return true;
+}
+
+// The latest entries, and further back only while an unanswered question could be there (`wantsOlder`).
+export async function readTimeline(timeline: ReturnType<Sdk["agents"]["ref"]>["timeline"]) {
+  let page = await timeline.refetch({ direction: "tail", projection: "projected", limit: 48 });
+  for (let read = 0; read < OLDER_PAGES && !page.error && wantsOlder(page); read++) {
+    const older = await timeline.refetch({ direction: "before", cursor: page.startCursor!, projection: "projected", limit: OLDER_LIMIT }).catch(() => null);
+    if (!older || older.error || older.gap || older.staleCursor || older.epoch !== page.epoch) break;
+    page = { ...page, entries: [...older.entries, ...page.entries], startCursor: older.startCursor, hasOlder: older.hasOlder };
+  }
+  return page;
 }
 
 export class ConversationReader {
@@ -207,8 +302,7 @@ export class ConversationReader {
     }
     if (row.status !== "idle" && row.status !== "error" && row.status !== "closed" && !(openReply && row.status === "running")) return null;
     if (!fresh && cached && cached.stamp === row.activityAt && Date.now() - cached.at < 60_000) return cached.page;
-    const page = withAssignmentHost(paseo, row.serverId, client =>
-      client.agents.ref(row.id).timeline.refetch({ direction: "tail", projection: "projected", limit: 48 })).then(excerpt);
+    const page = withAssignmentHost(paseo, row.serverId, client => readTimeline(client.agents.ref(row.id).timeline)).then(excerpt);
     this.cache.set(row.id, { serverId: row.serverId, stamp: row.activityAt ?? "", at: Date.now(), page });
     try { return await page; }
     catch (error) {

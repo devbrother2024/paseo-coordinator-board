@@ -117,8 +117,19 @@ const schema = z.object({
   // When this board began serving the tool contract with this fingerprint. A compaction counts as
   // evidence that a conversation loaded these definitions only when it came after.
   toolsServed: z.object({ fingerprint: z.string().max(128), at: z.iso.datetime() }).optional().catch(undefined),
+  // The kept question the person closed on the board, one per session. Nothing is sent to the session.
+  closedQuestions: z.record(z.string(), z.object({ key: z.string().min(1).max(64), at: z.iso.datetime() })).default({}).catch({}),
 });
 export type Preferences = z.infer<typeof schema>;
+
+export const maxClosedQuestions = 200;
+export function recordClosedQuestion(scope: Preferences, sessionId: string, key: string, now = Date.now()) {
+  scope.closedQuestions[sessionId] = { key, at: new Date(now).toISOString() };
+  const entries = Object.entries(scope.closedQuestions);
+  if (entries.length <= maxClosedQuestions) return;
+  entries.sort(([, a], [, b]) => a.at.localeCompare(b.at));
+  for (const [id] of entries.slice(0, entries.length - maxClosedQuestions)) delete scope.closedQuestions[id];
+}
 export type DispatchReceipt = Preferences["dispatchReceipts"][string];
 
 export const maxDispatchReceipts = 256;

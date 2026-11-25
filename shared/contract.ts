@@ -40,6 +40,8 @@ const session = z.object({
   decisionRequestedAt: z.string().optional(),
   activityAt: z.string().optional(),
   waitingSince: z.string().optional(),
+  // A question the session asked earlier that the person has not answered. `later` counts the session's messages since.
+  keptQuestion: z.object({ key: z.string().min(1).max(64), later: z.number().int().min(1), stale: z.literal(true).optional() }).optional(),
   lastSummary: z.string().max(400).optional(),
   lastMessage: z.string().max(4000).optional(),
   lastMessageTruncated: z.literal(true).optional(),

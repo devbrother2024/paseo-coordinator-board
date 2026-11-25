@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import type { SessionRow } from "../shared/contract";
 import { displayLane } from "../shared/decision-count";
-import { applyConversationEvidence, excerpt, type Evidence } from "./conversation";
+import { applyConversationEvidence, excerpt, readTimeline, type Evidence } from "./conversation";
 import { discoverSessions, sessionRow } from "./discovery";
 import { assignmentReceiptKey } from "./dispatch";
 import { registeredAssignmentHosts, type HostSdk } from "./host-assignment";
@@ -142,9 +142,7 @@ async function readWorkers(sdk: HostSdk, host: { id: string; label: string }, en
       if (inactive && receipt.delivered && (agent.status === "idle" || agent.status === "closed") && !agent.activeTurn &&
           !agent.backgroundWork?.count && row.lane !== "human") {
         // Missing evidence cannot establish that the session has no open question.
-        const evidence = await read(() => sdk.agents.ref(id).timeline.refetch({
-          direction: "tail", projection: "projected", limit: 48,
-        })).then(excerpt).catch(() => null);
+        const evidence = await read(() => readTimeline(sdk.agents.ref(id).timeline)).then(excerpt).catch(() => null);
         if (evidence) inactive.set(id, { receipt, remote: { row, evidence } });
       }
       return row;

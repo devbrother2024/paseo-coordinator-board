@@ -18,7 +18,9 @@ import { canReceiveBoardInput, discoverSessions } from "./server/discovery";
 import { projectFolderMap, type ProjectFolders } from "./shared/project-folders";
 import { attachReportTool } from "./server/reporting";
 import { ConversationReader, excerpt } from "./server/conversation";
-import { isManagedCoordinator, pruneDispatchReceipts, setCoordinator, PreferenceStore } from "./server/preferences";
+import { isManagedCoordinator, pruneDispatchReceipts, recordClosedQuestion, setCoordinator, PreferenceStore } from "./server/preferences";
+import { closeKeptQuestion } from "./shared/kept-question";
+import { retireCoveredKeptQuestions } from "./server/session-decisions";
 import { trackedReviewTool } from "./server/tracked-review";
 import { attachCoordinatorTools } from "./server/coordinator";
 import { createOperations } from "./server/operations";
@@ -145,6 +147,8 @@ export default function contribute(server: PluginServerContext) {
     if (coordinatorRow && coordinatorRow.id === latest.coordinator) targets.set(coordinatorRow.id, coordinatorRow);
     for (const id of evidence.keys()) if (!targets.has(id)) evidence.delete(id);
     const {history = [], ...trackedDecisions} = tracked.read(selected, visible, pullRequests, evidence);
+    // A question kept open after later messages leaves when a ledger card points at its session.
+    retireCoveredKeptQuestions(visible, coveredSessionIds(trackedDecisions.items));
     const minutes = await parallelMinutes();
     const originReads = new Map<string, ReturnType<typeof readOriginState>>();
     const queueUpdates:Promise<void>[] = [];
@@ -589,6 +593,16 @@ export default function contribute(server: PluginServerContext) {
     const outcome = notes.update(input);
     if (outcome.ok) invalidateCount();
     return outcome;
+  });
+
+  server.handle(closeKeptQuestion, async ({ sessionId, key }, { paseo }) => {
+    const sessions = await discoverBoardSessions(paseo, prefs, new Set([sessionId]));
+    if (!managedSessions(sessions, prefs.read()).some(session => session.id === sessionId)) {
+      throw new Error("이 호스트에서 해당 세션을 찾지 못했습니다. 보드를 새로 고쳐 주세요. / This host could not find that session. Refresh the board.");
+    }
+    prefs.change(scope => recordClosedQuestion(scope, sessionId, key));
+    invalidateCount();
+    return { ok: true as const };
   });
 
   server.handle(setReporting, async ({ sessionId, enabled }, { paseo }) => {

@@ -178,6 +178,15 @@ When a work session stops on a bare label such as “Shall I go with (b)?”, th
 
 Question cards the board finds in a work session's last message follow the same order as ledger cards: the header line (project, time waited, **Open work session**), the sentence that asks (up to two lines), the text after it, then **Earlier in the message**. A question inside quotes ("…", “…”, '…', 「…」, 『…』) or inline code (`…`) is not treated as a request, so a message that only quotes a question or shows a phrase as an example does not become a question card. A numbered or bulleted line that asks keeps its number and its list together on the card. A line that opens with ``` and has no closing ``` is shown as plain text, so it does not turn the rest of the message into one code block. A message also counts as a request when it opens with a decision heading (Korean 결정할 것:, "Decision needed:", "This needs your decision"), tells you how to answer with a quoted reply (Reply "merge" or "keep"), or says it will act once it hears back, even without a question mark or "please choose". When answer options follow the heading as a bullet list, the card starts at the heading line. "No decision needed", "let me know if you need an answer" and "applied after your answer" do not make a card.
 
+If a session asks you something and then writes replies without a question to reports from other sessions, the question card stays until you answer. Messages from other sessions, board notices and heartbeats do not count as your answer. A kept card shows "The session spoke n more times since · No answer yet", and **Open work session** in its header opens the session. The card closes when one of these happens:
+
+- You write to the session or answer on the board (a photo alone counts).
+- The session writes a settling line on its own line in a later message: `질문 닫음`, `question resolved`, `question closed`, or, when it moved the question to the ledger, `질문은 카드 <name>로 옮김` or `question moved to card <name>`. It may also be the last sentence of a line.
+- A ledger card points at the same session.
+- You press **Close this question** on the card. This is recorded on this host's board only, and nothing is sent to the session.
+
+When the session has spoken more than 15 times since the question, or 12 hours have passed, the card dims and reads "Old question". After more than 30 messages or 24 hours the card leaves. The board reads further back in the conversation, at most twice, only when the recent part has neither input from you nor a question.
+
 To ask before deciding, write the question in the card's input, attach a screenshot if you need one, and press **Send**. Exchanges from the earlier **Ask a question** box stay under **Questions and answers** in **Evidence and history**.
 
 ### A question block for options
