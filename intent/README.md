@@ -168,3 +168,4 @@ Spec: [spec.md](spec.md)
 |---|---|---|---|
 | [intent-workflow](intent-workflow/intent.md) | 구현됨 (PR #52) | 세션 | 이 저장소에 intent·spec·plan 구조를 들이고, 세션 경로와 접수 경로를 정한다 |
 | [assign-explicit-route](assign-explicit-route/intent.md) | 구현됨 (PR #55) | 세션 | 코디네이터가 고른 모델 경로를 보드의 원격 배정에 전달한다 |
+| [reset-pass-display](reset-pass-display/intent.md) | 구현됨 (PR #59) | 세션 | 계정 카드에 사용량 초기화권의 남은 장수와 만료를 보이고, 값은 호스트의 account-usage.json이 채운다 |
