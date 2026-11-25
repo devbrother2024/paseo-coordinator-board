@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { asksBeforeMerge, heldMergeRecord, linkedHosts, mergeHoldDetails, mergeHolds, mergeHoldWords, mergeRecordLinks, snapshotHoldSessions } from "../shared/merge-hold";
+import { asksBeforeMerge, heldMergeRecord, kanbanPull, linkedHosts, mergeHoldDetails, mergeHolds, seenElsewhere, mergeHoldWords, mergeRecordLinks, snapshotHoldSessions } from "../shared/merge-hold";
 import { decisionCount } from "../shared/decision-count";
 import { decidesNow, placeMergeCards, pullDecidesNow } from "../shared/merge-card-place";
 import type { PullRequestItem } from "../shared/prs";
@@ -190,4 +190,14 @@ test("one placement decides ledger merge cards and PR rows for the board and the
   // The count sees the same: one ledger card (its PR row is covered by the card).
   const trackedDecisions = { status: "ok", items: [running, resting, notReady] } as never;
   expect(decisionCount({ sessions: onPr, notes: {}, pullRequests: view, trackedDecisions })).toBe(placed.deciding.length);
+});
+
+test("the board's small helpers: the remote exemption and the kanban row", () => {
+  const details = mergeHoldDetails([owned()], { sessions: [session(true, { id: "owner", workspacePull: nextUnit })] });
+  expect(seenElsewhere(details, pr(), "owner")).toBe(true);
+  expect(seenElsewhere(details, pr(), "someone-else")).toBe(false);
+  expect(seenElsewhere(details, pr(), undefined)).toBe(false);
+  const holds = mergeHolds([pr()], { sessions: [session(true)] });
+  expect(kanbanPull(pr(), holds).lane).toBe("progress");
+  expect(kanbanPull(pr({ number: 8 }), holds).lane).toBe("review");
 });

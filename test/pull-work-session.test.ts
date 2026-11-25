@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { confirmAfterLookup, judgedOwnerSession, ledgerPullSession, mergeGate, pullSessionNote, remoteAnswerMaxAgeMs, remoteSessionView } from "../client/pull-work-session";
+import { confirmAfterLookup, judgedOwnerSession, ledgerPullSession, mergeConfirmation, mergeGate, pullSessionNote, remoteAnswerMaxAgeMs, remoteSessionView } from "../client/pull-work-session";
 import { createRemoteWorkSessionLookup, createRemoteWorkSessionStates, findRemoteWorkSessionState, workSessionPresence } from "../client/tracked-session-targets";
 import { trackedDecisionSchema } from "../shared/tracked-decisions";
 
@@ -122,4 +122,44 @@ test("a remote owner the coordinator named joins the PR row on the host where th
   expect(judgedOwnerSession(judged({ ownerSessionHost: "gone" }), [west, east], none)).toBeUndefined();
   expect(judgedOwnerSession(judged(), [west, east], new Set(["far-worker"]))).toBeUndefined();
   expect(judgedOwnerSession({}, [west], none)).toBeUndefined();
+});
+
+const policy = (over: Partial<Parameters<typeof mergeConfirmation>[0]> = {}) =>
+  mergeConfirmation({ hold: undefined, lane: "review", localRunning: false, remoteElsewhere: false, ...over });
+
+test("merge confirmation: a session on the PR branch keeps the row in progress with the held status", () => {
+  const held = policy({ hold: "running", lane: "progress", localRunning: true });
+  expect(held.status).toBe("held");
+  // The board moved it out of My decisions; on a merge card the same hold never shows the held status.
+  expect(policy({ hold: "running", lane: "review" }).status).toBeNull();
+});
+
+test("merge confirmation: a session busy on another branch adds one line and asks nothing", () => {
+  const busy = policy({ hold: "elsewhere", localRunning: true });
+  expect(busy).toMatchObject({ gate: "open", note: "elsewhere", warning: null, prompt: null });
+});
+
+test("merge confirmation: an unknown branch or an unread host warns and asks once more", () => {
+  expect(policy({ hold: "branch-unknown", localRunning: true })).toMatchObject({ gate: "confirm", warning: "branch-unknown", prompt: "unknown" });
+  expect(policy({ hold: "unverified" })).toMatchObject({ gate: "confirm", warning: "unverified", prompt: "unknown" });
+});
+
+test("merge confirmation: the card's remote session seen on another branch asks nothing, before or at Confirm merge", () => {
+  const exempt = policy({ hold: "elsewhere", remote: { pending: false, running: true }, remoteElsewhere: true });
+  expect(exempt).toMatchObject({ gate: "open", note: "elsewhere", remoteExempt: true });
+  expect(confirmAfterLookup({ running: true }, exempt.remoteExempt)).toBe("merge");
+});
+
+test("merge confirmation: another running remote session still asks, even next to one busy elsewhere", () => {
+  const other = policy({ hold: "elsewhere", remote: { pending: false, running: true }, remoteElsewhere: false });
+  expect(other).toMatchObject({ gate: "confirm", note: "elsewhere", warning: "running", prompt: "running", remoteExempt: false });
+  expect(confirmAfterLookup({ running: true }, other.remoteExempt)).toBe("ask");
+  expect(policy({ remote: { pending: true, running: false } }).gate).toBe("wait");
+});
+
+test("merge confirmation: idle sessions open the preview with nothing extra", () => {
+  expect(policy()).toEqual({ gate: "open", note: null, warning: null, prompt: null, status: null, remoteExempt: false });
+  expect(policy({ remote: { pending: false, running: false } }).gate).toBe("open");
+  // A linked running session the board could not place (no hold) still asks, as before.
+  expect(policy({ localRunning: true })).toMatchObject({ gate: "confirm", warning: "running" });
 });

@@ -110,3 +110,11 @@ export function mergeHoldDetails(prs: readonly HoldPull[], input: HoldInput): Ma
 // A ledger merge card waits with its PR while the PR's work session runs on its branch.
 export const heldMergeRecord = (record: Pick<TrackedDecision, "kind" | "mergeTarget">, holds: ReadonlyMap<string, MergeHold>) =>
   record.kind === "merge" && !!record.mergeTarget && holds.get(pullKey(record.mergeTarget.repo, record.mergeTarget.number)) === "running";
+
+// Whether the board saw this exact session working on another branch, so the card's remote lookup of it asks nothing.
+export const seenElsewhere = (details: ReadonlyMap<string, HoldDetail>, pr: Pick<HoldPull, "repo" | "number">, sessionId: string | undefined) =>
+  !!sessionId && !!details.get(pullKey(pr.repo, pr.number))?.elsewhere.has(sessionId);
+
+// A held PR shows as a plain row in the kanban's running column instead of a merge card.
+export const kanbanPull = <T extends Pick<HoldPull, "repo" | "number" | "lane">>(pr: T, holds: ReadonlyMap<string, MergeHold>): T =>
+  holds.get(pullKey(pr.repo, pr.number)) === "running" ? { ...pr, lane: "progress" } : pr;

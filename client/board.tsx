@@ -19,7 +19,7 @@ import { latestMergeNotification } from "./merge-notification";
 import { decisionSummary } from "./decision-summary";
 import { matchesWorkspace } from "../shared/workspace-pull";
 import { ownerRunning } from "../shared/pull-judgments";
-import { linkedHosts, mergeHoldDetails, mergeRecordLinks, snapshotHoldSessions } from "../shared/merge-hold";
+import { kanbanPull, linkedHosts, mergeHoldDetails, mergeRecordLinks, seenElsewhere, snapshotHoldSessions } from "../shared/merge-hold";
 import type { PullRequestItem } from "../shared/prs";
 import { getPaseoClient, type PluginScreenProps } from "@getpaseo/plugin/client";
 import { remoteScope, readRemoteHistorySession } from "./remote-sessions";
@@ -92,7 +92,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const pullHold = (pr: Pick<PullRequestItem, "repo" | "number">) => holds.get(pullKey(pr.repo, pr.number));
   const readyPrs = pullRequests?.items.filter(pr => pullDecidesNow(pr, holds)) ?? [];
   // Held PRs sit in the kanban's running column as plain PR rows.
-  const kanbanPrs = pullRequests?.items.map(pr => pullHold(pr) === "running" ? { ...pr, lane: "progress" as const } : pr) ?? [];
+  const kanbanPrs = pullRequests?.items.map(pr => kanbanPull(pr, holds)) ?? [];
   // The same placement as the decision count. A merge card waits in project progress until GitHub confirms its PR
   // is ready, and while a work session runs on its branch (then it shows as its PR row instead).
   const { deciding, waiting: waitingMerges, held: heldMerges } = placeMergeCards(sortedRecords, pullRequests, holds);
@@ -333,7 +333,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     const remoteTarget = judgedOwnerSession(pr, peerHosts, linkedIds) ?? (fromLedger?.kind === "remote" ? fromLedger : undefined);
     const remoteSession = remoteTarget && onOpenHostSession ? {...remoteTarget, states: workSessionStates, fresh: freshWorkSessionStates, open: onOpenHostSession} : undefined;
     return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions} remoteSession={remoteSession} hold={pullHold(pr)}
-      remoteElsewhere={!!remoteTarget && !!holdDetails.get(pullKey(pr.repo, pr.number))?.elsewhere.has(remoteTarget.id)}
+      remoteElsewhere={seenElsewhere(holdDetails, pr, remoteTarget?.id)}
       clarification={decision && !embedded && questionFor({kind:"pull",projectId,repo:pr.repo,number:pr.number,updatedAt:pr.updatedAt},pr.repo + " #" + pr.number)}
       decision={decision} showDivider={!decision || embedded} securityGate={securityGate} openCoordinator={openCoordinator} onResult={notice => {
         const { status } = notice;
