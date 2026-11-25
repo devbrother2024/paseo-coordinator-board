@@ -8,10 +8,20 @@ const quotaWindow = z.object({
 const balance = z.object({
   id:z.string(), label:z.string(), remaining:z.number().nullable(), limit:z.number().nullable(), unit:z.string(), resetsAt:stamp,
 });
+// Free resets of a usage limit some subscriptions grant. Paseo does not report them, so they come
+// only from the host's account-usage.json and are shown, never used to pick an account.
+const resetPass = z.object({
+  id:z.string(), label:z.string(), left:z.number().int().nonnegative(), expiresAt:z.array(z.string()), note:z.string().optional(),
+});
+export type ResetPass = z.infer<typeof resetPass>;
 export const accountUsage = z.object({
   providerId:z.string(), label:z.string(), plan:z.string().nullable(), fetchedAt:stamp,
   issue:z.enum(["login","rate-limit"]).optional(),
   status:z.enum(["available","unavailable","error"]), windows:z.array(quotaWindow), balances:z.array(balance),
+  resetPasses:z.array(resetPass).optional(),
+  // When the passes came from a host report on an account Paseo measures, the time that report was taken.
+  // Paseo's own fetchedAt says nothing about how fresh the passes are.
+  resetPassesFetchedAt:z.string().optional(),
 });
 export type AccountUsage = z.infer<typeof accountUsage>;
 
@@ -22,8 +32,15 @@ export const setUsageRouting = defineRpc({
 });
 
 export function recentUsage(report:AccountUsage, now=Date.now()) {
-  const fetched = report.fetchedAt ? Date.parse(report.fetchedAt) : NaN;
-  return Number.isFinite(fetched) && fetched <= now + 60000 && now - fetched <= 15 * 60000;
+  return recentReading(report.fetchedAt, now);
+}
+
+// How long a reading counts as current before the card calls it the last known one.
+export const readingFreshFor = 15 * 60000;
+
+export function recentReading(fetchedAt:string|null|undefined, now=Date.now()) {
+  const fetched = fetchedAt ? Date.parse(fetchedAt) : NaN;
+  return Number.isFinite(fetched) && fetched <= now + 60000 && now - fetched <= readingFreshFor;
 }
 
 export function hasUsageReading(report: AccountUsage) {

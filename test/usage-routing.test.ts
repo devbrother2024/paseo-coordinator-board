@@ -85,19 +85,19 @@ test("host readings fill only configured provider gaps and preserve the original
     const installed=[{id:"custom"},{id:"native"}];
     write([host,paid,report("absent",50),{...host,fetchedAt:"invalid"},{...host,windows:[{...host.windows[0],remainingPct:120}]}]);
     const empty={...host,status:"unavailable" as const,windows:[]};
-    expect(await readDisplayUsage(folder,installed,[paid,empty])).toEqual([host]);
-    expect(await readDisplayUsage(folder,installed,[host,paid])).toEqual([]);
+    expect((await readDisplayUsage(folder,installed,[paid,empty])).display).toEqual([host]);
+    expect((await readDisplayUsage(folder,installed,[host,paid])).display).toEqual([]);
     const expired={...host,windows:[{...host.windows[0],resetsAt:"2000-01-01T00:00:00Z"}]};
-    expect(await readDisplayUsage(folder,installed,[expired,paid])).toEqual([host]);
+    expect((await readDisplayUsage(folder,installed,[expired,paid])).display).toEqual([host]);
     const credit={...host,windows:[],balances:[{id:"credits",label:"Credits",remaining:0,unit:"credits",limit:null,resetsAt:null}]};
-    expect(await readDisplayUsage(folder,installed,[credit,paid])).toEqual([]);
+    expect((await readDisplayUsage(folder,installed,[credit,paid])).display).toEqual([]);
     writeFileSync(join(folder,"account-usage.json"),"{");
-    expect(await readDisplayUsage(folder,installed,[])).toEqual([]);
+    expect((await readDisplayUsage(folder,installed,[])).display).toEqual([]);
     writeFileSync(join(folder,"account-usage.json")," ".repeat(131073));
-    expect(await readDisplayUsage(folder,installed,[])).toEqual([]);
+    expect((await readDisplayUsage(folder,installed,[])).display).toEqual([]);
     rmSync(join(folder,"account-usage.json"));writeFileSync(join(folder,"other"),JSON.stringify({version:1,reports:[host]}));
     symlinkSync(join(folder,"other"),join(folder,"account-usage.json"));
-    expect(await readDisplayUsage(folder,installed,[])).toEqual([]);
+    expect((await readDisplayUsage(folder,installed,[])).display).toEqual([]);
   } finally {rmSync(folder,{recursive:true,force:true});}
 });
 

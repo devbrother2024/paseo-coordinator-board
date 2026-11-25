@@ -50,6 +50,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   const askRecommendation = useRpc(requestRecommendation);
   const [showMethods, setShowMethods] = useState(false);
   const [reviewedReply, setReviewedReply] = useState<string | null>(null);
+  const [replyOverflows, setReplyOverflows] = useState<boolean>();
   const [showEvidence, setShowEvidence] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
   const [questionOpen, setQuestionOpen] = useState(false);
@@ -68,7 +69,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   const delivered = useRef("");
   const chosen = selection === null ? null : decision?.options?.[selection];
   const proposed = chosen?.reply || (decision?.needsInput ? undefined : decision?.recommendation);
-  const reply = sessionReplyDraft(proposed, draft, reviewedReply, !!replyPhotos.photos.length);
+  const reply = sessionReplyDraft(proposed, draft, reviewedReply, !!replyPhotos.photos.length, replyOverflows);
   const sendReply = { disabled: busy || replyPhotos.blocked || !reply.canSend, onPress: () => void submit("reply", reply.text, session.id, replyPhotos) };
   const inputFocus = useDecisionInteraction(!!coordination || (draft !== null && draft !== (proposed ?? "")) ||
     selection !== null || !!reviewedReply || busy || replyPhotos.blocked || !!replyPhotos.photos.length ||
@@ -241,7 +242,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
           <DecisionReplyInput {...inputFocus} send={sendReply} theme={theme} value={reply.text} onChangeText={setDraft}
             accessibilityLabel={named(t("보낼 내용", "Message text")).accessibilityLabel}
             placeholder={t(...cardInputPlaceholder.decision)}
-            maxLength={24000} disabled={busy} reviewRequired={reply.needsReview} onReview={() => setReviewedReply(proposed ?? null)} />
+            maxLength={24000} disabled={busy} reviewRequired={reply.needsReview} onReview={() => setReviewedReply(proposed ?? null)} onOverflowChange={setReplyOverflows} />
         </PhotoComposer>
         <View style={{ ...wrap, alignItems: "center" }}>
           <SendButton theme={theme} label={t(...words.label)} accessibilityLabel={named(t(...words.name)).accessibilityLabel} send={sendReply} selected={!sendReply.disabled} />

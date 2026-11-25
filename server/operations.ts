@@ -1,4 +1,4 @@
-import { defineAgentTool, type PluginServerContext } from "@getpaseo/plugin/server";
+import { defineAgentTool, type PluginHandlerContext, type PluginServerContext } from "@getpaseo/plugin/server";
 import { readDisplayUsage } from "./display-usage";
 import { readAccountUsage } from "./usage-routing";
 import { setUsageRouting } from "../shared/usage-routing";
@@ -10,7 +10,7 @@ import { SessionPhotoStore } from "./session-photos";
 import { SentRequestStore } from "./sent-requests";
 import { createHash } from "node:crypto";
 import { askDigest, operationState, requestWork, setProviderInclusion, setWorkerMode, setupCoordinator, updateRouting, workPlacementText } from "../shared/operations";
-import { coordinatorPinSettings, pinCurrentCoordinator, setCoordinatorAutoPin } from "../shared/operations";
+import { archiveRetiredCoordinator, coordinatorPinSettings, pinCurrentCoordinator, retiredCoordinatorState, setCoordinatorAutoPin } from "../shared/operations";
 import { dispatchInputSchema, dispatchProjectId, includedCatalog, sameRoute, workerGradeSchema, effectiveWorkerMode } from "../shared/dispatch";
 import { placementFields } from "../shared/host-assignment";
 import {
@@ -24,6 +24,7 @@ import {
   validateCandidates,
 } from "./dispatch";
 import { CoordinatorLifecycle } from "./lifecycle";
+import type { OpenCards } from "./coordinator-bootstrap";
 import { isCurrentMembership } from "./session-links";
 import { managedRowsForCoordinator } from "./coordinator";
 import type { BoardFacts } from "./board-facts";
@@ -33,13 +34,13 @@ import { registerDispatchHosts, withAssignmentHost } from "./host-assignment";
 import { WorkerAssignment } from "./worker-assignment";
 
 export function createOperations(store: PreferenceStore, operatingRoot: string, facts?: Pick<BoardFacts, "prepareCycle" | "bindMessage">,
-  invalidate = () => {}) {
+  invalidate = () => {}, openCards?: (paseo: PluginHandlerContext["paseo"]) => Promise<OpenCards>) {
   const assignment = new WorkerAssignment(store, invalidate);
   const sessionPhotos = new SessionPhotoStore(join(store.directory, "session-photos"));
   const sentRequests = new SentRequestStore(join(store.directory, "sent-requests.json"));
   // The history is a view of what was sent. Failing to update it never blocks the request.
   const keepHistory = (update: () => void) => { try { update(); } catch {} };
-  const lifecycle = new CoordinatorLifecycle(store, operatingRoot);
+  const lifecycle = new CoordinatorLifecycle(store, operatingRoot, openCards);
   function ownerScope(caller: string) {
     const scope = store.read();
     if (scope.coordinator !== caller) throw new Error("현재 지정된 코디네이터만 작업을 배정할 수 있습니다.");
@@ -50,6 +51,11 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
     server.handle(readSessionPhoto, async ({sessionId, messageId, index}) => sessionPhotos.read(sessionId, messageId, index));
     server.handle(listSentRequests, async (_input, { paseo }) => ({ requests: await sentRequests.confirm(paseo) }));
     server.handle(coordinatorPinSettings, (_input, { paseo }) => lifecycle.pinSettings(paseo));
+    server.handle(retiredCoordinatorState, async (_input, { paseo }) => ({ retired: await lifecycle.retired(paseo) }));
+    server.handle(archiveRetiredCoordinator, async ({ sessionId }, { paseo }) => {
+      await lifecycle.archiveRetired(paseo, sessionId);
+      return { ok: true };
+    });
     server.handle(setCoordinatorAutoPin, async ({ enabled }) => {
       store.change(scope => { scope.autoPinCoordinatorWorkspace = enabled; });
       return { ok: true };
@@ -69,11 +75,12 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
       const scope = initial ?? store.read();
       const catalog = includedCatalog(directory.catalog, scope.excludedProviders);
       const coordinator = resolveRoute("M", scope.routing, catalog, false, scope.usageRouting ? usage : []);
+      // Settings also read the host file: its display-only cards, and reset passes for accounts Paseo measures.
+      // Routing above has already used Paseo's own usage, so nothing from the file reaches assignment.
+      const host = settings ? await readDisplayUsage(store.directory, directory.providers, usage ?? []) : null;
       return {
-        usage, usageRouting:scope.usageRouting,
-        ...(settings && { workerModeOverrides: scope.workerModeOverrides,
-          displayUsage: await readDisplayUsage(store.directory, directory.providers, usage ?? []),
-        }),
+        usage: host && usage ? host.usage : usage, usageRouting:scope.usageRouting,
+        ...(settings && { workerModeOverrides: scope.workerModeOverrides, displayUsage: host?.display ?? [] }),
         providers: directory.providers.map(p => ({ ...p, included: !scope.excludedProviders.includes(p.id) })),
         catalog, coordinatorMode: catalog.find(m => m.provider === coordinator?.provider)?.coordinatorMode ?? null,
         routing: scope.routing, revision: scope.routingRevision,
