@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { changeDraftTarget, changeRequestKey, changeSignature, changeTargetKey, finishedRetry } from "../client/change-request-draft";
+import { changeDraftTarget, changeQueueCard, changeReceiptKey, changeRequestKey, changeSignature, changeTargetKey, finishedRetry } from "../client/change-request-draft";
 
 const head = "a".repeat(40), newer = "b".repeat(40);
 const pr = { repo: "org/example", number: 7 };
@@ -37,4 +37,24 @@ test("a draft written for one commit and recipient waits for a look when either 
   expect(changeTargetKey(undefined, "worker-1")).toBe("");
   expect(changeTargetKey(head, null)).toBe("");
   expect(changeDraftTarget(written, "", true).changed).toBe(true);
+});
+
+test("each change request leaves its own folded card, also when sent again about the same head", () => {
+  const first = changeReceiptKey(pr, head, "change-key-1");
+  // Sent, the merge card reopened, then sent again about the same head: a second request, so a second card.
+  expect(changeReceiptKey(pr, head, "change-key-2")).not.toBe(first);
+  expect(changeReceiptKey(pr, head, "change-key-1")).toBe(first);
+  expect(changeReceiptKey(pr, newer, "change-key-1")).not.toBe(first);
+  expect(changeReceiptKey({ repo: "org/example", number: 8 }, head, "change-key-1")).not.toBe(first);
+});
+
+test("the controls of a waiting request name the project and head it was recorded under", () => {
+  // Two managed projects can open the same repository. The row may be drawn for either, but the request belongs to one.
+  const waiting = { repo: "org/example", number: 7, headSha: newer, changeQueueHead: head, changeProjectId: "alpha" };
+  expect(changeQueueCard(waiting, "beta")).toEqual({ kind: "pull", projectId: "alpha", repo: "org/example", number: 7, headSha: head });
+  // Without a recorded project (an older board) the drawn project stands in.
+  expect(changeQueueCard({ ...waiting, changeProjectId: undefined }, "beta")?.projectId).toBe("beta");
+  // No waiting request, or nothing to name the project by: no controls.
+  expect(changeQueueCard({ repo: "org/example", number: 7, headSha: head }, "beta")).toBeNull();
+  expect(changeQueueCard({ ...waiting, changeProjectId: undefined }, "")).toBeNull();
 });

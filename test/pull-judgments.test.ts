@@ -159,6 +159,9 @@ test("a change request on the current head takes the merge card down until a new
   expect(applyPullJudgments([pr()], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: asked({ withdrawnAt: "2026-11-24T02:30:00.000Z" }) })[0].gate).toBe("judged");
   // A request whose delivery is still unknown may have arrived, so the card comes down too and the row says so.
   expect(item.changeRequest).toBe("sent");
+  // The project the request was recorded under rides along, for the row's controls.
+  expect(applyPullJudgments([pr({ projectIds: ["project", "other"] })], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: asked({ projectId: "other" }) })[0].changeProjectId).toBe("other");
+  expect(applyPullJudgments([pr({ changeProjectId: "other" })], { ...on, judgments: judged("ready"), ledgerPulls: none })[0].changeProjectId).toBeUndefined();
   const [unsure] = applyPullJudgments([pr()], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: asked({ status: "pending" }) });
   expect(unsure).toMatchObject({ lane: "progress", gate: "change-requested", changeRequest: "pending" });
   expect(pullStatusWords(unsure)).toEqual(["수정 요청 전송 확인 중", "Checking whether the change request arrived"]);

@@ -22,3 +22,17 @@ export const changeTargetKey = (headSha: string | undefined, recipientId: string
 export function changeDraftTarget(confirmed: string, current: string, hasDraft: boolean) {
   return hasDraft ? { basis: confirmed, changed: confirmed !== current } : { basis: current, changed: false };
 }
+
+// The folded card of one sent request. Its request key keeps a second request about the same head, sent after the merge
+// card was reopened, from being taken for the first.
+export const changeReceiptKey = (pr: { repo: string; number: number }, headSha: string, requestKey: string) =>
+  JSON.stringify(["change", pr.repo, pr.number, headSha, requestKey]);
+
+type QueuedPull = { repo: string; number: number; changeQueueHead?: string; changeProjectId?: string };
+// What the cancel, parallel and resume controls of a waiting request name: the project and head it was recorded under.
+// Two managed projects can open the same repository, so the project the row is drawn for is only a stand-in.
+export function changeQueueCard(pr: QueuedPull, drawnProjectId: string) {
+  const projectId = pr.changeProjectId ?? drawnProjectId;
+  if (!pr.changeQueueHead || !projectId) return null;
+  return { kind: "pull" as const, projectId, repo: pr.repo, number: pr.number, headSha: pr.changeQueueHead };
+}

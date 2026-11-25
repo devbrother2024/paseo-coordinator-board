@@ -179,13 +179,13 @@ export default function contribute(server: PluginServerContext) {
     });
     // A change request waiting for its recipient shows its wait on the PR row. The coordinator is offered for a
     // parallel session only when it is not the recipient itself.
-    const changeQueues = new Map<string, { queue: QueueView; headSha: string }>();
+    const changeQueues = new Map<string, { queue: QueueView; headSha: string; projectId: string }>();
     for (const [key, request] of Object.entries(latest.pullChangeRequests)) {
       const pull = pullRequests.items.find(pr => pullJudgmentKey(pr.repo, pr.number) === key);
       const queue = selected.has(request.projectId) ? changeQueueView(request, pull?.headSha) : undefined;
       if (!queue) continue;
       showQueue(queue, request.recipientId === latest.coordinator ? null : latest.coordinator);
-      changeQueues.set(key, { queue, headSha: request.headSha });
+      changeQueues.set(key, { queue, headSha: request.headSha, projectId: request.projectId });
     }
     await Promise.all(queueUpdates);
     // A remote turn can finish without a local hook, or while this plugin is stopped.
@@ -213,7 +213,7 @@ export default function contribute(server: PluginServerContext) {
     // A waiting request stays on its PR row even after the PR moved to a new head, so it can be cancelled there.
     for (const pr of pullRequests.items) {
       const waiting = changeQueues.get(pullJudgmentKey(pr.repo, pr.number));
-      if (waiting) { pr.changeQueue = waiting.queue; pr.changeQueueHead = waiting.headSha; }
+      if (waiting) { pr.changeQueue = waiting.queue; pr.changeQueueHead = waiting.headSha; pr.changeProjectId = waiting.projectId; }
     }
     if (tracked.hasWaitingReplies()) {
       void resumeReplies({paseo}).catch(()=>console.warn("Could not check waiting board replies."));

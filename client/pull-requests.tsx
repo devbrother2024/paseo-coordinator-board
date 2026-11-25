@@ -15,7 +15,7 @@ import type { MergeWaitReason } from "../shared/merge-card-place";
 import { mergeHoldWords, type MergeHold } from "../shared/merge-hold";
 import { changeRequestWords, requestPullChanges, takesChangeRequest, withdrawPullChangeRequest } from "../shared/pull-change-requests";
 import { cardInputPlaceholder, sendWords } from "./card-input";
-import { changeDraftTarget, changeRequestKey, changeSignature, changeTargetKey, finishedRetry } from "./change-request-draft";
+import { changeDraftTarget, changeQueueCard, changeRequestKey, changeSignature, changeTargetKey, finishedRetry } from "./change-request-draft";
 import { DecisionReplyInput } from "./decision-reply";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
 import { SendButton } from "./send-input";
@@ -157,7 +157,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   pr: PullRequest; projectId: string; theme: Theme; workSessions: WorkSessionLink[]; remoteSession?: RemotePullSession; hold?: MergeHold; remoteElsewhere?: boolean; decision?: boolean; showDivider?: boolean; securityGate?: boolean; openCoordinator?: () => void; onResult: (notice: MergeNotice) => void; priorityLabel?: string;
   // The merge card's one input: a change request sent instead of merging. Left out, the card has no input.
   changeRecipient?: ChangeRequestTarget;
-  onChangeRequested?: (sent: { recipientId: string; text: string; headSha: string }) => void;
+  onChangeRequested?: (sent: { recipientId: string; text: string; headSha: string; requestKey: string }) => void;
   onRefresh?: () => void;
 }) {
   const { t } = useBoardLanguage();
@@ -295,9 +295,10 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
         ...(attachments.length ? { images: attachments.map(photo => photo.image) } : {}) });
       if (result.status === "sent") {
         // This request is finished. The same words sent again after the card is reopened are a new request.
+        const requestKey = changeRetry.current.key;
         changeRetry.current = finishedRetry;
         setChangeText(""); changePhotos.clear(); setPreview(null); setMethod(null);
-        onChangeRequested?.({ recipientId: result.recipientId ?? recipientId, text, headSha });
+        onChangeRequested?.({ recipientId: result.recipientId ?? recipientId, text, headSha, requestKey });
       } else if (result.status === "queued") {
         // The recipient is in a turn that cannot take input. The request waits on the PR row, where it can be cancelled.
         changeRetry.current = finishedRetry;
@@ -315,10 +316,12 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   async function reopenCard() {
     if (locked.current || !pr.headSha) return;
     locked.current = true; setBusy("ask");
-    try { await withdraw({ ...args, headSha: pr.headSha }); }
+    // The request belongs to the project it was recorded under, which may not be the one this row is drawn for.
+    try { await withdraw({ ...args, projectId: pr.changeProjectId ?? projectId, headSha: pr.headSha }); }
     catch { /* The refreshed card shows whether it reopened. */ }
     finally { locked.current = false; setBusy(null); onRefresh?.(); }
   }
+  const queueCard = changeQueueCard(pr, projectId);
   const sendChange = { disabled: !!busy || changePhotos.blocked || !changeRecipient || draftTarget.changed || !hasChangeDraft, onPress: () => void requestChanges() };
   return <View style={[{gap: 6}, showDivider && {borderTopColor: c.border, borderTopWidth: 1, paddingVertical: 8}]}>
     <View style={{ ...wrap, alignItems: "baseline" }}>
@@ -399,8 +402,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
       {t("수정 요청을 받을 작업 세션이나 코디네이터가 없습니다.", "No work session or coordinator can take a change request.")}
     </Text>)}
     {changeError && <Text accessibilityLiveRegion="polite" selectable style={{color: c.statusWarning}}>{t(changeError[0], changeError[1])}</Text>}
-    {pr.changeQueue && !!pr.changeQueueHead && !!projectId && onRefresh &&
-      <QueuedAnswer queue={pr.changeQueue} card={{kind: "pull", projectId, repo: pr.repo, number: pr.number, headSha: pr.changeQueueHead}} theme={theme} onRefresh={onRefresh} />}
+    {pr.changeQueue && queueCard && onRefresh && <QueuedAnswer queue={pr.changeQueue} card={queueCard} theme={theme} onRefresh={onRefresh} />}
     {pr.gate === "change-requested" && !pr.changeQueue && !!pr.headSha && !!projectId && onRefresh && <View style={{...wrap, alignItems: "center"}}>
       <Text style={{color: c.foregroundMuted, fontSize: 13, flexShrink: 1}}>
         {pr.changeRequest === "pending"

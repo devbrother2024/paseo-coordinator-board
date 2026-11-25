@@ -22,13 +22,13 @@ type Options = {
   // PRs that a coordinator ledger merge card already raised for the person.
   ledgerPulls: ReadonlySet<string>;
   // Change requests the person sent from merge cards, by PR.
-  changeRequests?: Record<string, Pick<PullChangeRequest, "headSha" | "status" | "withdrawnAt">>;
+  changeRequests?: Record<string, Pick<PullChangeRequest, "headSha" | "status" | "withdrawnAt"> & Partial<Pick<PullChangeRequest, "projectId">>>;
 };
 
 // Decide which GitHub-ready PRs become merge cards. Everything else stays in project progress.
 export function applyPullJudgments<T extends PullRequestItem>(items: readonly T[], options: Options): T[] {
   return items.map(item => {
-    const { gate: _gate, judgment: _judgment, changeRequest: _changeRequest, changeQueue: _changeQueue, changeQueueHead: _changeQueueHead, ...pr } = item;
+    const { gate: _gate, judgment: _judgment, changeRequest: _changeRequest, changeQueue: _changeQueue, changeQueueHead: _changeQueueHead, changeProjectId: _changeProjectId, ...pr } = item;
     const key = pullJudgmentKey(pr.repo, pr.number);
     const saved = Object.hasOwn(options.judgments, key) ? options.judgments[key] : undefined;
     const current = saved && pr.headSha && saved.headSha === pr.headSha ? saved : undefined;
@@ -53,7 +53,7 @@ export function applyPullJudgments<T extends PullRequestItem>(items: readonly T[
     else if (saved) gate = "stale";
     else gate = options.ledgerPulls.has(key) ? "ledger" : "awaiting";
     const lane = gate === "github" || gate === "ledger" || gate === "judged" ? "review" : "progress";
-    return { ...pr, lane, gate, ...(gate === "change-requested" && asked ? { changeRequest: asked.status } : {}), ...(judgment ? { judgment } : {}) } as T;
+    return { ...pr, lane, gate, ...(gate === "change-requested" && asked ? { changeRequest: asked.status, ...(asked.projectId ? { changeProjectId: asked.projectId } : {}) } : {}), ...(judgment ? { judgment } : {}) } as T;
   });
 }
 

@@ -21,6 +21,7 @@ import { decisionSummary } from "./decision-summary";
 import { matchesWorkspace } from "../shared/workspace-pull";
 import { ownerRunning } from "../shared/pull-judgments";
 import { changeRequestRecipient, takesChangeRequest } from "../shared/pull-change-requests";
+import { changeReceiptKey } from "./change-request-draft";
 import { kanbanPull, linkedHosts, mergeHoldDetails, mergeRecordLinks, seenElsewhere, snapshotHoldSessions } from "../shared/merge-hold";
 import type { PullRequestItem } from "../shared/prs";
 import { getPaseoClient, type PluginScreenProps } from "@getpaseo/plugin/client";
@@ -353,7 +354,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       remoteElsewhere={seenElsewhere(holdDetails, pr, remoteTarget?.id)}
       changeRecipient={decision && snapshot ? changeTarget(pr) : undefined} onRefresh={onRefresh}
       onChangeRequested={sent => {
-        if (rowKey) remember({ rowKey, actionKey: JSON.stringify(["change", pr.repo, pr.number, sent.headSha]), projectIds: scope, status: "sent", kind: "change-request",
+        if (rowKey) remember({ rowKey, actionKey: changeReceiptKey(pr, sent.headSha, sent.requestKey), projectIds: scope, status: "sent", kind: "change-request",
           recipientId: sent.recipientId, title: pr.title, detail: sent.text || undefined,
           match: { projectId, cardId: pullKey(pr.repo, pr.number), revision: sent.headSha } });
         onRefresh();

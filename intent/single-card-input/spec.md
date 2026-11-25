@@ -150,6 +150,8 @@ RPC `board.request-pull-changes`:
 | R31 | 기다리는 요청은 PR의 머리·준비 상태·받는 곳이 달라지면 멈추고 보내지 않는다. 권한 대기로 바뀌면 계속 기다린다 | 같은 파일 "a waiting request stops when the PR or its recipient is no longer what the person wrote for" |
 | R32 | 기다리는 요청은 취소(병합 카드 복귀), 병렬 세션 보류, 재개를 할 수 있다 | 같은 파일 "a waiting request can be cancelled, held for a parallel session and resumed" |
 | R33 | 기다리는 중에 PR 머리가 바뀐 요청은 멈춘 상태로 PR 줄에 남아 취소할 수 있고, 새 머리에 대한 요청이 그 자리를 대신한다 | `test/pull-change-requests.test.ts` "a request left waiting when the PR moved on can still be seen, cancelled or replaced" |
+| R34 | 수정 요청마다 접힌 카드가 따로 남는다. 병합 카드를 다시 연 뒤 같은 머리로 또 보내도 두 번째 카드가 버려지지 않는다 | `test/change-request-draft.test.ts` "each change request leaves its own folded card, also when sent again about the same head" |
+| R35 | 기다리는 요청의 조작과 병합 카드 다시 열기는 기록된 프로젝트로 보낸다(두 관리 프로젝트가 같은 저장소를 여는 경우) | 같은 파일 "the controls of a waiting request name the project and head it was recorded under", `test/pull-judgments.test.ts`의 `changeProjectId` |
 | R21 | 화면: 카드 입력 하나, 보낸 뒤 접힘과 다시 열림, 병합 카드 수정 요청, 질문 블록 카드 | 지어낸 데이터의 웹 미리보기(한·영, 넓은 화면·390px), 캡처는 `docs/pr-assets/single-card-input/` |
 
 ## 5. 버린 설계

@@ -39,6 +39,8 @@ const pull = z.object({
   changeQueue:queueView.optional(),
   // The head the waiting request was written about. It differs from headSha once the PR has moved on.
   changeQueueHead:commitSha.optional(),
+  // The project a change request on this PR was recorded under, for the row's reopen and queue controls.
+  changeProjectId:z.string().optional(),
   judgment:z.object({ verdict:pullVerdict, reason:z.string(), at:z.string(), ownerSessionId:z.string().optional(), ownerSessionHost:z.string().optional() }).optional(),
 });
 export const pullRequestViewSchema = z.object({
