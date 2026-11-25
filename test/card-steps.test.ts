@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   advancesOnChoice, answerSummary, clampStep, firstOpenStep, foldsAsk, foldsCard, isHumanCheck, nextOpenStep, recommendAllPicks,
-  trackedChipSide, trackedReplyOffer, trackedSuggestion, usesSteps,
+  trackedChipSide, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps,
 } from "../client/card-steps";
 import { optionId } from "../client/tracked-reply-draft";
 import { trackedDecisionSchema, type TrackedDecision } from "../shared/tracked-decisions";
@@ -157,4 +157,23 @@ test("cards never offer a way to close a record without sending", () => {
   const calls = card.split("await resolve(").slice(1).map(call => call.slice(0, call.indexOf("});")));
   expect(calls.length).toBeGreaterThan(0);
   for (const call of calls) expect(call).toContain("recipientId: to");
+});
+
+test("a card's steps show on its face: all of five or fewer, the first three of more", () => {
+  const steps = (count: number) => Array.from({ length: count }, (_, index) => "step " + (index + 1));
+  expect(visibleSteps([], false)).toEqual({ shown: [], more: 0 });
+  expect(visibleSteps(steps(5), false)).toEqual({ shown: steps(5), more: 0 });
+  expect(visibleSteps(steps(6), false)).toEqual({ shown: steps(3), more: 6 });
+  expect(visibleSteps(steps(6), true)).toEqual({ shown: steps(6), more: 0 });
+});
+
+test("steps sit under the recommendation and leave the folded evidence", () => {
+  const card = readFileSync(join(import.meta.dir, "..", "client", "tracked-decisions.tsx"), "utf8");
+  const evidence = card.slice(card.indexOf("{expanded && <View"));
+  expect(evidence).not.toContain("item.steps");
+  const face = card.slice(0, card.indexOf("{expanded && <View"));
+  expect(card).toContain("visibleSteps(item.steps");
+  // Rendered right after the one-line recommendation, before the reply form.
+  expect(face.indexOf("steps.shown.map")).toBeGreaterThan(face.indexOf('t("추천", "Recommendation")'));
+  expect(face.indexOf("steps.shown.map")).toBeLessThan(face.indexOf("{queue && <View"));
 });

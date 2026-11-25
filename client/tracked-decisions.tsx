@@ -20,7 +20,7 @@ import {
 } from "./tracked-reply-draft";
 import {
   advancesOnChoice, answerSummary, clampStep, firstOpenStep, foldsAsk, foldsCard, nextOpenStep, recommendAllPicks, trackedChipSide,
-  trackedReplyOffer, trackedSuggestion, usesSteps, type Step,
+  trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps, type Step,
 } from "./card-steps";
 import { ledgerChoiceGaps } from "../shared/choice-gaps";
 import { cardChoiceNotice } from "./choice-display";
@@ -117,6 +117,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const canReply = !item.historyUnavailable;
   const [expanded, setExpanded] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
+  const [stepsOpen, setStepsOpen] = useState(false);
   const [confirmedOwner, setConfirmedOwner] = useState(item.sourceCoordinatorId);
   const [skipped, setSkipped] = useState<Record<number, boolean>>({});
   const [editedReply, setEditedReply] = useState<string | null>(null);
@@ -215,6 +216,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const allPicks = stepped ? recommendAllPicks(item.questions, answered) : null;
   const askLines = isMerge ? [] : item.ask.filter(line => line !== item.title);
   const askFolds = foldsAsk(askLines);
+  const steps = visibleSteps(item.steps, stepsOpen);
   const otherSide = trackedChipSide(item.where, route, { owner: !!links.owner, source: links.source?.kind });
   const evidenceSide = otherSide === "owner" ? "source" : otherSide === "source" ? "owner" : undefined;
 
@@ -449,6 +451,17 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
       <Text style={{ color: c.foregroundMuted, fontSize: 12, fontWeight: "600", flexShrink: 0 }}>{t("추천", "Recommendation")}</Text>
       <View style={{ flexShrink: 1 }}><HistoryMarkdown theme={theme} pullRepository={pullRepository} source={item.recommend.filter(line => line !== headline)[0]} preview lines={1} /></View>
     </View>}
+    {!!steps.shown.length && <View style={{ gap: 3 }}>
+      <Text style={{ color: c.foregroundMuted, fontSize: 12, fontWeight: "600" }}>{t("진행 단계", "Steps")}</Text>
+      {steps.shown.map((line, index) => <View key={index} style={{ flexDirection: "row", gap: 6 }}>
+        <Text style={{ color: c.foregroundMuted, fontVariant: ["tabular-nums"], lineHeight: 21 }}>{index + 1}.</Text>
+        <View style={{ flexShrink: 1, flexGrow: 1 }}><HistoryMarkdown theme={theme} source={line} pullRepository={pullRepository} /></View>
+      </View>)}
+      {(steps.more > 0 || stepsOpen) && <TextButton theme={theme} expanded={stepsOpen}
+        label={stepsOpen ? t("단계 접기", "Show fewer steps") : t(`단계 ${steps.more}개 모두 보기`, `Show all ${steps.more} steps`)}
+        accessibilityLabel={item.title + " · " + (stepsOpen ? t("단계 접기", "Show fewer steps") : t(`단계 ${steps.more}개 모두 보기`, `Show all ${steps.more} steps`))}
+        onPress={() => setStepsOpen(open => !open)} />}
+    </View>}
     {!canReply && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{ledgerHistoryUnavailableText(t)}</Text>}
     {queue && <View style={{gap:5, padding:10, borderRadius:7, backgroundColor:c.surface0}}>
       {canReply && <Text accessibilityLiveRegion="polite" style={{color:queue.stopped ? c.statusWarning : c.foreground,fontWeight:"600"}}>
@@ -568,7 +581,6 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
         <Lines theme={theme} pullRepository={pullRepository} title={t("기록 당시 요청", "Original request")} lines={item.ask} />
       </>}
       {!isMerge && <Lines theme={theme} pullRepository={pullRepository} title={t("추천", "Recommendation")} lines={item.recommend.filter(line => line !== headline)} />}
-      <Lines theme={theme} pullRepository={pullRepository} title={t("진행 단계", "Steps")} lines={item.steps} />
       <Lines theme={theme} pullRepository={pullRepository} title={t("근거", "Evidence")} lines={item.why} />
       <Lines theme={theme} pullRepository={pullRepository} title={t("위험", "Risks")} lines={item.risk} />
       {(!renderClarification || !canReply || !showForm) && !!item.qa.length && <View style={{ gap: 5 }}>

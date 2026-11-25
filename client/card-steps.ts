@@ -107,3 +107,9 @@ export function trackedReplyOffer(route: Pick<TrackedReplyRoute, "recipientId" |
   const fallback = !!route?.fallbackId && (!route.recipientId || redirected);
   return { send, fallback, form: send || fallback || !!route?.recipientId || hasDraft };
 }
+
+// A card's steps are how to do what it asks, so they show on its face. A long list shows its first three until opened.
+export function visibleSteps(steps: readonly string[], expanded: boolean) {
+  if (expanded || steps.length <= 5) return { shown: [...steps], more: 0 };
+  return { shown: steps.slice(0, 3), more: steps.length };
+}
