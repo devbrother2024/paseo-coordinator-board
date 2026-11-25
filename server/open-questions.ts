@@ -37,8 +37,6 @@ export type QuestionContext = {
   // Keys of ledger cards with a resolution on record. Undefined when the resolutions could not be read.
   ledgerResolved?: ReadonlySet<string>;
   now?: number;
-  // Whether other open questions of the session show on its card before the coordinator judged them.
-  othersShown?: boolean;
 };
 
 export type FoundQuestion = {
@@ -46,7 +44,7 @@ export type FoundQuestion = {
   later: number; countedSeq?: number; maybeAnswered?: true; moved?: true; movedTo?: string;
   turn?: AssistantEvent; earlier?: AssistantEvent[]; record?: RaisedQuestion;
 };
-export type QuestionScan = { epoch?: string; othersShown?: boolean; open: FoundQuestion[]; closed: { key: string; reason: ClosedReason; epoch: string; seq: number }[] };
+export type QuestionScan = { epoch?: string; open: FoundQuestion[]; closed: { key: string; reason: ClosedReason; epoch: string; seq: number }[] };
 
 const HOUR = 60 * 60 * 1000;
 // Display only: a question reads as old after this many later messages or this long. It never leaves for that.
@@ -228,7 +226,7 @@ export function scanQuestions(evidence: { epoch?: string; events?: readonly Ques
       else if (context.ledgerResolved) { delete item.moved; delete item.movedTo; }
     }
   }
-  return { epoch, othersShown: context.othersShown ?? true, open: list.filter(item => !item.closed).map(({ closed: _closed, ...item }) => item), closed };
+  return { epoch, open: list.filter(item => !item.closed).map(({ closed: _closed, ...item }) => item), closed };
 }
 
 /**
@@ -237,16 +235,17 @@ export function scanQuestions(evidence: { epoch?: string; events?: readonly Ques
  * person wrote something else to the session after it.
  */
 export type JudgeReason = NonNullable<RaisedQuestion["judge"]>;
-export function judgeReason(scan: QuestionScan, item: FoundQuestion, index: number, verdict?: RaisedQuestion["verdict"]): JudgeReason | undefined {
+export function judgeReason(scan: QuestionScan, item: FoundQuestion, index: number, verdict?: RaisedQuestion["verdict"], ended = false): JudgeReason | undefined {
   if (verdict) return undefined;
+  if (ended) return "session-ended";
   if (index < scan.open.length - 1) return "others-open";
   if (item.maybeAnswered) return "person-wrote";
   return item.later > 0 ? "spoke-after" : undefined;
 }
 
 /**
- * What the card shows about the open question. Other open questions of the session ride along only when the coordinator
- * judged that they still need the person, or when there is no coordinator to judge them (`othersShown`).
+ * What the card shows about the open question. Other open questions of the session ride along, judged or not: a question
+ * leaves only when something shows it was handled.
  */
 export function questionNotice(scan: QuestionScan, ended: boolean, now = Date.now()): NonNullable<SessionRow["keptQuestion"]> | undefined {
   const main = scan.open.at(-1);
@@ -254,7 +253,7 @@ export function questionNotice(scan: QuestionScan, ended: boolean, now = Date.no
   const age = main.askedAt ? now - Date.parse(main.askedAt) : NaN;
   const old = main.later > OLD_QUESTION.later || age > OLD_QUESTION.ageMs;
   const verdict = main.record?.verdict;
-  const older = scan.open.slice(0, -1).filter(item => scan.othersShown !== false || item.record?.verdict).slice(-10).reverse()
+  const older = scan.open.slice(0, -1).slice(-10).reverse()
     .map(item => ({ key: item.key, question: item.question.slice(0, 340), ...(item.askedAt ? { askedAt: item.askedAt } : {}) }));
   return { key: main.key, later: main.later, ...(old ? { stale: true as const } : {}), ...(main.maybeAnswered ? { maybeAnswered: true as const } : {}),
     ...(ended ? { ended: true as const } : {}), ...(older.length ? { older } : {}),
@@ -272,9 +271,7 @@ export function questionContext(scope: Pick<Preferences, "closedQuestions" | "ra
     if (receipt.messageId) boardMessageIds.set(receipt.messageId, receipt.question);
   }
   const closed = Object.fromEntries(Object.entries(scope.closedQuestions ?? {}).filter(([, entry]) => entry.sessionId === sessionId));
-  // The coordinator judges the other open questions of a session, except its own: without one, they show as they are.
-  const othersShown = !scope.coordinator || scope.coordinator === sessionId;
-  return { closed, boardMessageIds, clarificationIds: new Set(Object.keys(scope.clarifications ?? {})), othersShown,
+  return { closed, boardMessageIds, clarificationIds: new Set(Object.keys(scope.clarifications ?? {})),
     records: scope.raisedQuestions?.[sessionId]?.questions ?? [],
     ...(ledger ? { ledgerQuestions: ledger.questions.get(sessionId) ?? new Map(), ...(ledger.resolved ? { ledgerResolved: ledger.resolved } : {}) } : {}),
     ...(now === undefined ? {} : { now }) };
@@ -295,7 +292,7 @@ export function ledgerQuestionsBySession(items: readonly { key: string; fingerpr
   return map;
 }
 
-type SessionLabel = Pick<SessionRow, "id" | "projectId" | "serverId" | "title" | "projectTitle" | "workspaceTitle">;
+type SessionLabel = Pick<SessionRow, "id" | "projectId" | "serverId" | "title" | "projectTitle" | "workspaceTitle"> & { status?: string };
 
 /**
  * Saves what a scan found, question by question: open questions are added or updated, closed ones leave the record with
@@ -314,7 +311,7 @@ export function saveScan(scope: Preferences, row: SessionLabel, scan: QuestionSc
   for (const [index, item] of scan.open.entries()) {
     if (Object.hasOwn(scope.closedQuestions, item.key)) continue;
     const kept = questions.get(item.key) ?? item.record;
-    const judge = judgeReason(scan, item, index, kept?.verdict);
+    const judge = judgeReason(scan, item, index, kept?.verdict, row.status === "closed");
     const core: RaisedQuestion = {
       key: item.key, epoch: item.epoch, seq: item.seq, question: item.question.slice(0, 2000),
       ...(item.askedAt && item.askedAt.length <= 64 ? { askedAt: item.askedAt } : {}), raisedAt: kept?.raisedAt ?? at,
@@ -323,6 +320,7 @@ export function saveScan(scope: Preferences, row: SessionLabel, scan: QuestionSc
       ...(item.movedTo ? { movedTo: item.movedTo } : {}), ...(judge ? { judge } : {}),
       // The coordinator's verdict and the notice it got stay with the question.
       ...(kept?.verdict ? { verdict: kept.verdict } : {}), ...(kept?.notified ? { notified: kept.notified } : {}),
+      ...(kept?.notifiedAt ? { notifiedAt: kept.notifiedAt } : {}),
     };
     // Display fields that do not fit the record are left out. The question itself is always kept.
     // The scan's flags replace the saved ones; the saved display fields stay unless the scan has new ones.

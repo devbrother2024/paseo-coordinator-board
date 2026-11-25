@@ -56,6 +56,11 @@ test("judgment needed: other open questions, a question the session spoke after,
   const two = store();
   snapshot(two, evidence(older, ask));
   expect(records(two).map(record => record.judge)).toEqual(["others-open", undefined]);
+  // A session that ended is for the coordinator to judge as well.
+  const ended = store();
+  snapshot(ended, evidence(ask));
+  snapshot(ended, null, row({ status: "closed" }));
+  expect(records(ended)[0].judge).toBe("session-ended");
 });
 
 test("notice: the coordinator hears once about each question to judge, and never while it waits on a permission", async () => {
@@ -69,17 +74,17 @@ test("notice: the coordinator hears once about each question to judge, and never
   }) } };
   const notices = new QuestionNotices(prefs);
   coordinator.pendingPermissions = [{ id: "approval" }];
-  expect(await notices.deliver(sdk as any)).toBe("waiting");
+  expect(await notices.deliver(sdk as any, NOW)).toBe("waiting");
   expect(sent).toEqual([]);
   coordinator.pendingPermissions = [];
-  expect(await notices.deliver(sdk as any)).toBe("sent");
+  expect(await notices.deliver(sdk as any, NOW)).toBe("sent");
   expect(sent).toHaveLength(1);
   expect(sent[0]).toMatchObject({ id: "coord", options: { sourceAgentId: "plugin:coordinator-board" } });
   expect(sent[0].text).toContain("[Coordinator Board · 판단 필요 / Judgment needed]");
   expect(sent[0].text).toContain("Which region should I use?");
   expect(sent[0].text).toContain("judge_open_question");
   expect(sent[0].text).not.toContain("Shall I publish it now?");
-  expect(await notices.deliver(sdk as any)).toBe("nothing");
+  expect(await notices.deliver(sdk as any, NOW)).toBe("nothing");
   expect(sent).toHaveLength(1);
   // A new coordinator hears again.
   prefs.change(scope => { scope.coordinator = "coord-2"; });
@@ -125,8 +130,8 @@ test("verdicts: needed keeps the card and says so, handled closes it and shows i
   snapshot(prefs, evidence(older, ask, report, reply));
   const [first, second] = records(prefs);
   const run = (input: unknown) => judgeOpenQuestionTool(prefs, () => {}).execute(input as any, { agent: { id: "coord" } } as any);
-  // Before a verdict, the other question does not ride on the card.
-  expect(snapshot(prefs, evidence(older, ask, report, reply)).keptQuestion.older).toBeUndefined();
+  // Before a verdict, the other question still rides on the card: only handled questions leave.
+  expect(snapshot(prefs, evidence(older, ask, report, reply)).keptQuestion.older).toEqual([expect.objectContaining({ question: expect.stringContaining("Which region") })]);
   await run({ sessionId: "worker", questionKey: first.key, verdict: "needed", evidence: "No answer in the session yet." });
   await run({ sessionId: "worker", questionKey: second.key, verdict: "needed" });
   const card = snapshot(prefs, evidence(older, ask, report, reply));
@@ -145,7 +150,7 @@ test("asked again after a verdict: the same words in a new message open a new qu
   const prefs = store();
   snapshot(prefs, evidence(ask, report, reply));
   const [first] = records(prefs);
-  await judgeOpenQuestionTool(prefs, () => {}).execute({ sessionId: "worker", questionKey: first.key, verdict: "handled", evidence: "Answered in the session." } as any,
+  await judgeOpenQuestionTool(prefs, () => {}).execute({ sessionId: "worker", questionKey: first.key, verdict: "handled", evidence: "Answered in the session at 10:02." } as any,
     { agent: { id: "coord" } } as any);
   expect(snapshot(prefs, evidence(ask, report, reply)).lane).toBe("idle");
   const again = snapshot(prefs, evidence(ask, report, reply, ["assistant", "Shall I publish it now?", 0.2]));
@@ -153,9 +158,61 @@ test("asked again after a verdict: the same words in a new message open a new qu
   expect(again.keptQuestion.key).not.toBe(first.key);
 });
 
-test("without a coordinator, other open questions still ride on the card", () => {
-  const prefs = store(null);
-  expect(snapshot(prefs, evidence(older, ask)).keptQuestion.older).toHaveLength(1);
+test("questions not judged yet stay visible with or without a coordinator, also while the coordinator is offline", async () => {
+  for (const coordinator of [null, "coord"]) {
+    const prefs = store(coordinator);
+    snapshot(prefs, evidence(older, ask));
+    const offline = { agents: { ref: () => ({ refresh: async () => null, send: async () => { throw Error("unreachable"); } }) } };
+    expect(await new QuestionNotices(prefs).deliver(offline as any, NOW)).toBe(coordinator ? "unavailable" : "nothing");
+    const card = snapshot(prefs, evidence(older, ask));
+    expect(card.detail).toContain("Shall I publish");
+    expect(card.keptQuestion.older).toEqual([expect.objectContaining({ question: expect.stringContaining("Which region") })]);
+  }
+});
+
+test("notice policy: a failed send is not retried, a question still not judged gets a new notice after 30 minutes, 20 per notice", async () => {
+  const prefs = store();
+  const asks = Array.from({ length: 25 }, (_, i): Step => ["assistant", `Shall I publish build ${i}?`, 2]);
+  snapshot(prefs, evidence(...asks, report, reply));
+  const sent: any[] = [];
+  let failing = true;
+  const coordinator = { id: "coord", status: "idle", pendingPermissions: [], activeTurn: null };
+  const sdk = { agents: { ref: () => ({ refresh: async () => ({ agent: coordinator }),
+    send: async (text: string, options: any) => { sent.push({ text, options }); if (failing) throw Error("lost"); } }) } };
+  const notices = new QuestionNotices(prefs);
+  const lines = (message: any) => message.text.split("\n").length - 3;
+  // The first message (20 questions) fails. It is on record and is not sent again.
+  await expect(notices.deliver(sdk as any, NOW)).rejects.toThrow("lost");
+  expect(sent.map(lines)).toEqual([20]);
+  failing = false;
+  // The 5 questions never tried yet go out on the next snapshot as a first notice.
+  expect(await notices.deliver(sdk as any, NOW + 60_000)).toBe("sent");
+  expect(sent.map(lines)).toEqual([20, 5]);
+  expect(sent[1].text.startsWith("[Coordinator Board · 판단 필요 / Judgment needed]")).toBe(true);
+  expect(await notices.deliver(sdk as any, NOW + 29 * 60_000)).toBe("nothing");
+  // 30 minutes after each attempt, the questions still not judged get a new notice.
+  expect(await notices.deliver(sdk as any, NOW + 30 * 60_000)).toBe("sent");
+  expect(await notices.deliver(sdk as any, NOW + 31 * 60_000)).toBe("sent");
+  expect(sent.map(lines)).toEqual([20, 5, 20, 5]);
+  expect(sent.slice(2).every(message => message.text.startsWith("[Coordinator Board · 아직 판단 안 됨 / Still not judged]"))).toBe(true);
+  expect(new Set(sent.map(message => message.options.messageId)).size).toBe(4);
+  expect(await notices.deliver(sdk as any, NOW + 32 * 60_000)).toBe("nothing");
+});
+
+test("judge action: handled needs evidence that names something, and calling it again is fine", async () => {
+  const prefs = store();
+  snapshot(prefs, evidence(older, ask));
+  const [first] = records(prefs);
+  const run = (input: unknown) => boardActionTool(boardActions([judgeOpenQuestionTool(prefs, () => {})]))
+    .execute({ action: "judge_open_question", input } as any, { agent: { id: "coord" } } as any);
+  expect((await run({ sessionId: "worker", questionKey: first.key, verdict: "handled", evidence: "done" })).isError).toBe(true);
+  expect((await run({ sessionId: "worker", questionKey: first.key, verdict: "handled", evidence: "a b c d e f g h i" })).isError).toBe(true);
+  const evidenceText = "Answered: eu-west, session message at 10:02.";
+  expect((await run({ sessionId: "worker", questionKey: first.key, verdict: "handled", evidence: evidenceText })).isError).toBeFalsy();
+  const again = await run({ sessionId: "worker", questionKey: first.key, verdict: "handled", evidence: evidenceText });
+  expect(again.isError).toBeFalsy();
+  expect(again.text).toContain("이미");
+  expect((await run({ sessionId: "worker", questionKey: first.key, verdict: "needed" })).isError).toBe(true);
 });
 
 test("card line: no 'may have answered', no per-question close, and the coordinator's verdict is plain", () => {
