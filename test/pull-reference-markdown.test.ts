@@ -195,3 +195,12 @@ test("the fallback reads the whole visible text: below a collapsed preview and a
   expect(links("[Alpha](https://example.com) Web 정리\n\n#12", card, titled)).toEqual([]);
   expect(links("Alpha\n\nWeb 정리 #12", card, titled)).toEqual(one(card, 12));
 });
+
+test("escaped punctuation reads as the character it shows", () => {
+  const index = repositoryIndex([{ repo: "studio/alpha-web" }, { repo: "studio/web" }]);
+  // 화면에는 alpha-web #12 로 보이므로 alpha-web 이다(web 으로 가면 틀린 링크).
+  expect(links("alpha\\-web #12", card, index)).toEqual(one("studio/alpha-web", 12));
+  expect(links("zeta\\-web #13", card, index)).toEqual([]);
+  // 이스케이프한 # 는 번호가 아니다.
+  expect(links("\\#5 와 alpha\\-web #6", card, index)).toEqual(one("studio/alpha-web", 6));
+});

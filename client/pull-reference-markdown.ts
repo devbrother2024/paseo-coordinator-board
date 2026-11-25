@@ -76,6 +76,8 @@ function walk(tokens: Token[], visit: { text(text: string): void; other(text: st
     // HistoryMarkdown draws <br> as a line break.
     else if (token.type === "br" || (token.type === "html" && /^<br\s*\/?\s*>$/i.test(token.raw))) visit.other("\n");
     else if (token.type === "codespan") visit.other(token.text);
+    // "alpha\-web" shows alpha-web: an escaped character reads as itself, but is never a reference.
+    else if (token.type === "escape") visit.other(token.text);
     else if ("tokens" in token && Array.isArray(token.tokens)) {
       walk(token.tokens, visit);
       if (blockTypes.has(token.type)) visit.other("\n");
