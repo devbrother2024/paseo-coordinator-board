@@ -110,6 +110,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   // One read per remote session and refresh, shared by ledger card chips and PR rows.
   const workSessionStates = useMemo(() => createRemoteWorkSessionStates(getPaseoClient), [hostId, updatedAt, peerKey]);
   const lookupWorkSession = useMemo(() => workSessionPresence(workSessionStates), [workSessionStates]);
+  const freshWorkSessionStates = useMemo(() => createRemoteWorkSessionStates(getPaseoClient, false), []);
   const historyRepos = useMemo(() => new Map(pullRequests?.projects.flatMap(p =>
     p.repo && p.mode !== "off" ? [[p.projectId,p.repo] as const] : [])), [pullRequests?.projects]);
   const historyScope = useMemo(() => remoteScope(activeProjects,pullRequests?.projects ?? []), [activeProjects,pullRequests?.projects]);
@@ -304,7 +305,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       {hostId, hostLabel, sessions: snapshot.sessions, hosts: peerHosts, folders}, linkedIds) : undefined;
     const ledgerLocal = fromLedger?.kind === "local" && actions.onOpen ? snapshot?.sessions.find(s => s.id === fromLedger.id) : undefined;
     if (ledgerLocal) localLink(ledgerLocal);
-    const remoteSession = fromLedger?.kind === "remote" && onOpenHostSession ? {...fromLedger, states: workSessionStates, open: onOpenHostSession} : undefined;
+    const remoteSession = fromLedger?.kind === "remote" && onOpenHostSession ? {...fromLedger, states: workSessionStates, fresh: freshWorkSessionStates, open: onOpenHostSession} : undefined;
     return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions} remoteSession={remoteSession}
       clarification={decision && !embedded && questionFor({kind:"pull",projectId,repo:pr.repo,number:pr.number,updatedAt:pr.updatedAt},pr.repo + " #" + pr.number)}
       decision={decision} showDivider={!decision || embedded} securityGate={securityGate} openCoordinator={openCoordinator} onResult={notice => {

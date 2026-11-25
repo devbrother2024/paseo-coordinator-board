@@ -59,7 +59,8 @@ export function MergeFeedback({ notice, theme }: { notice: MergeNotice; theme: T
 }
 
 export type WorkSessionLink = { id: string; key: string; label: string; open: () => void; running: boolean };
-export type RemotePullSession = RemoteWorkSession & { states: WorkSessionStates; open: (host: string, id: string) => void };
+// states: shared reads for this board refresh. fresh: asks the host again, used when a merge is confirmed.
+export type RemotePullSession = RemoteWorkSession & { states: WorkSessionStates; fresh: WorkSessionStates; open: (host: string, id: string) => void };
 
 // A work session on another host is shown only after a real lookup finds it there.
 // Each board refresh brings a new lookup. The chip keeps the last answer, but the running check waits for the new one.
@@ -74,8 +75,13 @@ function useRemotePullSession(source: RemotePullSession | undefined) {
     return () => { active = false; };
   }, [key, source?.states]);
   if (!source || !key) return null;
-  // The lookup caches its answer, so waiting for the newest one adds no remote call.
-  const latest = () => findRemoteWorkSessionState(source, source.states).then(state => state ?? null);
+  // At Confirm merge the cached answer may be older than the preview, so ask the host again.
+  // The new answer also updates the running check, so a session that started running asks once more.
+  const lookup = source.states;
+  const latest = () => findRemoteWorkSessionState(source, source.fresh).then(state => {
+    setFound({ key, lookup, at: Date.now(), state: state ?? null });
+    return state ?? null;
+  });
   return { ...remoteSessionView(found, key, source.states, Date.now()), latest };
 }
 

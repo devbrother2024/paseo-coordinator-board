@@ -40,18 +40,20 @@ type WorkSessionReader = { agents: { ref(id: string): {
   refresh(): Promise<{ agent: { id: string; status?: string | null; internal?: boolean | null; archivedAt?: string | null } } | null>;
 } } };
 
-export function createRemoteWorkSessionStates(client: (host: string) => WorkSessionReader): WorkSessionStates {
+// cached: one read per session for this board refresh. Uncached reads ask the host every time,
+// for the moment a person confirms a merge.
+export function createRemoteWorkSessionStates(client: (host: string) => WorkSessionReader, cached = true): WorkSessionStates {
   const cache = new Map<string, Promise<RemoteWorkSessionState | null>>();
   return (host, id) => {
     const key = JSON.stringify([host, id]);
-    const existing = cache.get(key);
+    const existing = cached ? cache.get(key) : undefined;
     if (existing) return existing;
     const next = Promise.resolve().then(async () => {
       const result = await client(host).agents.ref(id).refresh();
       const found = !!result && result.agent.id === id && !result.agent.internal && !result.agent.archivedAt;
       return found ? { running: result.agent.status === "running" } : null;
     }).catch(() => null);
-    cache.set(key, next);
+    if (cached) cache.set(key, next);
     return next;
   };
 }

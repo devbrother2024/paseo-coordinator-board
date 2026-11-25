@@ -96,3 +96,20 @@ test("Confirm merge waits for the newest answer and asks again only for a sessio
   expect(confirmAfterLookup(null, false)).toBe("merge");
   expect(confirmAfterLookup(undefined, false)).toBe("merge");
 });
+
+test("the confirmation read asks the host again instead of reusing this refresh's answer", async () => {
+  let status = "idle";
+  let reads = 0;
+  const client = () => ({ agents: { ref: (id: string) => ({ refresh: async () => { reads++; return { agent: { id, status, internal: false, archivedAt: null } }; } }) } });
+  const shared = createRemoteWorkSessionStates(client);
+  const fresh = createRemoteWorkSessionStates(client, false);
+  const source = { kind: "remote" as const, id: "worker", hosts: [west] };
+  expect(await findRemoteWorkSessionState(source, shared)).toEqual({ host: west, running: false });
+  // The worker starts running after the preview opened.
+  status = "running";
+  expect(await findRemoteWorkSessionState(source, shared)).toEqual({ host: west, running: false });
+  const confirming = await findRemoteWorkSessionState(source, fresh);
+  expect(confirming).toEqual({ host: west, running: true });
+  expect(confirmAfterLookup(confirming, false)).toBe("ask");
+  expect(reads).toBe(2);
+});
