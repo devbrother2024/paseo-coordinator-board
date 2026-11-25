@@ -3,8 +3,9 @@ import { resolveRepositoryName, type RepositoryClue, type RepositoryIndex } from
 
 // Match bare references and leave GitHub's owner/repository#number shorthand alone.
 const reference = /(^|[^\w/#.-])(?:([\w.-]+\/[\w.-]+)[ \t]*)?#([1-9]\d*)(?![\w#])/g;
-// A name a session might write for a repository: alpha-web, AlphaWeb, owner/repository.
-const word = "[A-Za-z0-9](?:[\\w.-]*[A-Za-z0-9])?(?:\\/[A-Za-z0-9](?:[\\w.-]*[A-Za-z0-9])?)?";
+// A name a session might write for a repository: alpha-web, AlphaWeb, _alpha-web, owner/repository.
+// The whole run of name characters is one name, so "_alpha-web" or "x_alpha-web" never reads as "alpha-web".
+const word = "(?=[\\w.-]*[A-Za-z0-9])[\\w.-]+(?:\\/[\\w.-]+)?";
 const names = new RegExp(word, "g");
 // Korean particles after a name: "alpha-web의 #12", "Alpha에서는 #12", longest first.
 // Agents often put a space before it ("alpha-web 의 #12"), so a space between the name and the particle is allowed.
@@ -40,12 +41,25 @@ const ordinary = new Set([
 ]);
 const fileOrSite = /\.(md|mdx|json|jsonc|ts|tsx|js|jsx|mjs|cjs|py|sh|yml|yaml|toml|lock|txt|html|css|png|jpe?g|svg|com|org|net|io|dev|ai|app)$/i;
 
+// A sentence's closing dot is not part of the name: "alpha-web." is alpha-web.
+const bare = (text: string) => text.replace(/\.+$/, "");
+
+/** A known name, as written or without a closing dot. */
+function lookup(known: RepositoryIndex | undefined, text: string, repositoryOnly = false) {
+  return resolveRepositoryName(known, text, repositoryOnly) ?? (bare(text) !== text ? resolveRepositoryName(known, bare(text), repositoryOnly) : null);
+}
+
 /** Never a repository clue: ordinary words, anything with a digit (versions, models, UTF-8), branch paths, CI images, files and sites. */
-const neutral = (text: string) => ordinary.has(text.toLowerCase()) || /\d/.test(text) || text.includes("/") || /-latest$/i.test(text) || fileOrSite.test(text);
+function neutral(name: string) {
+  const text = bare(name);
+  return ordinary.has(text.toLowerCase()) || /\d/.test(text) || text.includes("/") || /-latest$/i.test(text) || fileOrSite.test(text);
+}
 
 /** A name that reads like a repository anywhere in a line: a slug (zeta-api, zeta_api) or CamelCase (ZetaApp). */
-const looksLikeRepository = (text: string) => /[A-Za-z]/.test(text) && !neutral(text)
-  && (/[A-Za-z0-9][-_.][A-Za-z0-9]/.test(text) || /[a-z][A-Z]/.test(text));
+function looksLikeRepository(name: string) {
+  const text = bare(name);
+  return /[A-Za-z]/.test(text) && !neutral(text) && (/[A-Za-z0-9][-_.][A-Za-z0-9]/.test(text) || /[a-z][A-Z]/.test(text));
+}
 
 function matches(text: string) {
   return [...text.matchAll(reference)].flatMap(match => {
@@ -60,7 +74,8 @@ function matches(text: string) {
 function walk(tokens: Token[], visit: { text(text: string): void; other(text: string): void }) {
   for (const token of tokens) {
     if (token.type === "link" || token.type === "image") visit.other(" ");
-    else if (token.type === "br") visit.other("\n");
+    // HistoryMarkdown draws <br> as a line break, so it ends a line here too.
+    else if (token.type === "br" || (token.type === "html" && /^<br\s*\/?\s*>$/i.test(token.raw))) visit.other("\n");
     else if (token.type === "codespan") visit.other(token.text);
     else if ("tokens" in token && Array.isArray(token.tokens)) walk(token.tokens, visit);
     else if (token.type === "text" && typeof token.text === "string") visit.text(token.text);
@@ -85,13 +100,13 @@ function flatten(tokens: Token[]) {
 /** The name right before a number: a known name, or any other word except ordinary ones, which then names an unknown repository. */
 function nameBefore(text: string | undefined, known: RepositoryIndex | undefined): RepositoryClue | null {
   if (!text) return null;
-  return resolveRepositoryName(known, text) ?? (neutral(text) ? null : { blocked: true });
+  return lookup(known, text) ?? (neutral(text) ? null : { blocked: true });
 }
 
 /** The name in brackets after a number: a known name, or a repository-like one the board does not know. */
 function nameAfter(text: string | undefined, known: RepositoryIndex | undefined): RepositoryClue | null {
   if (!text) return null;
-  return resolveRepositoryName(known, text) ?? (looksLikeRepository(text) ? { blocked: true } : null);
+  return lookup(known, text) ?? (looksLikeRepository(text) ? { blocked: true } : null);
 }
 
 /**
@@ -102,9 +117,9 @@ function lineTarget(line: string, known: RepositoryIndex | undefined): Repositor
   const repos = new Set<string>();
   const projects = new Set<string>();
   for (const match of line.matchAll(names)) {
-    if (line[match.index - 1] === "#" || /^\d+$/.test(match[0])) continue;
-    const repository = resolveRepositoryName(known, match[0], true);
-    const any = repository ?? resolveRepositoryName(known, match[0]);
+    if (line[match.index - 1] === "#" || /^[\d._-]+$/.test(match[0])) continue;
+    const repository = lookup(known, match[0], true);
+    const any = repository ?? lookup(known, match[0]);
     if (any && !("repo" in any)) return { blocked: true };
     if (repository && "repo" in repository) repos.add(repository.repo);
     else if (any && "repo" in any) projects.add(any.repo);
@@ -120,7 +135,10 @@ function resolve(flat: string, ref: { at: number; length: number }, context: Pul
   const end = endAt < 0 ? flat.length : endAt;
   const chosen = (clue: RepositoryClue) => "repo" in clue ? clue.repo : null;
   // Only the text just beside the number can hold its name; bounded slices keep long lines cheap.
-  const left = nameBefore(before.exec(flat.slice(Math.max(start, ref.at - 200), ref.at))?.[1], context.known);
+  let from = Math.max(start, ref.at - 200);
+  // Never start the slice inside a name, or its tail could read as another repository.
+  while (from > start && /[\w.\/-]/.test(flat[from - 1])) from--;
+  const left = nameBefore(before.exec(flat.slice(from, ref.at))?.[1], context.known);
   if (left) return chosen(left);
   const right = nameAfter(after.exec(flat.slice(ref.at + ref.length, Math.min(end, ref.at + ref.length + 200)))?.[1], context.known);
   if (right) return chosen(right);

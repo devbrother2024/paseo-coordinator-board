@@ -43,6 +43,7 @@ const known = repositoryIndex([
   { repo: "labs/shared" },
   { repo: "studio/beta-api" },
   { repo: "studio/site", names: ["web"] },
+  { repo: "studio/_alpha-web" },
 ]);
 
 function tableReferences(markdown: string, repository?: string) {
@@ -132,6 +133,15 @@ test("a sentence links each PR number to the repository written before it", () =
     "Implements #12", "Supersedes #12", "Continues #12", "Part of #12", "Closes #12", "Refs #12", "See #12"]) {
     expect(link(text, "studio/card")).toEqual([{ repo: "studio/card", number: 12 }]);
   }
+  // 저장소 이름은 통째로 맞춘다. 앞에 붙은 밑줄·점·글자를 떼어 다른 저장소로 보내지 않는다.
+  expect(link("_alpha-web #12", "studio/card")).toEqual([{ repo: "studio/_alpha-web", number: 12 }]);
+  expect(link("x_alpha-web #13", "studio/card")).toEqual([]);
+  expect(link(".alpha-web #14", "studio/card")).toEqual([]);
+  expect(link("x".repeat(200) + "_alpha-web #16", "studio/card")).toEqual([]);
+  expect(link("alpha-web. 다음은 #15", "studio/card")).toEqual([{ repo: "studio/alpha-web", number: 15 }]);
+  // 화면이 줄바꿈으로 그리는 <br> 도 줄 경계다.
+  expect(link("beta #1<br>#2", "studio/card")).toEqual([{ repo: "studio/beta", number: 1 }, { repo: "studio/card", number: 2 }]);
+  expect(link("beta #3<br />#4", "studio/card")).toEqual([{ repo: "studio/beta", number: 3 }, { repo: "studio/card", number: 4 }]);
   // owner/repo#N 꼴은 건드리지 않는다.
   expect(link("other/thing#16 와 alpha-web #17")).toEqual([{ repo: "studio/alpha-web", number: 17 }]);
 });
