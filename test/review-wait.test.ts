@@ -30,12 +30,33 @@ test("요약은 마크다운 기호를 걷어 내고 길이를 자른다", () =>
   expect(cut.length).toBe(160);
   expect(cut.endsWith("…")).toBe(true);
   expect(lastMessageSummary("   \n\n")).toBe("");
+  expect(lastMessageSummary("[문서](https://example.com/wiki/A_(b)) 확인")).toBe("문서 확인");
+});
+
+test("부정된 멈춤 말과 '대기열'은 멈춤 문장으로 고르지 않는다", () => {
+  expect(lastMessageSummary("The build is no longer blocked.\n\nShipped the fix.")).toBe("Shipped the fix.");
+  expect(lastMessageSummary("Not waiting on anything now.\n\nAll done.")).toBe("All done.");
+  expect(lastMessageSummary("작업 대기열을 비웠습니다.\n\n배포를 마쳤습니다.")).toBe("배포를 마쳤습니다.");
+  expect(lastMessageSummary("이제 리뷰를 기다리지 않습니다.\n\n다음 작업을 시작합니다.")).toBe("다음 작업을 시작합니다.");
+  expect(lastMessageSummary("리뷰 대기 중입니다.\n\n메모.")).toBe("리뷰 대기 중입니다.");
 });
 
 test("세션 글의 제어 문자와 양방향 제어 문자를 지우고 줄바꿈은 남긴다", () => {
-  const raw = "정지‮합니다\u0007⁦.\n다음\tstep​";
+  const raw = "정지\u202e합니다\u0007\u2066.\n다음\tstep\u200b";
   expect(cleanSessionText(raw)).toBe("정지합니다.\n다음\tstep");
-  expect(lastMessageSummary("정지‮합니다\u0000.")).toBe("정지합니다.");
+  expect(lastMessageSummary("정지\u202e합니다\u0000.")).toBe("정지합니다.");
+  for (const mark of ["\u061c", "\u200b", "\u200f", "\u202a", "\u202e", "\u2060", "\u2069", "\ufeff"]) {
+    expect(cleanSessionText("a" + mark + "b")).toBe("ab");
+  }
+});
+
+test("이 기능의 원본 파일에는 양방향·폭 없는 제어 문자가 글자 그대로 들어 있지 않다", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const hidden = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/;
+  for (const file of ["shared/review-wait.ts", "server/review-wait.ts", "test/review-wait.test.ts"]) {
+    expect(hidden.test(readFileSync(join(import.meta.dir, "..", file), "utf8"))).toBe(false);
+  }
 });
 
 test("기다린 시간은 분·시간·일로 두 언어 문구를 만든다", () => {
@@ -107,7 +128,7 @@ test("스냅숏 꾸미기: 확인 대기 카드에 요약·전체 글·미처리
   const since = new Date(now - 20 * hour).toISOString();
   const row = (id: string, lane: "review" | "idle" | "running" = "review") => ({ id, title: id, projectId: "p", projectTitle: "P", workspaceTitle: "w",
     model: null, status: "idle", lane, detail: "세션 결과 확인 필요", waitingSince: since });
-  const rows = [row("stuck"), row("carded"), row("judged"), row("nudged"), row("quiet", "idle"), row("busy", "running"), row("coord")];
+  const rows = [row("stuck"), row("carded"), row("judged"), row("nudged"), row("quiet", "idle"), row("busy", "running"), row("coord"), row("unread")];
   const evidence = new Map([
     ["stuck", excerpt(page([said("구현을 마쳤습니다.\n\nPR 상한으로 다음 구현을 **정지**합니다.")]))],
     ["carded", excerpt(page([said("리뷰를 기다립니다.")]))],
@@ -130,6 +151,8 @@ test("스냅숏 꾸미기: 확인 대기 카드에 요약·전체 글·미처리
   expect(by.get("busy")!.lastSummary).toBeUndefined();
   expect(by.get("busy")!.waitingSince).toBeUndefined();
   expect(by.get("coord")!.needsCoordinator).toBeUndefined();
+  // Without an excerpt the board cannot tell whether the coordinator acted, so it does not flag.
+  expect(by.get("unread")!.needsCoordinator).toBeUndefined();
 
   const without = [row("stuck")];
   decorateReviewWait(without, evidence, { coordinator: null, now, thresholdHours: 12, covered: new Set(), judgments: {} });
@@ -180,8 +203,12 @@ test("코디네이터 목록 도구는 기다린 시간과 미처리 여부를 �
   };
   const sdk = { workspaces: { list: async () => pageOf([]) }, agents: {
     list: async () => pageOf([{ agent: { id: "coord", status: "running", activeTurn: {}, updatedAt: old, pendingPermissions: [] }, project: { projectKey: "p" } },
-      finished("stuck", old), finished("nudged", old), finished("carded", old), finished("fresh", recent)]),
-    ref: (id: string) => ({ timeline: { refetch: async () => page(timelines[id] ?? []) } }),
+      finished("stuck", old), finished("nudged", old), finished("carded", old), finished("fresh", recent),
+      { ...finished("failed", old), agent: { ...finished("failed", old).agent, lastError: "provider error" } }, finished("unreadable", old)]),
+    ref: (id: string) => ({ timeline: { refetch: async () => {
+      if (id === "unreadable") throw new Error("timeline unavailable");
+      return page(timelines[id] ?? [said("정지합니다.")]);
+    } } }),
   } };
   let hook: (event: unknown) => Promise<{ tools: { execute: (input: object, ctx: object) => Promise<{ text: string }> }[] } | undefined> = async () => undefined;
   attachCoordinatorTools({ addHook: (_: string, h: typeof hook) => { hook = h; return () => {}; } } as never, store, new ConversationReader(), [], undefined,
@@ -196,6 +223,11 @@ test("코디네이터 목록 도구는 기다린 시간과 미처리 여부를 �
   expect(by.get("fresh")).toMatchObject({ lane: "review", waitedHours: 2 });
   expect(by.get("fresh")!.needsCoordinator).toBeUndefined();
   expect(by.get("coord")!.lane).toBeUndefined();
+  // Same rule as the board: no usable excerpt, no flag.
+  expect(by.get("failed")).toMatchObject({ lane: "review" });
+  expect(by.get("failed")!.needsCoordinator).toBeUndefined();
+  expect(by.get("unreadable")).toMatchObject({ lane: "review" });
+  expect(by.get("unreadable")!.needsCoordinator).toBeUndefined();
 });
 
 test("정기 점검 요청은 미처리 표시 세션을 먼저 분류하게 하고 전송은 맡기지 않는다", async () => {

@@ -151,8 +151,13 @@ export function classify(e: Evidence, row: SessionRow, decision?: Preferences["j
   return row;
 }
 
+// The board reads excerpts only for resting sessions without an error to review.
+export function usesConversationEvidence(row: Pick<SessionRow, "lane" | "detail">) {
+  return (row.lane === "idle" || row.lane === "review") && !row.detail.includes("오류");
+}
+
 export function applyConversationEvidence(evidence: Evidence, row: SessionRow, prefs: Preferences) {
-  if ((row.lane !== "idle" && row.lane !== "review") || row.detail.includes("오류")) return false;
+  if (!usesConversationEvidence(row)) return false;
   const judgment = prefs.judgments[row.id];
   Object.assign(row, classify(evidence, row, judgment?.projectId === row.projectId ? judgment : undefined, row.id === prefs.coordinator),
     { evidenceId: evidence.id });
