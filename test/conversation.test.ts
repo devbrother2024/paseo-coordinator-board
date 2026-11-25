@@ -118,3 +118,41 @@ test("the decision card preserves the original request Markdown and the existing
   expect(resolved.decisionAnswered).toBe(true);
   expect(resolved.decision).toBeUndefined();
 });
+
+test("a message ending in a question block becomes a decision card with its options", () => {
+  const block = "```board-question\n" + JSON.stringify({ questions: [
+    { id: "Q1", text: "Where should the cache live?", options: [{ key: "A", text: "Memory", recommended: true }, { key: "B", text: "Disk" }] },
+  ], recommendedReply: "Go with A." }) + "\n```";
+  // No sentence asks for a decision: the block alone makes the card, titled by its first question.
+  const plain = evidence(["assistant_message", "I compared two places for the cache.\n\n" + block]);
+  expect(plain.turns.at(-1).text).toBe("I compared two places for the cache.");
+  const session = {...row, ...classify(plain,row), evidenceId:plain.id};
+  expect(session).toMatchObject({lane:"human", detail:"세션의 확인 요청 · Q1 · Where should the cache live?"});
+  decorateDecision(session, undefined, {judgments:{}, answers:{}}, plain);
+  expect(session.decision).toMatchObject({source:"conversation", question:"Q1 · Where should the cache live?", contextMarkdown:"I compared two places for the cache."});
+  expect(session.decision.block.questions[0].options.map(choice=>choice.text)).toEqual(["Memory","Disk"]);
+  expect(session.decision.block.recommendedReply).toBe("Go with A.");
+  expect(session.decision.choices).toBeUndefined();
+  expect(session.decision.missingLabels).toBeUndefined();
+  // A sentence that asks keeps its place as the title, and the block still carries the options.
+  const asked = evidence(["assistant_message", "두 곳을 비교했습니다.\n(A)와 (B) 중 어디에 둘지 정해 주세요.\n\n" + block]);
+  const both = {...row, ...classify(asked,row), evidenceId:asked.id};
+  decorateDecision(both, undefined, {judgments:{}, answers:{}}, asked);
+  expect(both.decision.question).toBe("(A)와 (B) 중 어디에 둘지 정해 주세요.");
+  expect(both.decision.block.questions).toHaveLength(1);
+  expect(both.decision.missingLabels).toBeUndefined();
+  // The block is display only: the card keeps the identity the conversation evidence gives it.
+  const legacy = {...row, ...classify(asked,row), evidenceId:asked.id};
+  decorateDecision(legacy, undefined, {judgments:{}, answers:{}});
+  expect(both.decision.version).toBe(legacy.decision.version);
+  // A message that is only a block still reads as a turn, and a later message from the person sends it to review.
+  const only = evidence(["assistant_message", block]);
+  expect(only.turns.at(-1).text).toBe("Where should the cache live?");
+  expect(classify(only,row).lane).toBe("human");
+  expect(classify(evidence(["assistant_message", block],["user_message","다른 작업은?"]),row).lane).toBe("review");
+  // A broken block is not a card of its own, and the text stays as written.
+  const broken = evidence(["assistant_message", "I compared two places.\n\n```board-question\n{ nope\n```"]);
+  expect(broken.turns.at(-1).block).toBeUndefined();
+  expect(broken.turns.at(-1).text).toContain("{ nope");
+  expect(classify(broken,row).lane).toBe("idle");
+});

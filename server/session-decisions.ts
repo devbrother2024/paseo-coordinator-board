@@ -42,6 +42,7 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
         if (excerpt.context) row.decision.contextMarkdown = excerpt.context;
         if (excerpt.choices.length) row.decision.choices = excerpt.choices;
         if (excerpt.missingLabels.length) row.decision.missingLabels = excerpt.missingLabels;
+        if (excerpt.block) row.decision.block = excerpt.block;
       }
     }
   }
