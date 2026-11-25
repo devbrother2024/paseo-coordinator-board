@@ -376,13 +376,17 @@ test("the card headline counts waiting requests in English and keeps the request
   expect(sessionDetail("응답을 기다리는 요청 1건이 있습니다", en)).toBe("응답을 기다리는 요청 1건이 있습니다");
 });
 
-test("only the client responder answers a waiting request, never the plugin server", () => {
+test("one shared responder answers a waiting request, and a question or plan is answered only from a person's button", () => {
   const root = join(import.meta.dir, "..");
   const sources = (folder: string): string[] => readdirSync(join(root, folder), { withFileTypes: true }).flatMap(entry =>
     entry.isDirectory() ? sources(join(folder, entry.name)) : /\.tsx?$/.test(entry.name) ? [join(folder, entry.name)] : []);
-  const callers = [...sources("server"), ...sources("shared"), ...sources("client"), "index.server.ts", "index.client.tsx"]
-    .filter(file => /respondToPermission\b/.test(readFileSync(join(root, file), "utf8")));
-  expect(callers).toEqual([join("client", "pending-requests.ts")]);
+  const all = [...sources("server"), ...sources("shared"), ...sources("client"), "index.server.ts", "index.client.tsx"];
+  const using = (pattern: RegExp) => all.filter(file => pattern.test(readFileSync(join(root, file), "utf8")));
+  expect(using(/\.respondToPermission\(/)).toEqual([join("shared", "permission-responder.ts")]);
+  // The server's only use is the read-only rule (test/permission-auto-approve.test.ts), which never takes a question or a plan.
+  expect(using(/\bcreateResponder(?:<[^>]*>)?\(/).filter(file => file.startsWith("server") || file === "index.server.ts")).toEqual([join("server", "permission-auto-approve.ts")]);
+  // The responses a question or a plan takes are built only in the client.
+  expect(using(/\b(?:answerResponse|dismissResponse|actionResponse)\(/).every(file => file.startsWith("client"))).toBe(true);
 });
 
 test("a request another card, an earlier visit or another screen answered is checked, not sent again", async () => {

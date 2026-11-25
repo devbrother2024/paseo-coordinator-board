@@ -14,6 +14,9 @@ export type ShellPermissionClassification = {
   readPathsUnresolved?: true;
   commands: (Operation & { setsWorkingFolder?: true })[];
 };
+// A path one command of the request reads, as written, with the folder it would be read from.
+// `cd` entries are the folders the request moves to. The host resolves these itself.
+export type ShellReadTarget = { command: string; value: string; cwd?: string };
 type ShellSummary = Omit<ShellPermissionClassification, "commands"> & { kind: "shell"; command: string; groups: Group[] };
 type ToolSummary = { kind: "read" | "edit" | "write" | "delete" | "mcp" | "fetch" | "unknown"; risk: PermissionRisk;
   target?: string; additionalRisks?: PermissionRisk[]; readPathsUnresolved?: true };
@@ -155,7 +158,7 @@ function readTargets(name: string, args: string[], cwd?: string) {
 
 type FolderCandidates = { paths: ReadonlySet<string | undefined>; uncertain: boolean };
 
-function classify(command: ShellCommand, folders: FolderCandidates, workspace?: string): Operation & { readPathsUnresolved?: true } {
+function classify(command: ShellCommand, folders: FolderCandidates, workspace?: string): Operation & { readPathsUnresolved?: true; reads?: Omit<ShellReadTarget, "command">[] } {
   const cwd = folders.paths.size === 1 && !folders.uncertain ? folders.paths.values().next().value : workspace;
   const [program, ...words] = command.words;
   let name = concise(firstLine(program?.value)) || "";
@@ -219,13 +222,20 @@ function classify(command: ShellCommand, folders: FolderCandidates, workspace?: 
   const additionalRisks = [...new Set([risk, ...effects])].filter(item => item !== highest && item !== "read");
   if (!detail && warnings.length) detail = concise([...new Set(warnings.map(path => displayPath(path.value, path.cwd)))].join(", "));
   return { name, risk: highest, ...(additionalRisks.length ? { additionalRisks } : {}), ...(detail ? { detail } : {}),
-    ...(paths.length || command.inputs.some(word => word.dynamic) ? { readPathsUnresolved: true } : {}) };
+    ...(paths.length || command.inputs.some(word => word.dynamic) ? { readPathsUnresolved: true } : {}), reads: paths };
 }
 
 // Classifies literal command text without executing it or consulting the shell's
 // environment, aliases, or functions. An unparsed request always has unknown risk.
 export function classifyShellPermission(command: string, initialCwd?: string): ShellPermissionClassification {
+  return shellPermissionTargets(command, initialCwd).classification;
+}
+
+// The same classification with the paths it found. Nothing is read from disk here: a caller that
+// must know what a path really is (a symbolic link, a folder) resolves `reads` on the session's host.
+export function shellPermissionTargets(command: string, initialCwd?: string): { classification: ShellPermissionClassification; reads: ShellReadTarget[] } {
   const parsed = shellCommands(command);
+  const targets: ShellReadTarget[] = [];
   const classified: ShellPermissionClassification["commands"] = [];
   let risk: PermissionRisk = "read";
   let count = 0;
@@ -237,13 +247,15 @@ export function classifyShellPermission(command: string, initialCwd?: string): S
   const list = (commands: ShellCommand[], initial: FolderCandidates, nested = false) => {
     let folders = initial;
     for (const [index, item] of commands.entries()) {
-      const { readPathsUnresolved: unresolved, ...group } = classify(item, folders, initialCwd);
+      const { readPathsUnresolved: unresolved, reads = [], ...group } = classify(item, folders, initialCwd);
       readPathsUnresolved ||= unresolved === true;
+      targets.push(...reads.map(read => ({ command: group.name, ...read })));
       if (group.risk !== "folder") count++;
       const directory = item.words[1]?.value;
       if (group.risk === "folder" && directory) {
         // A shell can keep the earlier directory when cd fails, is skipped by
         // a condition, or runs in another process (for example in a pipeline).
+        targets.push(...[...folders.paths].map(path => ({ command: "cd", value: directory, cwd: path })));
         const next = new Set([...folders.paths, ...[...folders.paths].map(path => resolveReadPath(directory, path))]);
         folders = next.size > 16 ? { paths: folders.paths, uncertain: true } : { ...folders, paths: next };
         add(!nested && index === 0 && next.size === 1 ? { ...group, setsWorkingFolder: true } : group);
@@ -258,7 +270,7 @@ export function classifyShellPermission(command: string, initialCwd?: string): S
   };
   if (parsed?.length) list(parsed, { paths: new Set([initialCwd]), uncertain: false });
   else add({ name: "", risk: "unknown" });
-  return { risk, cwd: initialCwd, count, commands: classified, ...(readPathsUnresolved ? { readPathsUnresolved: true } : {}) };
+  return { classification: { risk, cwd: initialCwd, count, commands: classified, ...(readPathsUnresolved ? { readPathsUnresolved: true } : {}) }, reads: targets };
 }
 
 function shellSummary(command: string, initialCwd?: string): ShellSummary {

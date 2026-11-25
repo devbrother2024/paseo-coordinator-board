@@ -20,7 +20,7 @@ const wrap = { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 6 
 // The text sent to the session is never built from this.
 export type AnsweredRequest = { title: string; detail: string; handled: boolean };
 type Send = (response: PermissionResponse, detail: string) => void;
-type Responder = ReturnType<typeof createResponder>;
+type Responder = ReturnType<typeof createResponder<PermissionResponse>>;
 type Result = { line: string; outcome: Outcome; detail: string };
 
 export function PendingRequests({ hostId, sessionId, sessionTitle, version, theme, open, onAnswered, onRefresh }: {

@@ -44,10 +44,13 @@ import { operatingDirectories, operatingDirectory } from "./server/operating-fol
 import { CoordinatorToolStamps, readCoordinatorTools } from "./server/coordinator-tools";
 import { coveredSessionIds, decorateReviewWait, reviewWaitThreshold } from "./server/review-wait";
 import { answeredRequests } from "./shared/answered-requests";
+import { permissionAutoApprove } from "./shared/permission-auto-approve";
+import { AutoApprovalStore, managedWorkSession, PermissionAutoApprover } from "./server/permission-auto-approve";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(hostVisibility);
-  server.registerSettings(answeredRequests);
+  const answeredSettings = server.registerSettings(answeredRequests);
+  const autoApproveSettings = server.registerSettings(permissionAutoApprove);
   const queueSettings = server.registerSettings(parallelWait);
   async function parallelMinutes() {
     const state = await queueSettings?.read().catch(() => undefined);
@@ -59,6 +62,22 @@ export default function contribute(server: PluginServerContext) {
   const notes = new NoteStore(join(dataDir, "notes.json"));
 
   const prefs = new PreferenceStore(join(dataDir, "scope.json"));
+  // The read-only rule. It answers only from the hook for a new request, and only while a person has it switched on.
+  const autoApprover = new PermissionAutoApprover({
+    store: new AutoApprovalStore(join(dataDir, "permission-auto-approvals.json")),
+    enabled: async () => {
+      const state = await autoApproveSettings?.read().catch(() => undefined);
+      return state?.status === "ready" && state.values.readOnlyShell === true;
+    },
+    answered: async () => {
+      const state = await answeredSettings?.read().catch(() => undefined);
+      return state?.status === "ready" ? state.values.sent : null;
+    },
+    managed: async (paseo, id) => managedWorkSession(await discoverSessions(paseo), prefs.read(), id),
+    changed: () => invalidateCount(),
+    // Paseo keeps worktrees under its own dot folder. They are ordinary checkouts.
+    workRoots: [join(home, "worktrees")],
+  });
   const toolStamps = new CoordinatorToolStamps(prefs);
   const reader = new ConversationReader();
   const projectRoots = new ProjectRootReader();
@@ -283,7 +302,7 @@ export default function contribute(server: PluginServerContext) {
     return { sessions: visible, ...(queuedConversations.length ? {queuedConversations} : {}), notes: visibleNotes, pullRequests, trackedDecisions, replyHistory, ...(clarifications.length ? { clarifications } : {}),
       ...(notice && selected.has(notice.projectId) && { assignmentNotice: notice }),
       projects: [...knownProjects, ...missingProjects], coordinator: latest.coordinator, lastDigestAt: latest.lastDigest?.at, ...(reach ? { coordinatorReach: reach } : {}),
-      ...(coordinatorTools ? { coordinatorTools } : {}) };
+      ...(coordinatorTools ? { coordinatorTools } : {}), permissionAutoApprovals: autoApprover.view(selected) };
   }
   async function buildSessionView(paseo: PluginHandlerContext["paseo"],
     catalog: Awaited<ReturnType<PluginHandlerContext["paseo"]["projects"]["list"]>>,
@@ -390,7 +409,11 @@ export default function contribute(server: PluginServerContext) {
   });
   const removeReplyClose = server.addHook("agent.close.after",async (event,ctx)=>{ if(event.agent?.id) await Promise.all([resumeReplies(ctx,event.agent.id),decisions.resume(ctx.paseo,event.agent.id),changeRequests.resume(ctx.paseo,event.agent.id)]); });
   const removeReplyArchive = server.addHook("agent.archive.after",async (event,ctx)=>{ if(event.agent?.id) await Promise.all([resumeReplies(ctx,event.agent.id),decisions.resume(ctx.paseo,event.agent.id),changeRequests.resume(ctx.paseo,event.agent.id)]); });
-  const removeMergePermission = server.addHook("agent.permission.after",onRecipientAvailable);
+  const removeMergePermission = server.addHook("agent.permission.after", async (event, context) => {
+    autoApprover.resolved(event);
+    await onRecipientAvailable(event, context);
+  });
+  const removeAutoApprove = server.addHook("agent.permission.before", async (event, context) => { await autoApprover.requested(event, context); });
   // The board's own same-folder judgment, read again when a reply goes out. Only selected projects get a key.
   // `unread` says a project's folder, or the project list itself, could not be read just now.
   async function currentFolders(paseo: PluginHandlerContext["paseo"]): Promise<{ folders: ProjectFolders; unread: (id: string | null) => boolean }> {
@@ -602,5 +625,5 @@ export default function contribute(server: PluginServerContext) {
   const reviewContext = async () => ({ thresholdHours: await staleHours(),
     covered: coveredSessionIds(tracked.read(new Set(prefs.read().projects), [], { items: [], projects: [] }).items) });
   const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount), judgePullTool(prefs, prs, invalidateCount, undefined, {hints:(selected, id) => tracked.ownerHints(selected, id)})], toolStamps, reviewContext);
-  return () => { removeMergeTurn(); removeMergePermission(); removeReplyClose(); removeReplyArchive(); removeCoordinator(); removeReport(); };
+  return () => { removeMergeTurn(); removeMergePermission(); removeAutoApprove(); removeReplyClose(); removeReplyArchive(); removeCoordinator(); removeReport(); };
 }

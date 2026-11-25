@@ -36,6 +36,7 @@ import { SessionLinks } from "./session-links";
 import { useRemoteRunning, RemoteRunning } from "./remote-running";
 import { BoardHosts } from "./hosts";
 import { ReviewWaitSetting } from "./review-wait-setting";
+import { PermissionAutoApproveSetting } from "./permission-auto-approve-setting";
 import { OperationsPanel } from "./operations";
 import { ReachExplanation } from "./reach-explanation";
 import { StaleCoordinatorTools } from "./stale-coordinator-tools";
@@ -459,6 +460,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           queue={q} theme={theme} onRefresh={onRefresh} />
       </View>)}
       {settings && configured && <ReviewWaitSetting theme={theme} onSaved={onRefresh} />}
+      {settings && configured && <PermissionAutoApproveSetting theme={theme} view={snapshot?.permissionAutoApprovals} onSaved={onRefresh} />}
       {!!error && settings && <Button theme={theme} label={t("세션 다시 조회", "Retry session lookup")} disabled={loading} onPress={onRefresh} />}
       {snapshot && onProject && (pickingProjects || settings) && <View style={{ gap: 7 }}>
         {!pickingProjects
@@ -551,7 +553,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           records={hostWideRecords.filter(item => !waitingMerges.has(item.key))} waiting={hostWideRecords.filter(unlisted)} renderWaiting={renderWaitingMerge}
           decisions={byProject.get(null) ?? 0} renderRecord={renderRecord} renderPull={renderPull}
           recordLinks={recordLinks} compact={layout.compact} theme={theme} {...actions} />}
-        {visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} followups={followups.filter(item=>item.entry.projectId===p.id)} now={now} records={deciding.filter(r => r.projectId === p.id)} waiting={records.filter(r => r.projectId === p.id && unlisted(r))} renderWaiting={renderWaitingMerge} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={kanbanPrs.filter(pr => pr.projectIds.includes(p.id))} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
+        {visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} followups={followups.filter(item=>item.entry.projectId===p.id)} now={now} records={deciding.filter(r => r.projectId === p.id)} waiting={records.filter(r => r.projectId === p.id && unlisted(r))} renderWaiting={renderWaitingMerge} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={kanbanPrs.filter(pr => pr.projectIds.includes(p.id))} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} autoApprovals={snapshot?.permissionAutoApprovals?.entries} {...actions} />)}
         <RemoteRunning groups={visiblePeers} projects={activeProjects} open={onOpenHostSession} theme={theme} />
       </SessionProgress>}
     </ScrollView>

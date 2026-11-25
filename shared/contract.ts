@@ -12,6 +12,7 @@ import { workspacePullSchema } from "./workspace-pull";
 import { coordinatorReachSchema } from "./coordinator-reach";
 import { coordinatorToolsSchema } from "./coordinator-tools";
 import { assignmentLocation, assignmentNotice } from "./dispatch-hosts";
+import { autoApprovalView } from "./permission-auto-approve";
 
 const sessionId = z.string().min(1).max(256);
 const noteKind = z.enum(["question", "review", "done", "clear"]);
@@ -75,7 +76,9 @@ export const boardSnapshot = defineRpc({
       rootKey: z.string().optional(), temporary: z.boolean().optional(), operating: z.boolean().optional(), operatingActive: z.boolean().optional(), missing: z.literal(true).optional() })),
     queuedConversations:z.array(queueView.extend({projectId:z.string(),sessionId:z.string(),version:z.string(),title:z.string()})).optional(),
     coordinator: sessionId.nullable(), coordinatorReach: coordinatorReachSchema.optional(), coordinatorTools: coordinatorToolsSchema.optional(), lastDigestAt: z.iso.datetime().optional(), clarifications:z.array(clarificationEntry).optional(), replyHistory: z.array(replyEntry).optional(), trackedDecisions: trackedDecisionViewSchema.optional(), pullRequests: pullRequestViewSchema.optional(),
-    assignmentNotice: assignmentNotice.optional() }),
+    assignmentNotice: assignmentNotice.optional(),
+    // Requests the read-only rule answered in the selected projects, newest first, and whether this host supports the rule.
+    permissionAutoApprovals: autoApprovalView.optional() }),
 });
 export const boardDecisionCount = defineRpc({
   name: "board.decision-count", input: z.strictObject({}),

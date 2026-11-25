@@ -48,10 +48,12 @@ function safeReadOperands(args: string[], rules: ReadOptions) {
   const patternFiles: string[] = [];
   let patternOption = false;
   let recursive = false;
+  let optionAfterOperand = false;
   for (let index = 0; index < args.length; index++) {
     const word = args[index];
     if (word === "--") { operands.push(...args.slice(index + 1)); break; }
     if (word === "-" || !word.startsWith("-")) { operands.push(word); continue; }
+    optionAfterOperand ||= operands.length > 0;
     if (rules.numeric && /^-\d+$/.test(word)) continue;
     const equals = word.indexOf("=");
     const flag = equals < 0 ? word : word.slice(0, equals);
@@ -82,7 +84,7 @@ function safeReadOperands(args: string[], rules: ReadOptions) {
       recursive ||= option === "r";
     }
   }
-  return { operands, patternOption, patternFiles, recursive };
+  return { operands, patternOption, patternFiles, recursive, optionAfterOperand };
 }
 
 export function gitSubcommandIndex(args: string[]) {
@@ -111,6 +113,14 @@ export function readCommandOperands(name: string, args: string[]): string[] | nu
     return [...parsed.patternFiles, ...(!files.length && (name === "rg" || parsed.recursive) ? ["."] : files)];
   }
   return ["echo", "printf", "pwd"].includes(name) ? [] : parsed.operands;
+}
+
+// Whether an option is written after an operand. Here options are read wherever they stand, as GNU
+// utilities do. BSD utilities stop at the first operand and take every later word as a file, so the
+// two readings agree only when no option follows an operand.
+export function optionAfterOperand(name: string, args: string[]) {
+  const rules = Object.hasOwn(readOptions, name) ? readOptions[name] : undefined;
+  return !!rules && safeReadOperands(args, rules)?.optionAfterOperand === true;
 }
 
 export function hasLongOption(args: string[], option: string) {

@@ -178,6 +178,13 @@ test("the shell classifier takes only command text and cwd and preserves individ
 
 test("the classifier distinguishes a descriptor redirect, an output file and an executable redirect target", () => {
   expect(classifyShellPermission("git status 2>&1", cwd).risk).toBe("read");
+  // Output thrown away to exactly /dev/null is not a file write.
+  for (const command of ["cat notes.md 2>/dev/null", "cat notes.md >/dev/null", "cat notes.md &>/dev/null", "cat notes.md 2>>/dev/null"]) {
+    expect([command, classifyShellPermission(command, cwd).risk]).toEqual([command, "read"]);
+  }
+  for (const command of ["cat notes.md 2>/dev/null2", "cat notes.md >/dev/null/x", "cat notes.md >/dev/null >out.txt"]) {
+    expect([command, classifyShellPermission(command, cwd).risk]).toEqual([command, "write"]);
+  }
   expect(classifyShellPermission("git status &>>build/status.log", cwd).commands).toEqual([
     { name: "git status", risk: "write", detail: "build/status.log" },
   ]);

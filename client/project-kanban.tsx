@@ -18,8 +18,12 @@ import { assignmentReasons } from "../shared/host-assignment";
 import { QuestionContext } from "./question-context";
 import { decisionChoiceNotice } from "./choice-display";
 import { waitedLabel } from "../shared/review-wait";
+import type { AutoApprovalEntry } from "../shared/permission-auto-approve";
+import { approvalLine, sessionApprovals } from "./permission-auto-approve";
 type ColumnKind = Lane;
-type Actions = { sessionHostLabel?: string; onOpen?: (id:string) => void; onEdit:(id:string) => void };
+type Actions = { sessionHostLabel?: string; onOpen?: (id:string) => void; onEdit:(id:string) => void;
+  // Requests the read-only rule answered, newest first.
+  autoApprovals?: readonly AutoApprovalEntry[] };
 
 function accent(lane: ColumnKind, theme: Theme) {
   const c = theme.colors;
@@ -46,9 +50,9 @@ function CoordinatorPending({ theme }: { theme: Theme }) {
   </View>;
 }
 
-function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Card; theme: Theme } & Actions) {
+function CardView({ card, theme, onOpen, onEdit, sessionHostLabel, autoApprovals }: { card: Card; theme: Theme } & Actions) {
   const [expanded, setExpanded] = useState(false);
-  const { t } = useBoardLanguage();
+  const { t, language } = useBoardLanguage();
   const { session, note } = card;
   const c = theme.colors;
   const fact = session.boardFact;
@@ -59,6 +63,7 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
   const runtime = [session.provider, session.model === session.provider ? null : session.model].filter(Boolean).join(" / ");
   const resting = card.lane === "review" || card.lane === "idle";
   const waited = resting ? waitedLabel(session.waitingSince, Date.now(), t) : "";
+  const approved = sessionApprovals(autoApprovals, session.id);
   const noteTitle = note && note.kind !== "clear" ? [note.origin === "agent" ? t("세션 보고", "Session report") : null, noteLabel(note.kind, t)].filter(Boolean).join(" · ") : null;
   return (
     <View style={{ padding: 10, borderRadius: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface0, gap: 6 }}>
@@ -86,7 +91,13 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
       {fact && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
         {fact.current ? "" : t("이전 · ", "Previous · ")}{factStatus(fact, t)}
       </Text>}
+      {!!approved.length && <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>
+        {approvalLine(approved[0], t, language, Date.now())}{approved.length > 1 ? " · " + t(`외 ${approved.length - 1}건`, `${approved.length - 1} more`) : ""}
+      </Text>}
       {expanded && <>
+        {approved.length > 1 && <View style={{ gap: 2 }}>
+          {approved.slice(1, 6).map(entry => <Text key={entry.request} selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{approvalLine(entry, t, language, Date.now())}</Text>)}
+        </View>}
         {fact && <View style={{ gap: 3 }}>
           <Text selectable style={{ color: c.foreground }}>{fact.answer}</Text>
           <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{t("확인 근거", "Source")} · {fact.source}</Text>

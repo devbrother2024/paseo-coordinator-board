@@ -1,12 +1,16 @@
 // A display tokenizer for common shell syntax. Unrecognized syntax fails closed;
 // no shell is invoked and source text remains available on the card.
-export type ShellWord = { value: string; dynamic: boolean; parameterExpansion?: true };
+// `shellSpecific` marks an unquoted character that only some shells expand: a leading "=" (zsh
+// replaces "=name" with the path of a command), and "^" or a later "~" (extended globbing).
+export type ShellWord = { value: string; dynamic: boolean; parameterExpansion?: true; shellSpecific?: true };
 export type ShellCommand = {
   words: ShellWord[];
   redirects: ShellWord[];
   inputs: ShellWord[];
   substitutions: ShellCommand[][];
   expandsInputParameters?: true;
+  // A heredoc or here-string feeds this command text written in the request itself.
+  inlineInput?: true;
 };
 
 const separator = /(?:&&|\|\||\|&|[;&|\n])/y;
@@ -43,7 +47,7 @@ export function shellCommands(source: string): ShellCommand[] | null {
   }
 
   function word(command: ShellCommand, depth: number) {
-    let value = "", dynamic = false, parameterExpansion = false, quote = "", quoted = false;
+    let value = "", dynamic = false, parameterExpansion = false, shellSpecific = false, quote = "", quoted = false;
     const start = index;
     while (index < source.length) {
       const ch = character();
@@ -82,11 +86,12 @@ export function shellCommands(source: string): ShellCommand[] | null {
         dynamic = true;
         value += next();
       } else {
+        if (!quote && (ch === "^" || (ch === "~" && index > start) || (ch === "=" && index === start))) shellSpecific = true;
         value += next();
       }
     }
     if (quote || start === index) return invalid();
-    return { value, dynamic, quoted, ...(parameterExpansion ? { parameterExpansion: true as const } : {}) };
+    return { value, dynamic, quoted, ...(parameterExpansion ? { parameterExpansion: true as const } : {}), ...(shellSpecific ? { shellSpecific: true as const } : {}) };
   }
 
   function sequence(depth: number, nested = false): ShellCommand[] {
@@ -124,9 +129,13 @@ export function shellCommands(source: string): ShellCommand[] | null {
         if (/^\d*<<-?$/.test(operator)) {
           if (target.dynamic || !target.value) return invalid();
           heredocs.push({ delimiter: target.value, tabs: operator.endsWith("-"), expand: !target.quoted, command });
+          command.inlineInput = true;
         } else {
-          if (operator.includes(">") && (!operator.endsWith("&") || !/^\d+$|^-$/.test(target.value))) command.redirects.push(target);
+          // Output sent to exactly /dev/null is thrown away. It writes no file, so it is not a redirect target.
+          const discarded = !operator.includes("<") && !target.dynamic && target.value === "/dev/null";
+          if (operator.includes(">") && !discarded && (!operator.endsWith("&") || !/^\d+$|^-$/.test(target.value))) command.redirects.push(target);
           if (/^\d*<(?:>|$)/.test(operator)) command.inputs.push(target);
+          if (operator.endsWith("<<<")) command.inlineInput = true;
           if (operator.endsWith("<<<") && target.parameterExpansion) command.expandsInputParameters = true;
         }
         continue;

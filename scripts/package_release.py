@@ -38,6 +38,8 @@ required = {
     "client/history-markdown.tsx", "client/vendor/marked/marked.js", "third-party/marked/LICENSE", "client/reply-history.tsx", "client/history-sessions.ts", "shared/reply-history.ts",
     "client/permission-request-summary.tsx", "shared/permission-summary.ts", "shared/shell-permission-command.ts",
     "shared/permission-read-options.ts", "shared/permission-read-paths.ts", "shared/permission-command-effects.ts",
+    "shared/permission-responder.ts", "shared/permission-auto-approve.ts", "server/permission-auto-approve.ts",
+    "client/permission-auto-approve.ts", "client/permission-auto-approve-setting.tsx",
     "package.json", "LICENSE", "OVERVIEW.md", "README.md", "templates/coordinator-session.md",
     "third-party/better-paseo/LICENSE", "THIRD_PARTY_NOTICES.md", "assets/preview.png",
 }
