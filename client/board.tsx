@@ -31,6 +31,7 @@ import { clarificationKey, clarificationRecipient, sessionClarificationCard, tra
 import { SessionLinks } from "./session-links";
 import { useRemoteRunning, RemoteRunning } from "./remote-running";
 import { BoardHosts } from "./hosts";
+import { ReviewWaitSetting } from "./review-wait-setting";
 import { OperationsPanel } from "./operations";
 import { ReachExplanation } from "./reach-explanation";
 import { StaleCoordinatorTools } from "./stale-coordinator-tools";
@@ -363,6 +364,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         clear={() => setChosenProjects([])} toggle={group => setChosenProjects(previous => toggleProjectFilter(filterGroups, previous, group))} />}
       {!!error && showError && <Text selectable style={{ color: c.statusDanger }}>{error}</Text>}
       {settings && <BoardLanguageSetting theme={theme} />}
+      {settings && configured && <ReviewWaitSetting theme={theme} onSaved={onRefresh} />}
       {!!error && settings && <Button theme={theme} label={t("세션 다시 조회", "Retry session lookup")} disabled={loading} onPress={onRefresh} />}
       {snapshot && onProject && (pickingProjects || settings) && <View style={{ gap: 7 }}>
         {!pickingProjects

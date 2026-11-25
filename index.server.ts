@@ -37,9 +37,11 @@ import { judgedMergeCardOptions, judgePullTool, registerMergeJudgmentSettings } 
 import { applyPullJudgments } from "./shared/pull-judgments";
 import { operatingDirectories, operatingDirectory } from "./server/operating-folders";
 import { CoordinatorToolStamps, readCoordinatorTools } from "./server/coordinator-tools";
+import { coveredSessionIds, decorateReviewWait, reviewWaitThreshold } from "./server/review-wait";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(hostVisibility);
+  const staleHours = reviewWaitThreshold(server);
   const home = process.env.PASEO_HOME || join(homedir(), ".paseo");
   const dataDir = join(home, "plugin-data", "coordinator-board");
   const notes = new NoteStore(join(dataDir, "notes.json"));
@@ -105,6 +107,8 @@ export default function contribute(server: PluginServerContext) {
     if (coordinatorRow && coordinatorRow.id === latest.coordinator) targets.set(coordinatorRow.id, coordinatorRow);
     for (const id of evidence.keys()) if (!targets.has(id)) evidence.delete(id);
     const {history = [], ...trackedDecisions} = tracked.read(selected, visible, pullRequests, evidence);
+    decorateReviewWait(visible, evidence, { coordinator: latest.coordinator, now: Date.now(), thresholdHours: await staleHours(),
+      covered: coveredSessionIds(trackedDecisions.items), judgments: latest.judgments });
     // Ledger matching above sees GitHub readiness. Only then may coordinator verdicts move merge cards.
     pullRequests.items = applyPullJudgments(pullRequests.items, {
       ...judgedMergeCardOptions(latest), judgments: latest.pullJudgments,
@@ -378,6 +382,8 @@ export default function contribute(server: PluginServerContext) {
     return { ok: true };
   });
   const removeReport = attachReportTool(server, notes);
-  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount), judgePullTool(prefs, prs, invalidateCount)], toolStamps);
+  const reviewContext = async () => ({ thresholdHours: await staleHours(),
+    covered: coveredSessionIds(tracked.read(new Set(prefs.read().projects), [], { items: [], projects: [] }).items) });
+  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount), judgePullTool(prefs, prs, invalidateCount)], toolStamps, reviewContext);
   return () => { removeMergeTurn(); removeMergePermission(); removeReplyClose(); removeReplyArchive(); removeCoordinator(); removeReport(); };
 }

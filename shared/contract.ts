@@ -38,6 +38,11 @@ const session = z.object({
   permissionVersion: z.string().optional(),
   decisionRequestedAt: z.string().optional(),
   activityAt: z.string().optional(),
+  waitingSince: z.string().optional(),
+  lastSummary: z.string().max(400).optional(),
+  lastMessage: z.string().max(4000).optional(),
+  lastMessageTruncated: z.literal(true).optional(),
+  needsCoordinator: z.literal(true).optional(),
   lane: z.enum(["human", "running", "review", "idle", "unknown"]),
   detail: z.string(),
 });
