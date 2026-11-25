@@ -31,6 +31,19 @@ In the desktop app and on the web, press **⌘+Enter** on Mac or **Ctrl+Enter** 
 
 After sending an answer, choose **Open receiving session** on the collapsed card to check the conversation. Expand **Recent decision activity** below **My decisions** for the exact message, time and recipient. When available, the history also links to the session that asked the question. An answer saved only on the board can link to its original session without implying delivery. Every sent answer is kept in one place, **Recent decision activity**, which follows the project filters above. An answer still waiting for a result also appears in that project’s **Awaiting review** column as a **Reply sent · awaiting result** card. The card shows the start of the message, when it was sent and how long ago, and a recipient chip that opens the session. Once the recipient’s follow-up is verified, or 24 hours after sending, the card leaves the kanban and stays only in the activity list. An answer that could not be sent stays in the same column for 24 hours as **Not sent**. Device-wide actions appear under **Host-wide**, which is hidden when it has no cards. A verified follow-up appears on the activity card, and the recipient chip opens the conversation. When the board cannot find the recipient session right now (for example an archived session, an earlier coordinator, or a session moved outside the managed projects), the activity card says **The recipient session can't be found on the board right now, so its result can't be checked.**
 
+### Refresh the coordinator's tools after a board update
+
+A coordinator conversation remembers the board tool definitions it first received. Claude Code stores them in the conversation record and sends that copy on later requests and on resume, so after you update the board a coordinator conversation already in progress keeps the previous tools. Reloading the session, reloading the plugin or restarting Paseo does not change this. Only a new conversation receives the board's current tools.
+
+The board records a fingerprint of the tool definitions (names, descriptions and input formats) when a coordinator conversation first calls a board tool, and compares it with the board's current fingerprint. When they differ, the top of the board shows **The coordinator remembers the board tools from before the update, so it cannot use new features.** Updates that leave the tool definitions unchanged, such as screen-only changes, show nothing. The board also stays quiet when the coordinator has not called a board tool yet and there is nothing to compare. When you first install a board with this check, it cannot know the tools of a conversation that began earlier, so the notice starts with the following update.
+
+There are two fixes.
+
+1. Choose **Replace with a new session**. This creates a coordinator in the operations folder and keeps current work and decision cards.
+2. Choose **Open coordinator session** and type `/clear` yourself. A new conversation starts in the same session, without the earlier conversation. The board never types `/clear` or `/compact` for you.
+
+The notice goes away once the new conversation starts. Some board tools that answer in plain text also say in their result that a replacement is needed when called with the old definitions. Tools that answer in JSON keep their result unchanged, so for those the notice on the board is the only signal. The board shows this only for Claude Code coordinators. Other providers may receive the new tools when Paseo reopens the session, which the board cannot tell, so it shows nothing for them.
+
 ## Work with a coordinator
 
 Use **Expand editor** next to **Request for the coordinator** to review a longer draft. Collapsing and reopening the editor preserves your text and photos.
