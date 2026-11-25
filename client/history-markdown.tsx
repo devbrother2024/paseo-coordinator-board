@@ -37,13 +37,15 @@ function inline(tokens:Token[], theme:Theme):ReactNode[] {
   });
 }
 
-export function HistoryMarkdown({source,theme,pullRepository,preview=false,heading=false,muted=false}:{
-  source:string;theme:Theme;pullRepository?:string;preview?:boolean;heading?:boolean;muted?:boolean;
+export function HistoryMarkdown({source,fallbackSource,theme,pullRepository,preview=false,heading=false,muted=false}:{
+  /** The whole text when `source` is only a collapsed part of it: the card repository is judged on all of it. */
+  source:string;fallbackSource?:string;theme:Theme;pullRepository?:string;preview?:boolean;heading?:boolean;muted?:boolean;
 }) {
   const tokens=useMemo(()=>lexBoardMarkdown(source),[source]);
   const known=useContext(KnownPullRepositories);
   // The card's repository applies only when the whole text names no other repository.
-  const repository=useMemo(()=>fallbackRepository(tokens,pullRepository,known),[tokens,pullRepository,known]);
+  const repository=useMemo(()=>fallbackRepository(fallbackSource === undefined ? tokens : lexBoardMarkdown(fallbackSource),pullRepository,known),
+    [tokens,fallbackSource,pullRepository,known]);
   const colors=theme.colors;
   const base:TextStyle={color:muted ? colors.foregroundMuted : colors.foreground,fontSize:muted ? 13 : 14,lineHeight:21};
   function paragraph(token:Token,i:number,style?:TextStyle,title=false) {

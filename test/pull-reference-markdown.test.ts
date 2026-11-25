@@ -181,3 +181,17 @@ test("the board knows repositories only from settings, ledger cards, PR lists an
     ...one("studio/alpha-web", 1), ...one("studio/alpha-web", 2), ...one("labs/gamma-api", 3), ...one("studio/beta", 4), ...one("labs/delta", 5),
   ]);
 });
+
+test("the fallback reads the whole visible text: below a collapsed preview and across formatting", () => {
+  const beta = repositoryIndex([{ repo: "studio/beta" }]);
+  const context = "#12\n첫째\n둘째\n셋째\n\nbeta 정리";
+  // 접힌 미리보기에는 beta 가 안 보여도 전체 글에 있으므로 카드 저장소로 잇지 않는다.
+  expect(pullLinksIn("#12\n첫째\n둘째\n셋째", { repository: card, known: beta, fallbackSource: context })).toEqual([]);
+  expect(pullLinksIn("#12\n첫째\n둘째\n셋째", { repository: card, known: beta })).toEqual(one(card, 12));
+  // 서식에 걸친 프로젝트 이름도 보이는 글 그대로 읽는다.
+  const titled = repositoryIndex([{ repo: "studio/frontend", names: ["Alpha Web"] }]);
+  expect(links("**Alpha** Web 정리\n\n#12", card, titled)).toEqual([]);
+  expect(links("Alpha *Web* 정리\n\n#12", card, titled)).toEqual([]);
+  expect(links("[Alpha](https://example.com) Web 정리\n\n#12", card, titled)).toEqual([]);
+  expect(links("Alpha\n\nWeb 정리 #12", card, titled)).toEqual(one(card, 12));
+});

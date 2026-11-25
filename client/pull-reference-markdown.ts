@@ -243,20 +243,31 @@ function namesOther(text: string, card: string, known: RepositoryIndex | undefin
   return false;
 }
 
-/** Every piece of text a reader sees in the Markdown (code blocks aside), and each table's repository column values. */
+/** Link addresses anywhere in inline tokens. */
+function hrefs(tokens: Token[], out: string[]) {
+  for (const token of tokens) {
+    if (token.type === "link") out.push(String(token.href ?? ""));
+    if ("tokens" in token && Array.isArray(token.tokens)) hrefs(token.tokens, out);
+  }
+}
+
+/**
+ * The text a reader sees, one entry per block (paragraph, heading, list item, table cell) with formatting removed,
+ * so a name split by formatting ("**Alpha** Web") reads whole. Code blocks aside. Also each table's repository column values.
+ */
 function texts(tokens: Token[], out: string[] = [], columns: string[] = []) {
+  const inline = (list: Token[]) => { out.push(flatten(list).flat); hrefs(list, out); };
   for (const token of tokens) {
     if (token.type === "code") continue;
     if (token.type === "table") {
       const table = token as Tokens.Table;
       const column = repositoryColumn(table);
-      for (const cell of [...table.header, ...table.rows.flat()]) texts(cell.tokens, out, columns);
+      for (const cell of [...table.header, ...table.rows.flat()]) inline(cell.tokens);
       if (column >= 0) for (const row of table.rows) if (row[column]) columns.push(plain(row[column].tokens).trim());
     } else if (token.type === "list") {
       for (const item of (token as Tokens.List).items) texts(item.tokens, out, columns);
-    } else if (token.type === "link") {
-      out.push(String(token.href ?? ""), plain(token.tokens ?? []) || token.text);
-    } else if ("tokens" in token && Array.isArray(token.tokens)) texts(token.tokens, out, columns);
+    } else if (token.type === "blockquote") texts(token.tokens ?? [], out, columns);
+    else if ("tokens" in token && Array.isArray(token.tokens)) inline(token.tokens);
     else if ("text" in token && typeof token.text === "string") out.push(token.text);
   }
   return { out, columns };
@@ -280,9 +291,11 @@ export function fallbackRepository(tokens: Token[], repository: string | undefin
 }
 
 /** The links the board draws for a Markdown text, in reading order, the way HistoryMarkdown renders it. */
-export function pullLinksIn(source: string, context: { repository?: string; known?: RepositoryIndex }): { repo: string; number: number }[] {
+export function pullLinksIn(source: string, context: { repository?: string; known?: RepositoryIndex; fallbackSource?: string }): { repo: string; number: number }[] {
   const tokens = lexBoardMarkdown(source);
-  const repository = fallbackRepository(tokens, context.repository, context.known);
+  // A collapsed preview shows part of a text; the fallback is still decided on all of it.
+  const whole = context.fallbackSource === undefined ? tokens : lexBoardMarkdown(context.fallbackSource);
+  const repository = fallbackRepository(whole, context.repository, context.known);
   const found: { repo: string; number: number }[] = [];
   const collect = (list: Token[]) => {
     for (const token of list) {
