@@ -32,6 +32,8 @@ const pull = z.object({
   headRepo:repositorySlug.optional(), headBranch:z.string().optional(), headSha:commitSha.optional(),
   projectIds:z.array(z.string()), lane:z.enum(["review","progress"]), reason:pullReason, detail:pullDetail.optional(), updatedAt:z.string(),
   gate:pullGate.optional(),
+  // With the change-requested gate: whether the request is confirmed as sent or its delivery is still unknown.
+  changeRequest:z.enum(["sent","pending"]).optional(),
   judgment:z.object({ verdict:pullVerdict, reason:z.string(), at:z.string(), ownerSessionId:z.string().optional(), ownerSessionHost:z.string().optional() }).optional(),
 });
 export const pullRequestViewSchema = z.object({
@@ -56,7 +58,8 @@ export const mergeMethod = z.enum(["merge", "squash", "rebase"]);
 export type MergeMethod = z.infer<typeof mergeMethod>;
 const mergeReason = z.enum([...pullReason.options, "merged", "closed", "queue", "permission", "no-method",
   // outdated: the head is the one reviewed, but the base tip or another merge detail changed.
-  "changed", "outdated", "expired", "scope", "unavailable", "unconfirmed"]);
+  // change-requested: the person sent a change request about this head from the merge card.
+  "changed", "outdated", "expired", "scope", "unavailable", "unconfirmed", "change-requested"]);
 export type MergeReason = z.infer<typeof mergeReason>;
 const mergeTarget = z.strictObject({
   projectId: z.string().min(1).max(4096), repo: repositorySlug, number: z.number().int().positive().max(2147483647),

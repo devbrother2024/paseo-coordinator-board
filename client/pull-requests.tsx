@@ -15,6 +15,7 @@ import type { MergeWaitReason } from "../shared/merge-card-place";
 import { mergeHoldWords, type MergeHold } from "../shared/merge-hold";
 import { changeRequestWords, requestPullChanges, takesChangeRequest, withdrawPullChangeRequest } from "../shared/pull-change-requests";
 import { cardInputPlaceholder, sendWords } from "./card-input";
+import { changeDraftTarget, changeRequestKey, changeSignature, changeTargetKey, finishedRetry } from "./change-request-draft";
 import { DecisionReplyInput } from "./decision-reply";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
 import { SendButton } from "./send-input";
@@ -45,6 +46,7 @@ function reasonText(reason: MergeReason | undefined, t: Translate) {
     expired: ["병합 미리보기 만료", "Preview expired"],
     scope: ["관리 프로젝트의 저장소 연결이 변경됨", "The managed project's repository mapping changed"],
     unavailable: ["GitHub 상태 조회 불가", "Could not read GitHub state"],
+    "change-requested": ["수정 요청을 보낸 PR입니다. 병합하려면 병합 카드 다시 열기를 누르세요", "A change request was sent for this pull request. To merge, press Reopen merge card"],
   };
   const words = reasons[reason];
   if (words && reason !== "ready" && reason !== "blocked") return t(words[0], words[1]);
@@ -171,7 +173,13 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   const [changeText, setChangeText] = useState("");
   const [changeError, setChangeError] = useState<readonly [string, string] | null>(null);
   const changePhotos = usePhotoDraft();
-  const changeRetry = useRef({ signature: "", key: "" });
+  const changeRetry = useRef(finishedRetry);
+  const hasChangeDraft = !!changeText.trim() || changePhotos.photos.length > 0;
+  // The commit and recipient the draft was written for. A refresh that changes either asks the person to look first.
+  const changeTarget = changeTargetKey(pr.headSha, changeRecipient?.id);
+  const [confirmedTarget, setConfirmedTarget] = useState(changeTarget);
+  const draftTarget = changeDraftTarget(confirmedTarget, changeTarget, hasChangeDraft);
+  useEffect(() => { if (draftTarget.basis !== confirmedTarget) setConfirmedTarget(draftTarget.basis); }, [draftTarget.basis, confirmedTarget]);
   const [runningPrompt, setRunningPrompt] = useState(false);
   // Shown above a preview the board read again on its own, and the recheck button after a stop.
   const [reopened, setReopened] = useState<readonly [string, string] | null>(null);
@@ -184,7 +192,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   const target = pr.repo + " #" + pr.number;
   const named = (label: string) => ({label, accessibilityLabel: target + " · " + label});
   const ready = !securityGate && !!projectId && pr.lane === "review" && pr.reason === "ready" && notice?.status !== "merged" && notice?.status !== "already-merged";
-  const inputFocus = useDecisionInteraction(!!busy || runningPrompt || (ready && !!preview) || !!changeText.trim() || changePhotos.blocked || !!changePhotos.photos.length);
+  const inputFocus = useDecisionInteraction(!!busy || runningPrompt || (ready && !!preview) || hasChangeDraft || changePhotos.blocked);
   const takesInput = decision && changeRecipient !== undefined && ready && takesChangeRequest(pr, securityGate);
   const changeWords = sendWords("merge", changeRecipient ? (changeRecipient.coordinator ? "coordinator" : "session") : undefined);
   const words = pullStatusWords(pr);
@@ -274,22 +282,25 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   // Sends what the person wrote instead of merging. The board then takes this merge card down for this head.
   async function requestChanges() {
     const recipientId = changeRecipient?.id, headSha = pr.headSha;
-    if (!takesInput || !recipientId || !headSha || locked.current || changePhotos.blocksSubmit()) return;
+    if (!takesInput || !recipientId || !headSha || draftTarget.changed || locked.current || changePhotos.blocksSubmit()) return;
     const attachments = changePhotos.latest.current;
     const text = changeText.trim();
     if (!text && !attachments.length) return;
-    const signature = JSON.stringify([pr.repo, pr.number, headSha, recipientId, text, attachments.map(photo => photo.id)]);
-    if (changeRetry.current.signature !== signature) changeRetry.current = { signature, key: "change-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2) };
+    changeRetry.current = changeRequestKey(changeRetry.current, changeSignature(pr, headSha, recipientId, text, attachments.map(photo => photo.id)),
+      () => "change-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2));
     locked.current = true; setBusy("ask"); setChangeError(null);
     try {
       const result = await ask({ ...args, headSha, recipientId, text, requestKey: changeRetry.current.key,
         ...(attachments.length ? { images: attachments.map(photo => photo.image) } : {}) });
       if (result.status === "sent") {
+        // This request is finished. The same words sent again after the card is reopened are a new request.
+        changeRetry.current = finishedRetry;
         setChangeText(""); changePhotos.clear(); setPreview(null); setMethod(null);
         onChangeRequested?.({ recipientId: result.recipientId ?? recipientId, text, headSha });
       } else {
         setChangeError(changeRequestWords[result.status]);
-        if (result.status === "changed") onRefresh?.();
+        // A request whose delivery is unknown takes the card down too. The PR row then says so and offers to reopen it.
+        if (result.status !== "busy") onRefresh?.();
       }
     } catch { setChangeError(changeRequestWords.unconfirmed); }
     finally { locked.current = false; setBusy(null); }
@@ -302,7 +313,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
     catch { /* The refreshed card shows whether it reopened. */ }
     finally { locked.current = false; setBusy(null); onRefresh?.(); }
   }
-  const sendChange = { disabled: !!busy || changePhotos.blocked || !changeRecipient || (!changeText.trim() && !changePhotos.photos.length), onPress: () => void requestChanges() };
+  const sendChange = { disabled: !!busy || changePhotos.blocked || !changeRecipient || draftTarget.changed || !hasChangeDraft, onPress: () => void requestChanges() };
   return <View style={[{gap: 6}, showDivider && {borderTopColor: c.border, borderTopWidth: 1, paddingVertical: 8}]}>
     <View style={{ ...wrap, alignItems: "baseline" }}>
       <GitHubPullLink repo={pr.repo} number={pr.number} theme={theme} />
@@ -362,6 +373,12 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
           accessibilityLabel={named(t("수정 요청 내용", "Change request text")).accessibilityLabel}
           placeholder={t(...cardInputPlaceholder.merge)} maxLength={4000} disabled={!!busy} />
       </PhotoComposer>
+      {draftTarget.changed && <View style={{gap: 5}}>
+        <Text accessibilityLiveRegion="polite" style={{color: c.statusWarning}}>
+          {t("PR의 커밋이나 받는 곳이 바뀌었습니다. 쓴 글은 그대로 두었으니 바뀐 내용을 확인한 뒤 보내 주세요.", "The pull request's commit or its recipient changed. Your text is kept; review the change before sending.")}
+        </Text>
+        <View style={wrap}><Button theme={theme} {...named(t("바뀐 내용 확인했어요", "I reviewed the changes"))} disabled={!!busy} onPress={() => setConfirmedTarget(changeTarget)} /></View>
+      </View>}
       <View style={{...wrap, alignItems: "center"}}>
         <SendButton theme={theme} label={busy === "ask" ? t("보내는 중…", "Sending…") : t(...changeWords.label)}
           accessibilityLabel={named(t(...changeWords.name)).accessibilityLabel} send={sendChange} />
@@ -378,7 +395,9 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
     {changeError && <Text accessibilityLiveRegion="polite" selectable style={{color: c.statusWarning}}>{t(changeError[0], changeError[1])}</Text>}
     {pr.gate === "change-requested" && !!pr.headSha && !!projectId && onRefresh && <View style={{...wrap, alignItems: "center"}}>
       <Text style={{color: c.foregroundMuted, fontSize: 13, flexShrink: 1}}>
-        {t("새 커밋이 올라오면 다시 판단을 거쳐 병합 카드가 뜹니다.", "A new commit goes through review again before the merge card returns.")}
+        {pr.changeRequest === "pending"
+          ? t("수정 요청이 전달됐는지 확인하고 있습니다. 받은 세션에서 확인되면 보낸 것으로 바뀝니다. 다시 보내려면 병합 카드를 다시 여세요.", "Checking whether the change request arrived. It turns to sent once the board finds it in the recipient's conversation. Reopen the merge card to send again.")
+          : t("새 커밋이 올라오면 다시 판단을 거쳐 병합 카드가 뜹니다.", "A new commit goes through review again before the merge card returns.")}
       </Text>
       <Button theme={theme} {...named(t("병합 카드 다시 열기", "Reopen merge card"))} disabled={!!busy} onPress={() => void reopenCard()} />
     </View>}

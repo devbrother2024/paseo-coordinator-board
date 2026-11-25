@@ -153,9 +153,14 @@ test("a change request on the current head takes the merge card down until a new
   const later = judged("ready", { at: "2026-11-24T03:00:00.000Z" });
   expect(applyPullJudgments([pr()], { ...on, judgments: later, ledgerPulls: none, changeRequests: asked() })[0]).toMatchObject({ lane: "review", gate: "judged" });
   expect(applyPullJudgments([pr()], { ...on, judgments: judged("needs-changes", { at: "2026-11-24T03:00:00.000Z" }), ledgerPulls: none, changeRequests: asked() })[0].gate).toBe("needs-changes");
-  // Withdrawn or not yet confirmed as sent: the merge card stays.
+  // Withdrawn: the merge card is back.
   expect(applyPullJudgments([pr()], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: asked({ withdrawnAt: "2026-11-24T02:30:00.000Z" }) })[0].gate).toBe("judged");
-  expect(applyPullJudgments([pr()], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: asked({ status: "pending" }) })[0].gate).toBe("judged");
+  // A request whose delivery is still unknown may have arrived, so the card comes down too and the row says so.
+  expect(item.changeRequest).toBe("sent");
+  const [unsure] = applyPullJudgments([pr()], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: asked({ status: "pending" }) });
+  expect(unsure).toMatchObject({ lane: "progress", gate: "change-requested", changeRequest: "pending" });
+  expect(pullStatusWords(unsure)).toEqual(["수정 요청 전송 확인 중", "Checking whether the change request arrived"]);
+  expect(applyPullJudgments([pr({ changeRequest: "sent" })], { ...on, judgments: judged("ready"), ledgerPulls: none })[0].changeRequest).toBeUndefined();
   // A PR GitHub does not call ready keeps GitHub's reason.
   expect(applyPullJudgments([pr({ reason: "checks-failed", lane: "progress" })], { ...on, judgments: {}, ledgerPulls: none, changeRequests: asked() })[0].gate).toBeUndefined();
   expect(applyPullJudgments([pr()], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: {} })[0].gate).toBe("judged");

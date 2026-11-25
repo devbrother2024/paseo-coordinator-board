@@ -1,10 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { changeRequestRecipient, changeRequestWords, takesChangeRequest } from "../shared/pull-change-requests";
 import { applyPullJudgments, pullJudgmentKey } from "../shared/pull-judgments";
-import { changeRequestHistory, PullChangeRequests } from "../server/pull-change-requests";
+import { changeRequestHistory, pullChangeMessage, PullChangeRequests } from "../server/pull-change-requests";
 import { PreferenceStore } from "../server/preferences";
 
 const pr = (ownerSessionId?: string, ownerSessionHost?: string) => ({ projectIds: ["alpha"],
@@ -63,7 +63,7 @@ function fixture(options: { owner?: string } = { owner: "worker-1" }) {
   const input = (extra = {}) => ({ projectId: "alpha", repo: "org/example", number: 7, headSha: head, recipientId: "worker-1",
     text: "Please keep the old flag working.\n\nWhy was it removed?", requestKey: "change-key-0001", ...extra });
   const send = (extra = {}) => requests.send(sdk as never, input(extra));
-  return { store, view, pull, agents, sent, timeline, state, requests, send, input };
+  return { dir, store, view, pull, agents, sent, timeline, state, requests, send, input };
 }
 
 test("nothing is sent unless the PR is a merge card on that head and the recipient can take input", async () => {
@@ -142,9 +142,10 @@ test("a retry confirms the earlier request instead of sending again", async () =
   expect(await lost.send()).toEqual({ status: "unconfirmed" });
   const pending = lost.store.read().pullChangeRequests[key];
   expect(pending.status).toBe("pending");
-  // Not confirmed yet: the merge card stays so the person can press again.
+  // It may have arrived, so the merge card comes down until it is confirmed or the person reopens the card.
   const { gate: _gate, ...plain } = lost.pull;
-  expect(applyPullJudgments([plain], { enabled: false, coordinator: false, judgments: {}, ledgerPulls: new Set(), changeRequests: lost.store.read().pullChangeRequests })[0].lane).toBe("review");
+  expect(applyPullJudgments([plain], { enabled: false, coordinator: false, judgments: {}, ledgerPulls: new Set(), changeRequests: lost.store.read().pullChangeRequests })[0])
+    .toMatchObject({ lane: "progress", gate: "change-requested", changeRequest: "pending" });
   lost.state.failSend = false;
   // The retry only looks for the earlier message. Another request waits while that one may still have arrived.
   expect(await lost.send()).toEqual({ status: "unconfirmed" });
@@ -202,4 +203,73 @@ test("only a merge card with a known head takes a change request, and each refus
   expect(takesChangeRequest({ ...ready, reason: "checks-pending" })).toBe(false);
   expect(takesChangeRequest({ ...ready, headSha: undefined })).toBe(false);
   for (const words of Object.values(changeRequestWords)) expect(words.every(text => text.length > 10)).toBe(true);
+});
+
+test("a request sent again after the card was reopened is a new request, even with the same key and words", async () => {
+  const f = fixture();
+  const target = { projectId: "alpha", repo: "org/example", number: 7, headSha: head };
+  expect(await f.send()).toEqual({ status: "sent", recipientId: "worker-1" });
+  const first = f.store.read().pullChangeRequests[key].messageId;
+  expect(f.requests.withdraw(target)).toBe(true);
+  // The reopened card is a merge card again. Without a new send it would stay up while the board said "sent".
+  expect(await f.send()).toEqual({ status: "sent", recipientId: "worker-1" });
+  expect(f.sent).toHaveLength(2);
+  const again = f.store.read().pullChangeRequests[key];
+  expect(again.messageId).not.toBe(first);
+  expect(f.sent[1].options.messageId).toBe(again.messageId);
+  expect(again.withdrawnAt).toBeUndefined();
+  expect(again.status).toBe("sent");
+  // And once more: each reopening starts a new request.
+  f.state.now += 60_000;
+  expect(f.requests.withdraw(target)).toBe(true);
+  expect(await f.send()).toEqual({ status: "sent", recipientId: "worker-1" });
+  expect(new Set(f.sent.map(message => message.options.messageId)).size).toBe(3);
+  // A request whose delivery is unknown can be reopened too, and does not hold the next one.
+  const lost = fixture();
+  lost.state.failSend = true;
+  expect(await lost.send()).toEqual({ status: "unconfirmed" });
+  expect(lost.requests.withdraw(target)).toBe(true);
+  lost.state.failSend = false;
+  expect(await lost.send({ requestKey: "change-key-0002" })).toEqual({ status: "sent", recipientId: "worker-1" });
+});
+
+test("a pending request is confirmed when the board reads it in the recipient's conversation", async () => {
+  const f = fixture();
+  f.state.failSend = true;
+  await f.send();
+  const record = f.store.read().pullChangeRequests[key];
+  const seen = (hash: string) => new Map([["worker-1", { id: "e", turns: [], boardMessageHashes: new Map([[record.messageId, hash]]) }]]);
+  expect(changeRequestHistory(f.store.read(), new Set(["alpha"]), seen("0".repeat(64))).confirmed).toEqual([]);
+  expect(changeRequestHistory(f.store.read(), new Set(["alpha"]), new Map()).confirmed).toEqual([]);
+  const history = changeRequestHistory(f.store.read(), new Set(["alpha"]), seen(record.messageHash));
+  expect(history.confirmed).toEqual([key]);
+  expect(history.entries[0].status).toBe("sent");
+});
+
+test("the heading and context of a change request carry no control or direction characters", () => {
+  const message = pullChangeMessage({ repo: "org/example", number: 7, title: "Add\u202e cache\u0007", headSha: head }, { id: "alpha", title: "Al\u2066pha\n" }, "worker-1", "Keep\u202e this as typed");
+  const [heading, context] = message.split("\n");
+  expect(heading).toBe("[Coordinator Board · Al pha · Add cache]");
+  expect(JSON.parse(context)).toMatchObject({ projectTitle: "Al pha", title: "Add cache", action: "change-request" });
+  // The person's own words are never rewritten.
+  expect(message.endsWith("\n\nKeep\u202e this as typed")).toBe(true);
+});
+
+test("one unreadable change request record is dropped without losing the rest of the settings", () => {
+  const f = fixture();
+  const path = join(f.dir, "scope.json");
+  const saved = JSON.parse(readFileSync(path, "utf8"));
+  const good = { repo: "org/example", number: 7, projectId: "alpha", headSha: head, title: "Add cache", text: "Keep the old flag", recipientId: "worker-1", coordinator: false,
+    messageId: "00000000-0000-4000-8000-000000000001", messageHash: "d".repeat(64), fingerprint: "e".repeat(64), at: "2026-11-25T02:00:00.000Z", status: "sent" };
+  saved.pullChangeRequests = { [key]: good, "org/example#8": { ...good, number: 8, headSha: "not a commit" }, "org/example#9": "broken", "org/example#10": null };
+  writeFileSync(path, JSON.stringify(saved));
+  const scope = f.store.read();
+  expect(Object.keys(scope.pullChangeRequests)).toEqual([key]);
+  expect(scope.projects).toEqual(["alpha"]);
+  expect(scope.coordinator).toBe("coord");
+  // A field of the wrong shape altogether reads as no requests.
+  writeFileSync(path, JSON.stringify({ ...saved, pullChangeRequests: [good] }));
+  expect(f.store.read().pullChangeRequests).toEqual({});
+  writeFileSync(path, JSON.stringify({ ...saved, pullChangeRequests: undefined }));
+  expect(f.store.read().pullChangeRequests).toEqual({});
 });

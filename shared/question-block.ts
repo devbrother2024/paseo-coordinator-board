@@ -42,8 +42,6 @@ const lines = (value: string | null | undefined) => (value ?? "").replace(/\r\n?
   .replace(/[\u0000-\u0009\u000b-\u001f\u007f‪-‮⁦-⁩]/g, "").split("\n").map(line => line.trimEnd()).join("\n").trim();
 const optional = <K extends string>(key: K, value: string) => (value ? { [key]: value } : {}) as { [P in K]?: string };
 
-const closing = /(?:^|\n)```board-question[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/;
-
 export const blockQuestionLabel = (item: Pick<BlockQuestion, "id" | "text">) => [item.id, item.text].filter(Boolean).join(" · ");
 const optionText = (item: Pick<BlockOption, "key" | "text">) => item.key + " · " + item.text;
 
@@ -74,13 +72,34 @@ function readBlock(body: string): QuestionBlock | null {
   return block.data;
 }
 
+// The last code block that stands on its own (outside any other fence), when it is closed, named `board-question` and
+// followed by nothing. A block quoted earlier in the message, or one inside another fence, is not the question.
+function lastBlock(rows: readonly string[]) {
+  let open: { mark: string; size: number; info: string; start: number; own: boolean } | null = null;
+  let last: { info: string; start: number; end: number; own: boolean } | null = null;
+  rows.forEach((row, index) => {
+    const fence = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(row);
+    if (!fence) return;
+    const [, indent, marks, rest] = fence;
+    if (open) {
+      // Only a bare fence of the same kind, at least as long, closes the open one.
+      if (marks[0] === open.mark && marks.length >= open.size && !rest.trim()) { last = { ...open, end: index }; open = null; }
+    } else if (marks[0] !== "`" || !rest.includes("`")) {
+      open = { mark: marks[0], size: marks.length, info: rest.trim(), start: index, own: !indent && marks[0] === "`" };
+    }
+  });
+  const found = last as { info: string; start: number; end: number; own: boolean } | null;
+  if (open || !found || !found.own || found.info !== "board-question") return null;
+  return rows.slice(found.end + 1).every(row => !row.trim()) ? found : null;
+}
+
 // The message without its question block, and the block when it is valid. Anything else leaves the message as it is.
 export function splitQuestionBlock(message: string): { text: string; block?: QuestionBlock } {
-  const trimmed = message.trimEnd();
-  const match = closing.exec(trimmed);
-  const block = match && readBlock(match[1]);
-  if (!match || !block) return { text: message };
-  return { text: trimmed.slice(0, match.index).trimEnd(), block };
+  const rows = message.split(/\r?\n/);
+  const found = lastBlock(rows);
+  const block = found && readBlock(rows.slice(found.start + 1, found.end).join("\n"));
+  if (!found || !block) return { text: message };
+  return { text: rows.slice(0, found.start).join("\n").trimEnd(), block };
 }
 
 const prefix = (item: BlockQuestion) => blockQuestionLabel(item) + ": ";

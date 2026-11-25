@@ -53,12 +53,12 @@ export function changeRequestRecipient(pr: Pick<PullRequestItem, "judgment" | "p
   return coordinator ? { id: coordinator, coordinator: true } : null;
 }
 
-// Whether a recorded request still keeps the merge card down: it was sent, not withdrawn, written about this head, and
-// no verdict on this head came after it.
-export function holdsMergeCard(request: Pick<PullChangeRequest, "headSha" | "at" | "status" | "withdrawnAt"> | undefined,
+// Whether a recorded request still keeps the merge card down and the board from merging: it was not withdrawn, it was
+// written about this head, and no verdict on this head came after it. A request whose delivery is still unknown may
+// have arrived, so it holds too.
+export function holdsMergeCard(request: Pick<PullChangeRequest, "headSha" | "at" | "withdrawnAt"> | undefined,
   headSha: string | undefined, verdictAt: string | undefined) {
-  return !!request && request.status === "sent" && !request.withdrawnAt && !!headSha && request.headSha === headSha &&
-    !(verdictAt && verdictAt > request.at);
+  return !!request && !request.withdrawnAt && !!headSha && request.headSha === headSha && !(verdictAt && verdictAt > request.at);
 }
 
 // Keep the newest requests when the store grows past its limit.
@@ -77,5 +77,5 @@ export const takesChangeRequest = (pr: Pick<PullRequestItem, "lane" | "reason" |
 export const changeRequestWords = {
   changed: ["PR이나 받는 곳이 바뀌었습니다. 새로 고친 카드에서 다시 보내 주세요.", "The PR or its recipient changed. Send again from the refreshed card."],
   busy: ["받는 세션이 일하는 중이거나 권한 확인을 기다립니다. 쉬는 상태가 되면 다시 보내 주세요.", "The recipient is busy or waiting on a permission request. Send again once it is idle."],
-  unconfirmed: ["전송을 확인하지 못했습니다. 같은 내용으로 다시 누르면 받은 세션에서 확인합니다.", "Delivery is unconfirmed. Press again with the same text to check the recipient's conversation."],
+  unconfirmed: ["전송을 확인하지 못했습니다. 받은 세션에서 확인되면 보낸 것으로 바뀝니다. 다시 보내려면 PR 줄의 병합 카드 다시 열기를 누르세요.", "Delivery is unconfirmed. It turns to sent once the board finds it in the recipient's conversation. To send again, press Reopen merge card on the pull request row."],
 } as const satisfies Record<Exclude<PullChangeResult["status"], "sent">, readonly [string, string]>;

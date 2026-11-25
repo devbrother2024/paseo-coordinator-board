@@ -292,6 +292,8 @@ export class PullMerges {
     private readonly now: () => number,
     private readonly invalidate: (repo: string) => void,
     private readonly record: (entry: PullMergeActivity) => void,
+    // Whether the person asked for changes on this head instead of merging. The board then does not merge it.
+    private readonly held: (target: MergeTarget, headSha: string) => boolean = () => false,
   ) {}
 
   private recordMerge(target: MergeTarget, title: string, status: "merged" | "already-merged", mergeSha: string | null) {
@@ -334,6 +336,8 @@ export class PullMerges {
       this.invalidate(target.repo);
       return result;
     }
+    // A card still showing Merge on board elsewhere must not merge a head the person asked to change.
+    if (this.held(target, result.headSha)) return { ...result, status: "blocked", reason: "change-requested", token: null };
     for (const [key, v] of this.vouchers) if (v.expires <= this.now() && !v.attempt) this.vouchers.delete(key);
     if (this.vouchers.size >= 512) return { ...result, status: "blocked", reason: "unavailable" };
     const token = randomUUID();
@@ -410,6 +414,8 @@ export class PullMerges {
     if (fingerprint(state, live) !== v.fingerprint) return outcome("changed", "outdated");
     // An ambiguous mutation never gets re-sent by retrying the same confirmation button.
     if (v.submitted) return outcome("unconfirmed", "unconfirmed");
+    // A change request sent after the preview opened stops the merge as well.
+    if (this.held(request, v.head)) return outcome("blocked", "change-requested");
     // The confirmed checkout was resolved before this fresh GitHub read. Do not wait
     // for another remote request between the final local scope check and submission.
     if (v.expires <= this.now()) return outcome("changed", "expired");

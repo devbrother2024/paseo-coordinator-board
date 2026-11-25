@@ -5,7 +5,7 @@ import type { SessionRow } from "../shared/contract";
 import { pullUrl, type PullRequestItem } from "../shared/prs";
 import { pullJudgmentKey } from "../shared/pull-judgments";
 import {
-  changeRequestRecipient, prunePullChangeRequests, requestPullChanges, withdrawPullChangeRequest,
+  changeRequestRecipient, holdsMergeCard, prunePullChangeRequests, requestPullChanges, withdrawPullChangeRequest,
   type PullChangeInput, type PullChangeRequest, type PullChangeResult,
 } from "../shared/pull-change-requests";
 import type { ReplyEntry } from "../shared/reply-history";
@@ -32,25 +32,35 @@ function messageUuid(requestKey: string) {
   return [h.slice(0, 8), h.slice(8, 12), "4" + h.slice(13, 16), "8" + h.slice(17, 20), h.slice(20, 32)].join("-");
 }
 
+// Names shown in the heading and context come from GitHub and Paseo. Control and direction characters are removed.
+const plain = (value: string) => value.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim();
+
 // The card's context is board-generated and stays apart from the person's own words, which follow it untouched.
 export function pullChangeMessage(pr: Pick<PullRequestItem, "repo" | "number" | "title" | "headSha">, project: { id: string; title?: string },
   recipientId: string, text: string) {
-  const heading = [project.title, pr.title].filter(Boolean).join(" · ").replace(/\s+/g, " ").slice(0, 180);
+  const title = plain(pr.title), projectTitle = project.title ? plain(project.title) : "";
+  const heading = [projectTitle, title].filter(Boolean).join(" · ").slice(0, 180);
   return "[Coordinator Board · " + heading + "]\n" + JSON.stringify({
-    projectId: project.id, projectTitle: project.title ?? null, source: "pull-request", repo: pr.repo, number: pr.number,
-    url: pullUrl(pr.repo, pr.number), title: pr.title, headSha: pr.headSha, recipientSessionId: recipientId,
+    projectId: project.id, projectTitle: projectTitle || null, source: "pull-request", repo: pr.repo, number: pr.number,
+    url: pullUrl(pr.repo, pr.number), title, headSha: pr.headSha, recipientSessionId: recipientId,
     action: "change-request", mayBe: REPLY_MAY_BE,
   }) + "\n\n" + text;
 }
 
 // Change requests in recent decision activity, with the first answer of the session that took each one.
 export function changeRequestHistory(scope: Pick<Preferences, "pullChangeRequests">, selected: ReadonlySet<string>,
-  evidence: ReadonlyMap<string, Evidence>): { entries: ReplyEntry[]; responses: Map<string, string> } {
+  evidence: ReadonlyMap<string, Evidence>): { entries: ReplyEntry[]; responses: Map<string, string>; confirmed: string[] } {
   const entries: ReplyEntry[] = [];
   const responses = new Map<string, string>();
-  for (const [key, request] of Object.entries(scope.pullChangeRequests)) {
-    if (!selected.has(request.projectId)) continue;
-    const reply = request.status === "sent" ? evidence.get(request.recipientId)?.replies?.get(request.messageId) : undefined;
+  const confirmed: string[] = [];
+  for (const [key, saved] of Object.entries(scope.pullChangeRequests)) {
+    if (!selected.has(saved.projectId)) continue;
+    const seen = evidence.get(saved.recipientId);
+    // A request whose delivery was unknown is confirmed once the board reads that exact message in the recipient's conversation.
+    const arrived = saved.status === "pending" && seen?.boardMessageHashes?.get(saved.messageId) === saved.messageHash;
+    if (arrived) confirmed.push(key);
+    const request = arrived ? { ...saved, status: "sent" as const } : saved;
+    const reply = request.status === "sent" ? seen?.replies?.get(request.messageId) : undefined;
     if (reply && reply !== request.response) responses.set(key, reply);
     entries.push({
       key: "change:" + key, title: request.title, projectId: request.projectId, at: request.at, answer: request.text || undefined,
@@ -60,7 +70,19 @@ export function changeRequestHistory(scope: Pick<Preferences, "pullChangeRequest
       response: reply ?? request.response,
     });
   }
-  return { entries, responses };
+  return { entries, responses, confirmed };
+}
+
+export function confirmChangeRequest(scope: Pick<Preferences, "pullChangeRequests">, key: string, messageId: string) {
+  const record = own(scope.pullChangeRequests, key);
+  if (record?.messageId === messageId && record.status === "pending") record.status = "sent";
+}
+
+// Whether the board may not merge this head now: the person asked for changes on it and has not reopened the card.
+export function mergeHeldByChangeRequest(scope: Pick<Preferences, "pullChangeRequests" | "pullJudgments">, repo: string, number: number, headSha: string) {
+  const key = pullJudgmentKey(repo, number);
+  const verdict = own(scope.pullJudgments, key);
+  return holdsMergeCard(own(scope.pullChangeRequests, key), headSha, verdict?.headSha === headSha ? verdict.at : undefined);
 }
 
 export class PullChangeRequests {
@@ -92,12 +114,15 @@ export class PullChangeRequests {
 
   private async deliver(sdk: Sdk, input: PullChangeInput, key: string): Promise<PullChangeResult> {
     const photos = describePhotos(input.images);
-    const uuid = messageUuid(input.requestKey);
-    const messageId = photos.length ? boardPhotoMessageId(uuid) : uuid;
     const fingerprint = hash([input.projectId, input.repo, input.number, input.headSha, input.recipientId, input.text, photos]);
     const scope = this.store.read();
     if (!scope.projects.includes(input.projectId)) return { status: "changed" };
-    const prior = own(scope.pullChangeRequests, key);
+    const saved = own(scope.pullChangeRequests, key);
+    // A request the person took back by reopening the card is over. Whatever comes next is a new request with a new
+    // message, even under the same key and words.
+    const prior = saved?.withdrawnAt ? undefined : saved;
+    const uuid = messageUuid(saved?.withdrawnAt ? input.requestKey + "\n" + saved.withdrawnAt : input.requestKey);
+    const messageId = photos.length ? boardPhotoMessageId(uuid) : uuid;
     if (prior?.messageId === messageId) {
       // The same request again only checks the earlier attempt. It is never sent twice.
       if (prior.fingerprint !== fingerprint) return { status: "unconfirmed" };
@@ -129,7 +154,8 @@ export class PullChangeRequests {
     try {
       this.store.change(current => {
         const latest = own(current.pullChangeRequests, key);
-        if (!current.projects.includes(input.projectId) || current.coordinator !== view.coordinator || latest?.messageId !== prior?.messageId) {
+        if (!current.projects.includes(input.projectId) || current.coordinator !== view.coordinator ||
+            latest?.messageId !== saved?.messageId || latest?.withdrawnAt !== saved?.withdrawnAt) {
           throw Error("changed");
         }
         if (input.images?.length) this.sessionPhotos.save(recipient.id, messageId, input.images);
@@ -158,20 +184,18 @@ export class PullChangeRequests {
   }
 
   private finish(key: string, messageId: string) {
-    this.store.change(current => {
-      const record = own(current.pullChangeRequests, key);
-      if (record?.messageId === messageId) record.status = "sent";
-    });
+    this.store.change(current => confirmChangeRequest(current, key, messageId));
   }
 
-  // The person reopens the merge card. Nothing is sent; the record stays in recent decision activity.
+  // The person reopens the merge card, also when the request's delivery is still unknown. Nothing is sent; the record
+  // stays in recent decision activity.
   withdraw(input: { projectId: string; repo: string; number: number; headSha: string }) {
     const key = pullJudgmentKey(input.repo, input.number);
     let withdrawn = false;
     this.store.change(current => {
       const record = own(current.pullChangeRequests, key);
       if (!record || !current.projects.includes(input.projectId) || record.projectId !== input.projectId ||
-          record.headSha !== input.headSha || record.status !== "sent" || record.withdrawnAt) return;
+          record.headSha !== input.headSha || record.withdrawnAt) return;
       record.withdrawnAt = new Date(this.now()).toISOString();
       withdrawn = true;
     });

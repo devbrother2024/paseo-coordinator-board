@@ -12,6 +12,7 @@ import { readPages } from "./discovery";
 import { MergeabilityChecks } from "./pull-mergeability";
 import { settledKey, type SettledState } from "../shared/merge-card-place";
 import type { Preferences, PreferenceStore } from "./preferences";
+import { mergeHeldByChangeRequest } from "./pull-change-requests";
 
 type Sdk = Pick<PluginHandlerContext["paseo"],"projects"|"workspaces">;
 type NativeProject = Awaited<ReturnType<Sdk["projects"]["list"]>>["projects"][number];
@@ -243,7 +244,7 @@ export class ProjectPullRequests {
           previous.pullMerge.mergeSha = mergeSha;
         }
       });
-    });
+    }, (target, headSha) => mergeHeldByChangeRequest(this.store.read(), target.repo, target.number, headSha));
     server.handle(readPullLifecycle, (input, {paseo}) => this.explainLifecycle(paseo, input));
     server.handle(previewPullRequestMerge,({expectedHeadSha,...target},{paseo})=>
       merges.preview(target,()=>this.mergeScope(paseo,target),expectedHeadSha));

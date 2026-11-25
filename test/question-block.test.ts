@@ -68,6 +68,27 @@ test("a malformed, oversized or misplaced block is ignored", () => {
   untouched("Example:\n\n" + fence(sample) + "\n\n" + fence(sample).replace("board-question", "text"));
 });
 
+test("only a block that stands on its own at the very end counts, whatever the message quotes before it", () => {
+  // An earlier block quoted in the body is an example. The one at the end is the question.
+  const earlier = fence({ questions: [{ text: "An old question?", options: [] }] });
+  const quoted = splitQuestionBlock("Last time I asked:\n\n" + earlier + "\n\nNow the real one.\n\n" + fence(sample));
+  expect(quoted.block?.questions[0].text).toBe("Where should the cache live?");
+  expect(quoted.text).toBe("Last time I asked:\n\n" + earlier + "\n\nNow the real one.");
+  // Other code blocks before it do not get in the way either.
+  expect(splitQuestionBlock("Run this:\n\n```sh\nnpm test\n```\n\n~~~\nplain\n~~~\n\n" + fence(sample)).block).toBeDefined();
+  // A block inside another fence is part of that fence: closed, left open, or opened with a longer or other marker.
+  const untouched = (message: string) => expect(splitQuestionBlock(message)).toEqual({ text: message });
+  untouched("How to ask:\n\n````markdown\n" + fence(sample) + "\n````");
+  untouched("How to ask:\n\n````markdown\n" + fence(sample));
+  untouched("How to ask:\n\n~~~\n" + fence(sample));
+  untouched("How to ask:\n\n```\nexample\n" + fence(sample));
+  // A block left open, or indented as part of a list or quote, is not one.
+  untouched("Text\n\n```board-question\n" + JSON.stringify(sample));
+  untouched("Text\n\n> " + fence(sample).split("\n").join("\n> "));
+  // Windows line endings read the same.
+  expect(splitQuestionBlock(("Text\n\n" + fence(sample)).replace(/\n/g, "\r\n")).block?.questions).toHaveLength(2);
+});
+
 test("control characters are removed before the block is shown", () => {
   const read = splitQuestionBlock(fence({
     questions: [{ id: "Q‮1", text: "Which\u0000 one\n  is it?", options: [{ key: "A⁦", text: "First\u0007", does: "line\none" }] }],

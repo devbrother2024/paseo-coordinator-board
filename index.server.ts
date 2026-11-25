@@ -36,7 +36,7 @@ import { discoverBoardSessions } from "./server/board-sessions";
 import { withAssignmentHost } from "./server/host-assignment";
 import { judgedMergeCardOptions, judgePullTool, registerMergeJudgmentSettings } from "./server/pull-judgments";
 import { applyPullJudgments } from "./shared/pull-judgments";
-import { changeRequestHistory, PullChangeRequests } from "./server/pull-change-requests";
+import { changeRequestHistory, confirmChangeRequest, PullChangeRequests } from "./server/pull-change-requests";
 import { operatingDirectories, operatingDirectory } from "./server/operating-folders";
 import { CoordinatorToolStamps, readCoordinatorTools } from "./server/coordinator-tools";
 import { coveredSessionIds, decorateReviewWait, reviewWaitThreshold } from "./server/review-wait";
@@ -165,8 +165,9 @@ export default function contribute(server: PluginServerContext) {
     });
     const changes = changeRequestHistory(latest, selected, evidence);
     activity.push(...changes.entries);
-    if (changes.responses.size) prefs.change(current => {
+    if (changes.responses.size || changes.confirmed.length) prefs.change(current => {
       for (const [key,text] of changes.responses) if (Object.hasOwn(current.pullChangeRequests, key)) current.pullChangeRequests[key].response = text;
+      for (const key of changes.confirmed) confirmChangeRequest(current, key, latest.pullChangeRequests[key].messageId);
     });
     for (const entry of activity) {
       const id = entry.recipientId ?? entry.pullMerge?.notification?.recipientId;

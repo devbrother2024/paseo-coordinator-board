@@ -28,7 +28,7 @@ type Options = {
 // Decide which GitHub-ready PRs become merge cards. Everything else stays in project progress.
 export function applyPullJudgments<T extends PullRequestItem>(items: readonly T[], options: Options): T[] {
   return items.map(item => {
-    const { gate: _gate, judgment: _judgment, ...pr } = item;
+    const { gate: _gate, judgment: _judgment, changeRequest: _changeRequest, ...pr } = item;
     const key = pullJudgmentKey(pr.repo, pr.number);
     const saved = Object.hasOwn(options.judgments, key) ? options.judgments[key] : undefined;
     const current = saved && pr.headSha && saved.headSha === pr.headSha ? saved : undefined;
@@ -53,7 +53,7 @@ export function applyPullJudgments<T extends PullRequestItem>(items: readonly T[
     else if (saved) gate = "stale";
     else gate = options.ledgerPulls.has(key) ? "ledger" : "awaiting";
     const lane = gate === "github" || gate === "ledger" || gate === "judged" ? "review" : "progress";
-    return { ...pr, lane, gate, ...(judgment ? { judgment } : {}) } as T;
+    return { ...pr, lane, gate, ...(gate === "change-requested" && asked ? { changeRequest: asked.status } : {}), ...(judgment ? { judgment } : {}) } as T;
   });
 }
 
@@ -115,7 +115,7 @@ export function unknownStatusWords(detail: keyof typeof pullDetailWords | undefi
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 300);
 
 // Korean and English status for a PR card. GitHub reasons come first unless GitHub says ready.
-export function pullStatusWords(pr: Pick<PullRequestItem, "reason" | "gate" | "judgment" | "detail">): readonly [string, string] {
+export function pullStatusWords(pr: Pick<PullRequestItem, "reason" | "gate" | "judgment" | "detail"> & Partial<Pick<PullRequestItem, "changeRequest">>): readonly [string, string] {
   if (pr.reason === "unknown") return unknownStatusWords(pr.detail);
   if (pr.reason !== "ready") return githubWords[pr.reason];
   const reason = pr.judgment ? oneLine(pr.judgment.reason) : "";
@@ -127,7 +127,8 @@ export function pullStatusWords(pr: Pick<PullRequestItem, "reason" | "gate" | "j
     case "blocked": return reason ? [`막힘: ${reason}`, `Blocked: ${reason}`] : ["막힘", "Blocked"];
     case "judged": return ["코디네이터 확인 · 병합 검토 가능", "Coordinator checked · Ready for merge review"];
     case "ledger": return ["코디네이터 병합 안건", "Coordinator merge request"];
-    case "change-requested": return ["수정 요청 보냄 · 새 커밋 대기", "Change request sent · Waiting for a new commit"];
+    case "change-requested": return pr.changeRequest === "pending" ? ["수정 요청 전송 확인 중", "Checking whether the change request arrived"]
+      : ["수정 요청 보냄 · 새 커밋 대기", "Change request sent · Waiting for a new commit"];
     default: return githubWords.ready;
   }
 }

@@ -438,3 +438,38 @@ test("a merge confirmed after another merge moved the base reports outdated, nev
   expect(await g.confirm(shown.token)).toMatchObject({ status: "changed", reason: "changed" });
   expect(g.mutations()).toBe(0);
 });
+
+test("a PR with a change request on its head is not merged from the board until the card is reopened", async () => {
+  const f = fixture();
+  const key = "org/site#7";
+  const asked = (extra = {}) => f.store.change((s) => {
+    s.pullChangeRequests[key] = { repo: "org/site", number: 7, projectId: "selected", headSha: head, title: "A plain title", text: "Keep the old flag",
+      recipientId: "worker-1", coordinator: false, messageId: "00000000-0000-4000-8000-000000000001", messageHash: "d".repeat(64), fingerprint: "e".repeat(64),
+      at: "2026-11-25T02:00:00.000Z", status: "sent", ...extra };
+  });
+  // An old card on another screen still shows Merge on board: the preview stops and no token is issued.
+  asked();
+  expect(await f.preview()).toMatchObject({ status: "blocked", reason: "change-requested", token: null });
+  // A request whose delivery is still unknown holds the merge as well.
+  asked({ status: "pending" });
+  expect(await f.preview()).toMatchObject({ status: "blocked", reason: "change-requested", token: null });
+  // A preview opened before the request cannot be confirmed after it.
+  f.store.change((s) => { delete s.pullChangeRequests[key]; });
+  const open = await f.preview();
+  expect(open.status).toBe("ready");
+  asked();
+  expect(await f.confirm(open.token)).toMatchObject({ status: "blocked", reason: "change-requested" });
+  expect(f.mutations()).toBe(0);
+  // Reopening the card, a request about an earlier head, or a later verdict on this head lets the merge through again.
+  asked({ headSha: "f".repeat(40) });
+  expect((await f.preview()).status).toBe("ready");
+  asked();
+  f.store.change((s) => { s.pullJudgments[key] = { repo: "org/site", number: 7, headSha: head, verdict: "ready", reason: "Checked again", at: "2026-11-25T03:00:00.000Z", coordinator: "coord" }; });
+  expect((await f.preview()).status).toBe("ready");
+  f.store.change((s) => { delete s.pullJudgments[key]; });
+  asked({ withdrawnAt: "2026-11-25T02:30:00.000Z" });
+  const again = await f.preview();
+  expect(again.status).toBe("ready");
+  expect((await f.confirm(again.token)).status).toBe("merged");
+  expect(f.mutations()).toBe(1);
+});
