@@ -1,10 +1,17 @@
 import { shellCommands, type ShellCommand, type ShellWord } from "./shell-permission-command";
 
 const risks = ["read", "write", "network", "execute", "destructive", "unknown"] as const;
-type Risk = typeof risks[number];
-type Group = { name: string; risk: Risk | "folder"; count: number; detail?: string };
-type ShellSummary = { kind: "shell"; risk: Risk; command: string; cwd?: string; count: number; groups: Group[] };
-type ToolSummary = { kind: "read" | "edit" | "write" | "delete" | "mcp" | "fetch" | "unknown"; risk: Risk; target?: string };
+export type PermissionRisk = typeof risks[number];
+type Operation = { name: string; risk: PermissionRisk | "folder"; detail?: string };
+type Group = Operation & { count: number };
+export type ShellPermissionClassification = {
+  risk: PermissionRisk;
+  cwd?: string;
+  count: number;
+  commands: (Operation & { setsWorkingFolder?: true })[];
+};
+type ShellSummary = { kind: "shell"; risk: PermissionRisk; command: string; cwd?: string; count: number; groups: Group[] };
+type ToolSummary = { kind: "read" | "edit" | "write" | "delete" | "mcp" | "fetch" | "unknown"; risk: PermissionRisk; target?: string };
 export type PermissionSummary = ShellSummary | ToolSummary;
 type Translate = (ko: string, en: string) => string;
 type Request = {
@@ -18,7 +25,7 @@ const interpreters = new Set(["python", "python3", "node", "bun", "bash", "sh"])
 const gitRead = new Set(["log", "show", "diff", "status", "rev-parse", "merge-base", "blame"]);
 const gitWrite = new Set(["add", "commit", "checkout", "switch", "stash", "merge", "rebase"]);
 const sensitiveArgs = new Set(["git", "sips", "sort", "rg", "find", "sed", "awk", "file"]);
-const moreRisk = (a: Risk, b: Risk) => risks.indexOf(a) >= risks.indexOf(b) ? a : b;
+const moreRisk = (a: PermissionRisk, b: PermissionRisk) => risks.indexOf(a) >= risks.indexOf(b) ? a : b;
 const str = (value: unknown) => typeof value === "string" && value.trim() ? value : undefined;
 const firstLine = (value?: string) => value?.split(/\r?\n/, 1)[0];
 const concise = (value?: string) => {
@@ -78,7 +85,7 @@ function fileTargets(name: string, words: ShellWord[], cwd?: string) {
   return undefined;
 }
 
-function gitCommand(args: string[]): { risk: Risk; name: string; detail?: string } {
+function gitCommand(args: string[]): { risk: PermissionRisk; name: string } {
   if (args.length === 1 && ["--version", "--help"].includes(args[0])) return { risk: "read", name: "git" };
   let index = 0;
   while (args[index] === "--no-pager" || args[index] === "-C" && args[index + 1]) {
@@ -101,7 +108,7 @@ function gitCommand(args: string[]): { risk: Risk; name: string; detail?: string
   return { risk: gitRead.has(sub) ? "read" : "unknown", name };
 }
 
-function commandRisk(name: string, args: string[]): Risk {
+function commandRisk(name: string, args: string[]): PermissionRisk {
   if (args.length === 1 && ["--help", "--version"].includes(args[0]) &&
     (readCommands.has(name) || fileCommands.has(name) || interpreters.has(name) || ["curl", "wget", "gh", "npm"].includes(name))) return "read";
   if (["curl", "wget", "gh"].includes(name) || ["npm", "bun"].includes(name) && ["install", "i", "ci", "add", "update", "dlx", "x"].includes(args[0])) return "network";
@@ -132,11 +139,11 @@ function commandRisk(name: string, args: string[]): Risk {
   return readCommands.has(name) ? "read" : "unknown";
 }
 
-function classify(command: ShellCommand, cwd?: string): Omit<Group, "count"> {
+function classify(command: ShellCommand, cwd?: string): Operation {
   const [program, ...words] = command.words;
   let name = concise(firstLine(program?.value)) || "";
   const args = words.map(word => word.value);
-  let risk: Risk;
+  let risk: PermissionRisk;
   let detail: string | undefined;
   if (!program) {
     risk = command.redirects.length ? "write" : "unknown";
@@ -165,17 +172,17 @@ function classify(command: ShellCommand, cwd?: string): Omit<Group, "count"> {
   return { name, risk, ...(detail ? { detail } : {}) };
 }
 
-function shellSummary(command: string, initialCwd?: string): ShellSummary {
+// Classifies literal command text without executing it or consulting the shell's
+// environment, aliases, or functions. An unparsed request always has unknown risk.
+export function classifyShellPermission(command: string, initialCwd?: string): ShellPermissionClassification {
   const parsed = shellCommands(command);
   let cwd = initialCwd;
-  const groups = new Map<string, Group>();
-  let risk: Risk = "read";
+  const classified: ShellPermissionClassification["commands"] = [];
+  let risk: PermissionRisk = "read";
   let count = 0;
-  const add = (group: Omit<Group, "count">) => {
-    const key = JSON.stringify(group);
-    const earlier = groups.get(key);
-    groups.set(key, { ...group, count: (earlier?.count ?? 0) + 1 });
-    if (group.risk !== "folder") risk = moreRisk(risk, group.risk);
+  const add = (operation: ShellPermissionClassification["commands"][number]) => {
+    classified.push(operation);
+    if (operation.risk !== "folder") risk = moreRisk(risk, operation.risk);
   };
   const list = (commands: ShellCommand[], nested = false) => {
     for (const [index, item] of commands.entries()) {
@@ -186,6 +193,7 @@ function shellSummary(command: string, initialCwd?: string): ShellSummary {
       const directory = item.words[1]?.value;
       if (!nested && index === 0 && group.risk === "folder" && directory && /^(?:[a-z]:[\\/]|[~/])/i.test(directory)) {
         cwd = directory;
+        add({ ...group, setsWorkingFolder: true });
       } else add(group);
       for (const inner of item.substitutions) {
         add({ name: "$()", risk: "execute" });
@@ -195,6 +203,18 @@ function shellSummary(command: string, initialCwd?: string): ShellSummary {
   };
   if (parsed?.length) list(parsed);
   else add({ name: "", risk: "unknown" });
+  return { risk, cwd, count, commands: classified };
+}
+
+function shellSummary(command: string, initialCwd?: string): ShellSummary {
+  const { risk, cwd, count, commands } = classifyShellPermission(command, initialCwd);
+  const groups = new Map<string, Group>();
+  for (const { setsWorkingFolder, ...operation } of commands) {
+    if (setsWorkingFolder) continue;
+    const key = JSON.stringify(operation);
+    const prior = groups.get(key);
+    groups.set(key, { ...operation, count: (prior?.count ?? 0) + 1 });
+  }
   return { kind: "shell", risk, command, cwd, count, groups: [...groups.values()] };
 }
 

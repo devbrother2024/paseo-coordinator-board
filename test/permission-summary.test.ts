@@ -1,10 +1,50 @@
 import { expect, test } from "bun:test";
-import { permissionSummary, permissionHeading } from "../shared/permission-summary";
+import { classifyShellPermission, permissionSummary, permissionHeading } from "../shared/permission-summary";
 
 const cwd = "/Users/you/projects/alpha";
 const shell = (command: string) => permissionSummary({ kind: "tool", name: "Bash", detail: { type: "shell", command } }, cwd)!;
 const ko = (korean: string) => korean;
 const en = (_: string, english: string) => english;
+
+test("the shell classifier takes only command text and cwd and preserves individual operations", () => {
+  const command = `cd '${cwd}' && git status | cat; git status >>build/history.txt`;
+  expect(classifyShellPermission(command, cwd)).toEqual({ cwd, risk: "write", count: 3, commands: [
+    { name: "cd", risk: "folder", detail: ".", setsWorkingFolder: true },
+    { name: "git status", risk: "read" },
+    { name: "cat", risk: "read" },
+    { name: "git status", risk: "write", detail: "build/history.txt" },
+  ] });
+});
+
+test("the classifier distinguishes a descriptor redirect, an output file and an executable redirect target", () => {
+  expect(classifyShellPermission("git status 2>&1", cwd).risk).toBe("read");
+  expect(classifyShellPermission("git status &>>build/status.log", cwd).commands).toEqual([
+    { name: "git status", risk: "write", detail: "build/status.log" },
+  ]);
+  expect(classifyShellPermission('cat input >"$(echo build/output)"', cwd)).toMatchObject({ risk: "execute", commands: [
+    { name: "cat", risk: "write" }, { name: "$()", risk: "execute" }, { name: "echo", risk: "read" },
+  ] });
+});
+
+test("only expandable heredocs contribute substitutions, even when several are queued for one pipeline", () => {
+  const command = "cat <<'A' | cat <<B\n$(mystery) && rm out\nA\n`git status` $(rm build/cache)\nB\ncat note";
+  const result = classifyShellPermission(command, cwd);
+  expect(result.risk).toBe("destructive");
+  expect(result.commands).toEqual([
+    { name: "cat", risk: "read" }, { name: "cat", risk: "read" },
+    { name: "$()", risk: "execute" }, { name: "git status", risk: "read" },
+    { name: "$()", risk: "execute" }, { name: "rm", risk: "destructive", detail: "build/cache" },
+    { name: "cat", risk: "read" },
+  ]);
+});
+
+test("unparsed or dynamic commands cannot inherit a neighboring read-only classification", () => {
+  for (const command of [
+    "cat note && (rm cache)", "git status && $TOOL", "echo \\" + "\n" + " $(mystery)",
+    "cat <<END\n$(rm cache)\n", "git status; tool-that-is-not-known",
+    'echo "$(git status; $(echo mystery))"',
+  ]) expect([command, classifyShellPermission(command, cwd).risk]).toEqual([command, "unknown"]);
+});
 
 test("a shell request counts and groups commands, using the requested working folder", () => {
   const command = `cd '${cwd}' && git log | cat; git log || rg 'x|y;z && a' README.md\npwd`;
