@@ -1,5 +1,5 @@
 import { TextInput } from "@getpaseo/plugin/client/ui";
-import { useCallback, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { Platform, StyleSheet, useWindowDimensions } from "react-native";
 import { fitInputHeight, maxInputHeight, measureTextareaContent, verticalChrome } from "./auto-grow";
 import { SendTextInput, type SendAction } from "./send-input";
@@ -20,12 +20,18 @@ export function AutoGrowInput({ send, style, multiline, value, onLayout, onConte
   const min = typeof flat.minHeight === "number" ? flat.minHeight : DEFAULT_MIN_HEIGHT;
 
   const measure = useCallback(() => {
-    if (!web) return;
+    if (!web || !multiline) return;
     const next = measureTextareaContent(input.current);
     if (next !== undefined) setContent(next);
-  }, []);
-  // The text, the width (line breaks move with it) and the window all change what fits.
-  useLayoutEffect(measure, [measure, value, width, multiline]);
+  }, [multiline]);
+  // The text, the width (line breaks move with it), the minimum height and the font all change what fits.
+  useLayoutEffect(measure, [measure, value, width, min, flat.fontSize, flat.lineHeight]);
+  // A web font that arrives after the first measure changes the line breaks without any prop changing.
+  useEffect(() => {
+    if (!web || !multiline || typeof document === "undefined" || !document.fonts) return;
+    document.fonts.addEventListener("loadingdone", measure);
+    return () => document.fonts.removeEventListener("loadingdone", measure);
+  }, [measure, multiline]);
 
   const fit = content === undefined ? undefined : fitInputHeight({ content: content + verticalChrome(flat, !web), min, max: maxInputHeight(windowHeight, min) });
   const grown = !multiline ? style : [style, { minHeight: min, height: fit?.height },
