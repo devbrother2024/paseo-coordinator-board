@@ -53,6 +53,8 @@ const closedQuestion = z.object({
   sessionId: z.string(), at: z.iso.datetime(), reason: z.enum(["board", "session", "choice", "ledger", "person"]),
   // Where the question was in its timeline, so a later settling line still finds it after the record is gone.
   epoch: z.string().max(4096).optional(), seq: z.number().optional(),
+  // The person's done note that closed it. One note closes one question.
+  noteRevision: z.number().optional(),
 });
 export type ClosedReason = z.output<typeof closedQuestion>["reason"];
 

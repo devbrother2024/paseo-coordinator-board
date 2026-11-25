@@ -6,11 +6,28 @@ import { questionDetails, scanOf, type Evidence } from "./conversation";
 import { questionContext, scanQuestions } from "./open-questions";
 import type { Preferences } from "./preferences";
 
+/**
+ * A person's done note written on a conversation card closes that card's question, once. Returns the questions to close
+ * as [session, question, note revision]. A note that already closed a question (recorded with its revision) does not
+ * close the next one: the row is marked `noteSpent`, so the note no longer hides the card either.
+ */
+export function applyDoneNotes(rows: readonly SessionRow[], notes: Record<string, Note>, prefs: Pick<Preferences, "closedQuestions">) {
+  const closing: [string, string, number][] = [];
+  for (const row of rows) {
+    const note = notes[row.id];
+    if (!row.keptQuestion || note?.origin !== "person" || note.kind !== "done" || !note.evidenceId || note.evidenceId !== row.evidenceId) continue;
+    const spent = Object.values(prefs.closedQuestions ?? {}).some(entry => entry.sessionId === row.id && entry.noteRevision === note.revision);
+    if (spent) row.keptQuestion = { ...row.keptQuestion, noteSpent: true };
+    else closing.push([row.id, row.keptQuestion.key, note.revision]);
+  }
+  return closing;
+}
+
 export function decorateDecision(row: SessionRow, note: Note | undefined, prefs: Preferences, evidence?: Evidence) {
   const answer = prefs.answers[row.id];
   const noteQuestion = note?.kind === "question";
   const answeredNote = noteQuestion && answer?.noteRevision === note.revision;
-  const dismissed = row.evidenceId && row.evidenceId === note?.evidenceId && note.origin === "person" && note.kind !== "question";
+  const dismissed = row.evidenceId && row.evidenceId === note?.evidenceId && note.origin === "person" && note.kind !== "question" && !row.keptQuestion?.noteSpent;
   let content: Omit<Decision, "version">;
   if (row.nativePending) {
     content = { source: "permission", question: row.detail };

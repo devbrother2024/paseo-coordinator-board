@@ -29,7 +29,10 @@ async function fixture(matchedQuestion?: string) {
   let loseAck=false;
   const append=(id:string,item:unknown)=>{timelines.get(id)!.push(item);stamp.set(id,stamp.get(id)!+1);};
   const running = new Set<string>();
-  const actor=(id:string)=>({id,title:"Studio "+id,status:running.has(id)?"running":"idle",updatedAt:String(stamp.get(id)),workspaceId:"space",pendingPermissions:[]});
+  // Sessions working on a turn a reply could join (a provider that takes replies during a turn).
+  const steering = new Set<string>();
+  const actor=(id:string)=>({id,title:"Studio "+id,status:running.has(id)||steering.has(id)?"running":"idle",updatedAt:String(stamp.get(id)),workspaceId:"space",pendingPermissions:[],
+    ...(steering.has(id)?{activeTurn:{id:"turn"},provider:"claude"}:{})});
   const page=entries=>({entries,pageInfo:{hasMore:false,nextCursor:null}});
   const sdk={
     projects:{list:async()=>({projects:[{projectId:"studio",projectDisplayName:"Studio",projectRootPath:""}]})},
@@ -58,7 +61,7 @@ async function fixture(matchedQuestion?: string) {
     timelines.get(id)!.at(-1).text = text;
     stamp.set(id, stamp.get(id)! + 1);
   }
-  return {snapshot,replaceReceivedText,running,scopePath:join(data,"scope.json"),photo:input=>rpc(readSessionPhoto,input),answer:input=>rpc(sendDecision,input),ask:(input)=>rpc(askClarification,input),sent,append,loseAck:(value:boolean)=>{loseAck=value;},restart:()=>{rpc=load();}};
+  return {snapshot,replaceReceivedText,running,steering,scopePath:join(data,"scope.json"),photo:input=>rpc(readSessionPhoto,input),answer:input=>rpc(sendDecision,input),ask:(input)=>rpc(askClarification,input),sent,append,loseAck:(value:boolean)=>{loseAck=value;},restart:()=>{rpc=load();}};
 }
 
 test("clarifications for two Q3s route, persist, and surface on their original open cards through public RPCs",async()=>{
@@ -237,4 +240,21 @@ test("a clarification photo receipt from the previous release reuses its accepte
   expect(f.sent).toHaveLength(1);
   f.append(item.sessionId,{type:"assistant_message",text:"Use the second sample."});
   expect((await f.snapshot()).clarifications[0]).toMatchObject({messageId:oldId,status:"sent",response:"Use the second sample."});
+});
+
+test("a short reply to a restored card never joins the turn of the session's next question bare",async()=>{
+  const f=await fixture();
+  f.append("editor",{type:"assistant_message",text:"Q3. Shall I keep the original cutoff?"});
+  const before=(await f.snapshot()).sessions.find(row=>row.id==="editor").decision;
+  await f.ask({card:{kind:"session",projectId:"studio",sessionId:"editor",version:before.version},
+    recipientId:"editor",question:"What is the current value?",requestKey:"fixture-restored-question"});
+  // The explanation asks a new question. The board still shows the original card for the answer.
+  f.append("editor",{type:"assistant_message",text:"The current value is 0.04 seconds.\nShall I also trim the intro? Please choose one."});
+  expect((await f.snapshot()).sessions.find(row=>row.id==="editor").decision?.version).toBe(before.version);
+  f.steering.add("editor");
+  const sent=f.sent.length;
+  const result=await f.answer({projectId:"studio",sessionId:"editor",recipientId:"editor",version:before.version,
+    action:"reply",text:"yes",requestKey:"fixture-restored-answer"});
+  expect(result.queued).toBe(true);
+  expect(f.sent.slice(sent)).toEqual([]);
 });

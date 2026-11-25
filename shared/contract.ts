@@ -46,6 +46,8 @@ const session = z.object({
   keptQuestion: z.object({
     key: z.string().min(1).max(64), later: z.number().int().min(0), stale: z.literal(true).optional(),
     maybeAnswered: z.literal(true).optional(), ended: z.literal(true).optional(),
+    // The person's done note on the session already closed an earlier question, so it does not hide this one.
+    noteSpent: z.literal(true).optional(),
     older: z.array(z.object({ key: z.string().min(1).max(64), question: z.string().max(340), askedAt: z.string().optional() })).max(10).optional(),
   }).optional(),
   lastSummary: z.string().max(400).optional(),

@@ -165,7 +165,10 @@ export class DecisionSender {
     // After classification, so a question still waiting for the person outranks a status report after it.
     if (verifiedBoardFact(row, evidence, current, note)) throw Error(changed);
     decorateDecision(row, note, current, evidence);
+    const found = row.decision;
     restoreClarifiedDecision(row, note, current, evidence);
+    // A card restored from before a clarification is not the question the session's turn is about now.
+    const restored = row.decision !== found;
     if (!row.decision || row.decision.source === "permission" || row.decision.version !== input.version) throw Error(changed);
     const agent = latest.find(target => target.id === destination.id)!.agent!;
     // A bare reply joins the session's current turn only while the card's question is its latest message and nothing came
@@ -173,7 +176,8 @@ export class DecisionSender {
     // with the card information that binds it to the question.
     const asked = row.decision.source === "conversation" ? scanOf(row)?.open.at(-1) : undefined;
     const lastEvent = evidence.events?.at(-1);
-    const bare = !asked || (!!asked.turn && lastEvent?.role === "assistant" && lastEvent.seq === asked.turn.seq && !evidence.laterInput);
+    const bare = !restored &&
+      (!asked || (!!asked.turn && lastEvent?.role === "assistant" && lastEvent.seq === asked.turn.seq && !evidence.laterInput));
     const waitForTurn = activeReply && (!bare || !canReceiveBoardInput(agent,!row.decision.deliverWhenIdle));
     const decision = row.decision;
     if (inspectOnly && !waitForTurn) throw Error(waiting);

@@ -6,7 +6,7 @@ import { placeMergeCards, pullDecidesNow } from "./merge-card-place";
 
 export function displayLane(session: SessionRow, note: Note | undefined): SessionRow["lane"] | "done" {
   if (session.nativePending) return "human";
-  if (session.evidenceId && session.evidenceId === note?.evidenceId && note.origin === "person") {
+  if (session.evidenceId && session.evidenceId === note?.evidenceId && note.origin === "person" && !session.keptQuestion?.noteSpent) {
     if (note.kind === "done") return "done";
     if (note.kind === "review") return "review";
     if (note.kind === "clear" && session.lane === "human") return "idle";

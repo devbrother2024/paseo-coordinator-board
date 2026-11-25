@@ -330,11 +330,15 @@ export function recordDisplay(details: { question: string; markdown: string; con
   };
 }
 
-/** The person pressed Close as handled. Recorded on this host only; nothing is sent to the session. */
-export function closeQuestionByPerson(scope: Preferences, sessionId: string, key: string, now = Date.now()) {
+/**
+ * The person pressed Close as handled, or wrote a done note on the card (`noteRevision`). Recorded on this host only;
+ * nothing is sent to the session.
+ */
+export function closeQuestionByPerson(scope: Preferences, sessionId: string, key: string, now = Date.now(), noteRevision?: number) {
   const saved = scope.raisedQuestions[sessionId];
   const record = saved?.questions.find(question => question.key === key);
-  scope.closedQuestions[key] = { sessionId, at: new Date(now).toISOString(), reason: "person", ...(record ? { epoch: record.epoch, seq: record.seq } : {}) };
+  scope.closedQuestions[key] = { sessionId, at: new Date(now).toISOString(), reason: "person", ...(record ? { epoch: record.epoch, seq: record.seq } : {}),
+    ...(noteRevision === undefined ? {} : { noteRevision }) };
   if (saved) {
     saved.questions = saved.questions.filter(question => question.key !== key);
     if (!saved.questions.length) delete scope.raisedQuestions[sessionId];

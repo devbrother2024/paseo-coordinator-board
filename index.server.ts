@@ -27,6 +27,7 @@ import { attachCoordinatorTools } from "./server/coordinator";
 import { createOperations } from "./server/operations";
 import { hostVisibility } from "./shared/hosts";
 import { decorateDecision, DecisionSender } from "./server/decisions";
+import { applyDoneNotes } from "./server/session-decisions";
 import { sendDecision } from "./shared/decision-actions";
 import { isCurrentMembership, managedSessions, registerSessionLinks, releaseUnmanagedCoordinator } from "./server/session-links";
 import { registerRecommendation } from "./server/recommendation";
@@ -140,18 +141,15 @@ export default function contribute(server: PluginServerContext) {
     for (const row of visible) applyRecordedQuestions(row, latest, ledger, questionsAt);
     visible.push(...recordedSessionRows(latest, selected, discovered, ledger, questionsAt));
     const visibleNotes = notes.visible(new Set(visible.map(s => s.id)));
-    const personClosed: [string, string][] = [];
-    // A person's done note on the card's question closes it as handled by the person.
-    for (const row of visible) {
-      const note = visibleNotes[row.id];
-      if (row.keptQuestion && note?.origin === "person" && note.kind === "done" && note.evidenceId && note.evidenceId === row.evidenceId) {
-        personClosed.push([row.id, row.keptQuestion.key]);
-      }
-    }
+    // A person's done note on the card's question closes that question as handled by the person, once.
+    const personClosed = applyDoneNotes(visible, visibleNotes, latest);
     const scanned = visible.filter(row => scanOf(row));
+    const spent = (scope: typeof latest, id: string, revision: number) =>
+      Object.values(scope.closedQuestions).some(entry => entry.sessionId === id && entry.noteRevision === revision);
     const save = (scope: typeof latest) => [
       ...scanned.map(row => saveScan(scope, row, scanOf(row)!, item => recordDisplay(questionDetails(item)), questionsAt)),
-      ...personClosed.map(([id, key]) => !Object.hasOwn(scope.closedQuestions, key) && (closeQuestionByPerson(scope, id, key, questionsAt), true)),
+      ...personClosed.map(([id, question, revision]) => !Object.hasOwn(scope.closedQuestions, question) && !spent(scope, id, revision) &&
+        (closeQuestionByPerson(scope, id, question, questionsAt, revision), true)),
     ].some(Boolean);
     // Saving the record must not stop the board from showing. The next snapshot saves again.
     try { if (save(structuredClone(latest))) prefs.change(save); }

@@ -6,7 +6,7 @@ import { applyConversationEvidence, applyRecordedQuestions, classify, Conversati
 import { displayLane } from "../shared/decision-count";
 import { verifiedBoardFact } from "../server/board-facts";
 import { snapshotHoldSessions } from "../shared/merge-hold";
-import { decorateDecision } from "../server/session-decisions";
+import { applyDoneNotes, decorateDecision } from "../server/session-decisions";
 import { PreferenceStore } from "../server/preferences";
 import { answersChoices, closeQuestionByPerson, ledgerCardId, ledgerQuestionsBySession, questionContext, recordDisplay, saveScan, settlingLines } from "../server/open-questions";
 import { TrackedDecisionStore } from "../server/tracked-decisions";
@@ -425,4 +425,25 @@ test("review 3: an answer that was ambiguous stays ambiguous when the timeline i
     expect(again).toMatchObject({ lane: "human", keptQuestion: { maybeAnswered: true } });
     expect(Object.keys(scope.closedQuestions)).toHaveLength(1);
   }
+});
+
+test("review 4: a person's done note closes only the question it was written on, once", () => {
+  const older: Step = ["assistant", "Which region should I use? Please choose one.", 3];
+  const steps: Step[] = [older, report, ask, report, reply];
+  const scope = blank();
+  const first = snapshot(scope, evidence(...steps));
+  const note = { sessionId: "worker", origin: "person", kind: "done", text: "Handled", revision: 1, evidenceId: first.evidenceId } as any;
+  const closing = applyDoneNotes([first], { worker: note }, scope);
+  expect(closing).toEqual([["worker", first.keptQuestion.key, 1]]);
+  for (const [id, question, revision] of closing) closeQuestionByPerson(scope, id, question, NOW, revision);
+  // The next snapshot reads the same timeline: the older question is now the card, and the same note does not close it.
+  const second = snapshot(scope, evidence(...steps));
+  expect(second.detail).toContain("Which region");
+  expect(applyDoneNotes([second], { worker: note }, scope)).toEqual([]);
+  expect(second.keptQuestion.noteSpent).toBe(true);
+  decorateDecision(second, note, scope, evidence(...steps));
+  expect(second.decision?.question).toContain("Which region");
+  expect(displayLane(second, note)).toBe("human");
+  // A new done note closes the card it is written on.
+  expect(applyDoneNotes([second], { worker: { ...note, revision: 2 } }, scope)).toEqual([["worker", second.keptQuestion.key, 2]]);
 });
