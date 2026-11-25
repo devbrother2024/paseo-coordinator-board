@@ -55,15 +55,29 @@ function lookup(known: RepositoryIndex | undefined, text: string, repositoryOnly
   return resolveRepositoryName(known, text, repositoryOnly) ?? (bare(text) !== text ? resolveRepositoryName(known, bare(text), repositoryOnly) : null);
 }
 
+// owner/repository as GitHub allows it (shared/prs.ts repositorySlug), but not a branch such as feat/x or origin/next.
+const qualifiedShape = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?\/[a-z0-9_.-]{1,100}$/i;
+const branchPrefixes = new Set(["feat", "feature", "fix", "bugfix", "hotfix", "chore", "docs", "doc", "refactor", "test", "tests", "perf", "ci", "build",
+  "style", "revert", "release", "releases", "wip", "ux", "dev", "origin", "upstream", "codex", "claude", "renovate", "dependabot"]);
+function qualifiedRepository(name: string) {
+  const text = bare(name);
+  return qualifiedShape.test(text) && !branchPrefixes.has(text.split("/")[0].toLowerCase()) && !fileOrSite.test(text);
+}
+
+/** Part of a longer path such as client/vendor/marked, which is never owner/repository. */
+const pathPart = (text: string, at: number, length: number) => text[at - 1] === "/" || text[at + length] === "/";
+
 /** Never a repository clue: ordinary words, anything with a digit (versions, models, UTF-8), branch paths, CI images, files and sites. */
 function neutral(name: string) {
   const text = bare(name);
-  return ordinary.has(text.toLowerCase()) || /\d/.test(text) || text.includes("/") || /-latest$/i.test(text) || fileOrSite.test(text);
+  if (text.includes("/")) return !qualifiedRepository(text);
+  return ordinary.has(text.toLowerCase()) || /\d/.test(text) || /-latest$/i.test(text) || fileOrSite.test(text);
 }
 
-/** A name that reads like a repository anywhere in a line: a slug (zeta-api, zeta_api) or CamelCase (ZetaApp). */
+/** A name that reads like a repository anywhere in a line: owner/repository, a slug (zeta-api, zeta_api) or CamelCase (ZetaApp). */
 function looksLikeRepository(name: string) {
   const text = bare(name);
+  if (text.includes("/")) return qualifiedRepository(text);
   return /[A-Za-z]/.test(text) && !neutral(text) && (/[A-Za-z0-9][-_.][A-Za-z0-9]/.test(text) || /[a-z][A-Z]/.test(text));
 }
 
@@ -76,6 +90,8 @@ function matches(text: string) {
   });
 }
 
+const blockTypes = new Set(["paragraph", "heading", "blockquote", "list", "list_item", "space", "code", "hr", "table"]);
+
 // One walk over the inline tokens in reading order, shared by the scan and the rewrite so their positions agree.
 function walk(tokens: Token[], visit: { text(text: string): void; other(text: string): void }) {
   for (const token of tokens) {
@@ -83,7 +99,11 @@ function walk(tokens: Token[], visit: { text(text: string): void; other(text: st
     // HistoryMarkdown draws <br> as a line break, so it ends a line here too.
     else if (token.type === "br" || (token.type === "html" && /^<br\s*\/?\s*>$/i.test(token.raw))) visit.other("\n");
     else if (token.type === "codespan") visit.other(token.text);
-    else if ("tokens" in token && Array.isArray(token.tokens)) walk(token.tokens, visit);
+    else if ("tokens" in token && Array.isArray(token.tokens)) {
+      walk(token.tokens, visit);
+      // Blocks are drawn on their own lines, so a clue in one paragraph never reaches the next.
+      if (blockTypes.has(token.type)) visit.other("\n");
+    } else if (blockTypes.has(token.type)) visit.other("\n");
     else if (token.type === "text" && typeof token.text === "string") visit.text(token.text);
     else visit.other(" ");
   }
@@ -175,7 +195,7 @@ function lineTarget(line: string, known: RepositoryIndex | undefined): Repositor
   }
   line = rest;
   for (const match of line.matchAll(names)) {
-    if (line[match.index - 1] === "#" || /^[\d._-]+$/.test(match[0])) continue;
+    if (line[match.index - 1] === "#" || /^[\d._-]+$/.test(match[0]) || pathPart(line, match.index, match[0].length)) continue;
     const repository = lookup(known, match[0], true);
     const any = repository ?? lookup(known, match[0]);
     if (any && !("repo" in any)) return { blocked: true };
@@ -197,7 +217,8 @@ function resolve(flat: string, ref: { at: number; length: number }, context: Pul
   // Never start the slice inside a name, or its tail could read as another repository.
   while (from > start && /[\w.\/-]/.test(flat[from - 1])) from--;
   const head = flat.slice(from, ref.at);
-  const left = phraseBefore(head, context.known) ?? nameBefore(before.exec(head)?.[1], context.known);
+  const word = before.exec(head);
+  const left = phraseBefore(head, context.known) ?? (word && !pathPart(head, word.index, word[1].length) ? nameBefore(word[1], context.known) : null);
   if (left) return chosen(left);
   const right = nameAfter(after.exec(flat.slice(ref.at + ref.length, Math.min(end, ref.at + ref.length + 200)))?.[1], context.known);
   if (right) return chosen(right);

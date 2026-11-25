@@ -188,3 +188,54 @@ test("project titles with spaces or Korean are matched whole before splitting in
   // 이름이 더 긴 낱말의 일부이면 그 이름이 아니다.
   expect(link("Alpha Webby #22", "studio/card")).toEqual([]);
 });
+
+test("every kind of repository clue keeps a line away from the card repository", () => {
+  const index = repositoryIndex([
+    { repo: "studio/alpha-web", names: ["Alpha Studio"] },
+    { repo: "studio/beta" },
+  ]);
+  const card = "studio/card";
+  const lineLinks = (markdown: string) => references(pullReferenceTokens((lexBoardMarkdown(markdown)[0] as Tokens.Paragraph).tokens, { repository: card, known: index }));
+  const rowLinks = (markdown: string) => {
+    const table = lexBoardMarkdown(markdown).find(token => token.type === "table") as Tokens.Table;
+    const clues = tableRowClues(table, index);
+    return table.rows.flatMap((row, r) => row.flatMap(cell => references(pullReferenceTokens(cell.tokens, { repository: card, known: index, row: clues[r] }))));
+  };
+  // 종류마다: 줄에 있는 단서, 그 단서가 가리킬 저장소(모르면 null).
+  const kinds: [string, string, string | null][] = [
+    ["모르는 슬러그", "zeta-api", null],
+    ["모르는 CamelCase", "ZetaApp", null],
+    ["모르는 owner/repo", "other/tool", null],
+    ["여럿 맞는 이름", "shared-name", null],
+    ["프로젝트 이름 전체", "Alpha Studio", "studio/alpha-web"],
+    ["아는 저장소 이름", "beta", "studio/beta"],
+  ];
+  const ambiguous = repositoryIndex([{ repo: "studio/shared-name" }, { repo: "labs/shared-name" }]);
+  for (const [kind, clue, target] of kinds) {
+    const forms = [`${clue} 정리 후 #12`, `#12 ${clue} 정리`, `${clue}의 #12`, `${clue} 의 #12`];
+    for (const form of forms) {
+      const found = kind === "여럿 맞는 이름"
+        ? references(pullReferenceTokens((lexBoardMarkdown(form)[0] as Tokens.Paragraph).tokens, { repository: card, known: ambiguous }))
+        : lineLinks(form);
+      const label = `${kind}: ${form}`;
+      expect({ label, linksCard: found.some(link => link.repo === card) }).toEqual({ label, linksCard: false });
+      // 프로젝트 이름은 번호 바로 옆에서만 링크 대상이다.
+      const adjacent = form.endsWith("의 #12");
+      const expected = target && (kind !== "프로젝트 이름 전체" || adjacent) ? [{ repo: target, number: 12 }] : [];
+      expect({ label, found }).toEqual({ label, found: kind === "여럿 맞는 이름" ? [] : expected });
+    }
+    if (kind === "여럿 맞는 이름") continue;
+    for (const table of [`| 메모 | 대상 | 번호 |\n|---|---|---|\n| 고침 | ${clue} | #8 |`, `| 저장소 | 번호 |\n|---|---|\n| ${clue} | #8 |`]) {
+      const found = rowLinks(table);
+      expect({ table, found }).toEqual({ table, found: target ? [{ repo: target, number: 8 }] : [] });
+    }
+  }
+  // 브랜치 경로, 여러 단계 경로, 파일은 모르는 owner/repo 가 아니다.
+  for (const text of ["feat/x 브랜치 #12", "codex/fix-links 정리 #12", "client/vendor/marked 갱신 #12", "client/history-markdown.tsx 수정 #12", "origin/next 기준 #12"]) {
+    expect({ text, found: lineLinks(text) }).toEqual({ text, found: [{ repo: card, number: 12 }] });
+  }
+  // owner/repo#N 꼴은 지금처럼 건드리지 않고, 같은 줄의 다른 번호를 아는 저장소 하나로 몰지 않는다.
+  expect(lineLinks("other/tool#12")).toEqual([]);
+  expect(references(pullReferenceTokens((lexBoardMarkdown("alpha-web #1, other/repo #2 and #3")[0] as Tokens.Paragraph).tokens, { repository: card, known })))
+    .toEqual([{ repo: "studio/alpha-web", number: 1 }]);
+});
