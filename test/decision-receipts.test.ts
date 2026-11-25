@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { withReceiptPositions, type InlineReceipt } from "../client/decision-receipts";
+import { foldReceipts, receiptsToFold, withReceiptPositions, type InlineReceipt } from "../client/decision-receipts";
 
 function receipt(rowKey: string, order: string[], overrides: Partial<InlineReceipt> = {}): InlineReceipt {
   return { rowKey, actionKey: rowKey, order, projectIds: ["project"], title: rowKey, status: "sent", ...overrides };
@@ -45,4 +45,18 @@ test("retains a finished editor's slot when newly unpinned priorities reverse it
   const afterSubmit = ["urgent", "before", "other"];
   expect(withReceiptPositions(afterSubmit, [receipt("my-reply", duringEdit)]))
     .toEqual(["urgent", "my-reply", "before", "other"]);
+});
+
+test("a finished result folds into recent activity after a few seconds, except an unsent reply", () => {
+  const receipt = (actionKey: string, status: InlineReceipt["status"], hidden?: boolean): InlineReceipt =>
+    ({ actionKey, rowKey: "row-" + actionKey, projectIds: ["p"], status, title: actionKey, order: [], ...(hidden ? { hidden } : {}) });
+  const list = [receipt("sent", "sent"), receipt("merged", "merged"), receipt("unsent", "unsent"), receipt("old", "sent", true)];
+  expect(receiptsToFold(list)).toEqual([JSON.stringify(["sent", "row-sent"]), JSON.stringify(["merged", "row-merged"])]);
+  const folded = foldReceipts(list, receiptsToFold(list));
+  expect(folded.map(entry => !!entry.hidden)).toEqual([true, true, false, true]);
+  // A receipt updated in place (a merge notification) keeps its identity and still folds.
+  const updated = foldReceipts([{ ...list[1], notification: undefined }], receiptsToFold(list));
+  expect(updated[0].hidden).toBe(true);
+  expect(receiptsToFold(folded)).toEqual([]);
+  expect(foldReceipts(folded, [])).toBe(folded);
 });

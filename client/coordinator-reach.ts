@@ -37,7 +37,7 @@ function title(state: Exclude<CoordinatorReachState, "ok">, who: string, t: Tran
 function effect(state: Exclude<CoordinatorReachState, "ok">, role: ReachRole, t: Translate) {
   if (state === "unknown") return t("코디네이터에게 보내는 요청과 원장 카드 답장이 전달되지 않을 수 있습니다.", "Requests to the coordinator and replies to ledger cards may not be delivered.");
   return role === "owner"
-    ? t("이 카드의 답장은 그 세션에 전달되지 않습니다. 쓴 답은 보드에만 저장할 수 있습니다.", "Replies to this card do not reach that session. You can still save your answer on the board.")
+    ? t("이 카드의 답장은 그 세션에 전달되지 않습니다. 쓴 답은 카드에 남아 있으니 세션이 돌아온 뒤 보내 주세요.", "Replies to this card do not reach that session. Your answer stays on the card; send it once the session is back.")
     : t("코디네이터에게 보내는 요청과 원장 카드 답장이 전달되지 않습니다.", "Requests to the coordinator and replies to ledger cards are not delivered.");
 }
 

@@ -16,6 +16,12 @@ function timestamp(value: string | null | undefined, endOfDay = false) {
   return instant.safeParse(value).success ? Date.parse(value) : NaN;
 }
 
+// A due date as the card shows it: the instant, and whether it named a time or only a day.
+export function dueTime(value: string | null | undefined) {
+  const at = timestamp(value);
+  return Number.isFinite(at) ? { at, timed: value!.length !== 10 } : null;
+}
+
 export function waitStart(value: string | null | undefined, now: number) {
   const at = timestamp(value);
   return at <= now ? at : null;

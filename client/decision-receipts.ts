@@ -13,7 +13,7 @@ export type CompletedAction = {
   actionKey: string;
   rowKey: string;
   projectIds: (string | null)[];
-  status: "merged" | "already-merged" | "sent" | "saved" | "reviewed" | "already-closed" | "unsent";
+  status: "merged" | "already-merged" | "sent" | "already-closed" | "unsent";
   title: string;
   detail?: string;
   recipientId?: string;
@@ -41,4 +41,19 @@ export function withReceiptPositions(active: readonly string[], receipts: readon
     rows.splice(position, 0, rowKey);
   }
   return rows;
+}
+
+// A result line stays a few seconds where the person acted, then folds into recent decision activity.
+// An unsent reply holds text found nowhere else, so it stays until the person hides it.
+export const RECEIPT_FOLD_MS = 6000;
+const receiptId = (receipt: Pick<InlineReceipt, "actionKey" | "rowKey">) => JSON.stringify([receipt.actionKey, receipt.rowKey]);
+
+export function receiptsToFold(receipts: readonly InlineReceipt[]) {
+  return receipts.filter(receipt => !receipt.hidden && receipt.status !== "unsent").map(receiptId);
+}
+
+export function foldReceipts(receipts: InlineReceipt[], ids: readonly string[]) {
+  if (!ids.length) return receipts;
+  const fold = new Set(ids);
+  return receipts.map(receipt => fold.has(receiptId(receipt)) && !receipt.hidden ? { ...receipt, hidden: true } : receipt);
 }
