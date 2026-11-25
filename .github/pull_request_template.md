@@ -1,5 +1,9 @@
 ## 무엇을 바꿨나
 
+## Intent
+
+`intent/<이름>/` 링크(있으면). 없으면 만들지 않은 이유 한 줄(`intent/README.md`의 "언제 만드나").
+
 ## 검증
 
 - [ ] `npm run typecheck`
