@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { queueView } from "./busy-delivery";
 
 // GitHub.com owner/repository only. Keep remote credentials, paths and CLI flags out of settings.
 export const repositorySlug = z.string().trim()
@@ -33,7 +34,9 @@ const pull = z.object({
   projectIds:z.array(z.string()), lane:z.enum(["review","progress"]), reason:pullReason, detail:pullDetail.optional(), updatedAt:z.string(),
   gate:pullGate.optional(),
   // With the change-requested gate: whether the request is confirmed as sent or its delivery is still unknown.
-  changeRequest:z.enum(["sent","pending"]).optional(),
+  // queued: it waits for the recipient to rest, and changeQueue describes the wait.
+  changeRequest:z.enum(["sent","pending","queued"]).optional(),
+  changeQueue:queueView.optional(),
   judgment:z.object({ verdict:pullVerdict, reason:z.string(), at:z.string(), ownerSessionId:z.string().optional(), ownerSessionHost:z.string().optional() }).optional(),
 });
 export const pullRequestViewSchema = z.object({

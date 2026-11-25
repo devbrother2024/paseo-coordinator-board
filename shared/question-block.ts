@@ -104,7 +104,7 @@ export function splitQuestionBlock(message: string): { text: string; block?: Que
 
 const prefix = (item: BlockQuestion) => blockQuestionLabel(item) + ": ";
 
-// The options a question's line names, read in option order. Anything the person wrote after them is left alone.
+// The options a question's line names, read in option order, and whatever the person wrote after them.
 function chosen(line: string, item: BlockQuestion) {
   let rest = line.slice(prefix(item).length);
   const keys: string[] = [];
@@ -113,7 +113,7 @@ function chosen(line: string, item: BlockQuestion) {
     if (rest === label) { keys.push(choice.key); rest = ""; }
     else if (rest.startsWith(label + ", ")) { keys.push(choice.key); rest = rest.slice(label.length + 2); }
   }
-  return keys;
+  return { keys, rest };
 }
 
 const lineOf = (rows: readonly string[], item: BlockQuestion) => rows.findIndex(row => row.startsWith(prefix(item)));
@@ -124,7 +124,7 @@ export function blockPicks(text: string, block: QuestionBlock): Record<number, s
   const picks: Record<number, string[]> = {};
   block.questions.forEach((item, index) => {
     const at = lineOf(rows, item);
-    const keys = at < 0 ? [] : chosen(rows[at], item);
+    const keys = at < 0 ? [] : chosen(rows[at], item).keys;
     if (keys.length) picks[index] = keys;
   });
   return picks;
@@ -133,9 +133,12 @@ export function blockPicks(text: string, block: QuestionBlock): Record<number, s
 function writeLine(text: string, block: QuestionBlock, index: number, keys: readonly string[]) {
   const item = block.questions[index];
   const picked = item.options.filter(choice => keys.includes(choice.key));
-  const line = picked.length ? prefix(item) + picked.map(optionText).join(", ") : null;
   const rows = text ? text.split("\n") : [];
   const at = lineOf(rows, item);
+  // What the person added to the line (a condition, an answer of their own) stays after the options.
+  const written = at < 0 ? "" : chosen(rows[at], item).rest;
+  const parts = [...picked.map(optionText), ...(written ? [written] : [])];
+  const line = parts.length ? prefix(item) + parts.join(", ") : null;
   if (at >= 0) {
     if (line) rows[at] = line; else rows.splice(at, 1);
   } else if (line) {

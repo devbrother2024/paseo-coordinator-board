@@ -121,6 +121,12 @@ test("choosing an option writes that question's line, and the text says what is 
   expect(blockPicks("Q1 · Where should the cache live?: neither, use Redis", block)).toEqual({});
   expect(blockPicks("Q2 · Which checks should run?: A · Unit, and one of my own", block)).toEqual({ 1: ["A"] });
   expect(applyBlockChoice(text, block, 0, "missing")).toBe(text);
+  // What the person added to a line stays when another option is chosen or the choice is taken back.
+  const qualified = "Q2 · Which checks should run?: A · Unit, but do not run against production";
+  expect(applyBlockChoice(qualified, block, 1, "C")).toBe("Q2 · Which checks should run?: A · Unit, C · End to end, but do not run against production");
+  expect(applyBlockChoice(qualified, block, 1, "A")).toBe("Q2 · Which checks should run?: but do not run against production");
+  expect(applyBlockChoice("Q1 · Where should the cache live?: neither, use Redis", block, 0, "B")).toBe("Q1 · Where should the cache live?: B · Disk, neither, use Redis");
+  expect(blockPicks("Q1 · Where should the cache live?: B · Disk, neither, use Redis", block)).toEqual({ 0: ["B"] });
 });
 
 test("recommended options fill only unanswered questions", () => {

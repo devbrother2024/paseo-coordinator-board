@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { changeRequestRecipient, changeRequestWords, takesChangeRequest } from "../shared/pull-change-requests";
 import { applyPullJudgments, pullJudgmentKey } from "../shared/pull-judgments";
-import { changeRequestHistory, pullChangeMessage, PullChangeRequests } from "../server/pull-change-requests";
+import { changeQueueView, changeRequestHistory, mergeHeldByChangeRequest, pullChangeMessage, PullChangeRequests } from "../server/pull-change-requests";
 import { PreferenceStore } from "../server/preferences";
 
 const pr = (ownerSessionId?: string, ownerSessionHost?: string) => ({ projectIds: ["alpha"],
@@ -63,7 +63,7 @@ function fixture(options: { owner?: string } = { owner: "worker-1" }) {
   const input = (extra = {}) => ({ projectId: "alpha", repo: "org/example", number: 7, headSha: head, recipientId: "worker-1",
     text: "Please keep the old flag working.\n\nWhy was it removed?", requestKey: "change-key-0001", ...extra });
   const send = (extra = {}) => requests.send(sdk as never, input(extra));
-  return { dir, store, view, pull, agents, sent, timeline, state, requests, send, input };
+  return { dir, store, view, pull, agents, sent, timeline, state, requests, send, input, sdk };
 }
 
 test("nothing is sent unless the PR is a merge card on that head and the recipient can take input", async () => {
@@ -87,23 +87,28 @@ test("nothing is sent unless the PR is a merge card on that head and the recipie
   f.agents["worker-1"]!.pendingPermissions = [];
   f.agents["worker-1"]!.attentionReason = "permission";
   expect(await f.send()).toEqual({ status: "busy" });
-  f.agents["worker-1"]!.attentionReason = null;
-  Object.assign(f.agents["worker-1"]!, { status: "running", activeTurn: "turn-1" });
+  f.agents["worker-1"]!.attentionReason = "error";
+  expect(await f.send()).toEqual({ status: "busy" });
+  // A permission request holds it in the middle of a turn as well.
+  Object.assign(f.agents["worker-1"]!, { status: "running", activeTurn: "turn-1", attentionReason: null, pendingPermissions: [{ id: "p2" }] });
   expect(await f.send()).toEqual({ status: "busy" });
   expect(f.sent).toHaveLength(0);
   expect(f.store.read().pullChangeRequests).toEqual({});
 
-  Object.assign(f.agents["worker-1"]!, { status: "idle", activeTurn: null });
+  Object.assign(f.agents["worker-1"]!, { status: "idle", activeTurn: null, pendingPermissions: [] });
   expect(await f.send()).toEqual({ status: "sent", recipientId: "worker-1" });
   const [message] = f.sent;
   expect(message.id).toBe("worker-1");
   // The person's words go out as written, after the card's context, and without a source.
   expect(Object.keys(message.options).sort()).toEqual(["activeTurnBehavior", "messageId"]);
   const [heading, context, blank, ...body] = message.text.split("\n");
-  expect(heading).toBe("[Coordinator Board · Alpha · Add cache]");
+  expect(heading).toBe("[Coordinator Board · Alpha · org/example #7]");
+  // The PR is named by repository, number, link and commit only. Its title comes from GitHub, where others can edit it,
+  // so it never rides in a message that reads as the person's own.
   expect(JSON.parse(context)).toEqual({ projectId: "alpha", projectTitle: "Alpha", source: "pull-request", repo: "org/example", number: 7,
-    url: "https://github.com/org/example/pull/7", title: "Add cache", headSha: head, recipientSessionId: "worker-1",
+    url: "https://github.com/org/example/pull/7", headSha: head, recipientSessionId: "worker-1",
     action: "change-request", mayBe: ["decision", "question", "change-request"] });
+  expect(message.text).not.toContain("Add cache");
   expect(blank).toBe("");
   expect(body.join("\n")).toBe("Please keep the old flag working.\n\nWhy was it removed?");
   // The record takes the merge card down for this head.
@@ -151,14 +156,14 @@ test("a retry confirms the earlier request instead of sending again", async () =
   expect(await lost.send()).toEqual({ status: "unconfirmed" });
   expect(await lost.send({ requestKey: "change-key-0002", text: "A different request" })).toEqual({ status: "unconfirmed" });
   expect(lost.sent).toHaveLength(0);
-  lost.timeline["worker-1"] = [{ item: { type: "user_message", messageId: pending.messageId, text: "[Coordinator Board · Alpha · Add cache]\nsomething else" } }];
+  lost.timeline["worker-1"] = [{ item: { type: "user_message", messageId: pending.messageId, text: "[Coordinator Board · Alpha · org/example #7]\nsomething else" } }];
   expect(await lost.send()).toEqual({ status: "unconfirmed" });
   const arrived = fixture();
   arrived.state.failSend = true;
   await arrived.send();
   const record = arrived.store.read().pullChangeRequests[key];
-  const text = "[Coordinator Board · Alpha · Add cache]\n" + JSON.stringify({ projectId: "alpha", projectTitle: "Alpha", source: "pull-request", repo: "org/example", number: 7,
-    url: "https://github.com/org/example/pull/7", title: "Add cache", headSha: head, recipientSessionId: "worker-1",
+  const text = "[Coordinator Board · Alpha · org/example #7]\n" + JSON.stringify({ projectId: "alpha", projectTitle: "Alpha", source: "pull-request", repo: "org/example", number: 7,
+    url: "https://github.com/org/example/pull/7", headSha: head, recipientSessionId: "worker-1",
     action: "change-request", mayBe: ["decision", "question", "change-request"] }) + "\n\nPlease keep the old flag working.\n\nWhy was it removed?";
   arrived.timeline["worker-1"] = [{ item: { type: "user_message", messageId: record.messageId, text } }];
   arrived.state.failSend = false;
@@ -262,11 +267,12 @@ test("a pending request is confirmed when the board reads it in the recipient's 
   expect(history.entries[0].status).toBe("sent");
 });
 
-test("the heading and context of a change request carry no control or direction characters", () => {
-  const message = pullChangeMessage({ repo: "org/example", number: 7, title: "Add\u202e cache\u0007", headSha: head }, { id: "alpha", title: "Al\u2066pha\n" }, "worker-1", "Keep\u202e this as typed");
+test("a change request names its PR without the PR title, and carries no control or direction characters", () => {
+  const message = pullChangeMessage({ repo: "org/example", number: 7, headSha: head }, { id: "alpha", title: "Al\u2066pha\n" }, "worker-1", "Keep\u202e this as typed");
   const [heading, context] = message.split("\n");
-  expect(heading).toBe("[Coordinator Board · Al pha · Add cache]");
-  expect(JSON.parse(context)).toMatchObject({ projectTitle: "Al pha", title: "Add cache", action: "change-request" });
+  expect(heading).toBe("[Coordinator Board · Al pha · org/example #7]");
+  expect(JSON.parse(context)).toMatchObject({ projectTitle: "Al pha", repo: "org/example", number: 7, action: "change-request" });
+  expect(JSON.parse(context).title).toBeUndefined();
   // The person's own words are never rewritten.
   expect(message.endsWith("\n\nKeep\u202e this as typed")).toBe(true);
 });
@@ -288,4 +294,121 @@ test("one unreadable change request record is dropped without losing the rest of
   expect(f.store.read().pullChangeRequests).toEqual({});
   writeFileSync(path, JSON.stringify({ ...saved, pullChangeRequests: undefined }));
   expect(f.store.read().pullChangeRequests).toEqual({});
+});
+
+test("a session in its turn takes the request at once when its provider can, and otherwise the request waits", async () => {
+  // Claude and Codex take input in the middle of a turn, for a work session as for the coordinator.
+  for (const provider of ["claude", "codex"]) {
+    const f = fixture();
+    Object.assign(f.agents["worker-1"]!, { status: "running", activeTurn: "turn-1", provider });
+    expect(await f.send()).toEqual({ status: "sent", recipientId: "worker-1" });
+    expect(f.sent[0].options.activeTurnBehavior).toBe("steer");
+    // It still carries the PR it is about: the session did not ask this question itself.
+    expect(f.sent[0].text.startsWith("[Coordinator Board · Alpha · org/example #7]\n")).toBe(true);
+  }
+  // Another provider's turn cannot take it, so it waits. Nothing is sent, and the merge card is down meanwhile.
+  const f = fixture();
+  Object.assign(f.agents["worker-1"]!, { status: "running", activeTurn: "turn-1", provider: "opencode" });
+  expect(await f.send()).toEqual({ status: "queued", recipientId: "worker-1" });
+  expect(await f.send()).toEqual({ status: "queued", recipientId: "worker-1" });
+  expect(await f.send({ requestKey: "change-key-0002", text: "Another one" })).toEqual({ status: "changed" });
+  expect(f.sent).toHaveLength(0);
+  const waiting = f.store.read().pullChangeRequests[key];
+  expect(waiting).toMatchObject({ status: "queued", queue: { stopped: false, photos: [] }, text: "Please keep the old flag working.\n\nWhy was it removed?" });
+  expect(changeQueueView(waiting)).toMatchObject({ messageId: waiting.messageId, recipientId: "worker-1", stopped: false, imageCount: 0 });
+  const { gate: _gate, ...plain } = f.pull;
+  expect(applyPullJudgments([plain], { enabled: true, coordinator: true, judgments: {}, ledgerPulls: new Set(), changeRequests: f.store.read().pullChangeRequests })[0])
+    .toMatchObject({ lane: "progress", gate: "change-requested", changeRequest: "queued" });
+  expect(mergeHeldByChangeRequest(f.store.read(), "org/example", 7, head)).toBe(true);
+  expect(changeRequestHistory(f.store.read(), new Set(["alpha"]), new Map()).entries).toEqual([]);
+  expect(f.requests.hasWaiting("worker-1")).toBe(true);
+  expect(f.requests.hasWaiting("coord")).toBe(false);
+  // Still in its turn: it keeps waiting. Once the session rests, the request goes out once, as the person wrote it.
+  Object.assign(f.pull, { lane: "progress", gate: "change-requested" });
+  await f.requests.resume(f.sdk as never, "worker-1");
+  expect(f.sent).toHaveLength(0);
+  Object.assign(f.agents["worker-1"]!, { status: "idle", activeTurn: null });
+  await f.requests.resume(f.sdk as never, "coord");
+  expect(f.sent).toHaveLength(0);
+  await Promise.all([f.requests.resume(f.sdk as never, "worker-1"), f.requests.resume(f.sdk as never)]);
+  await f.requests.resume(f.sdk as never);
+  expect(f.sent).toHaveLength(1);
+  expect(f.sent[0]).toMatchObject({ id: "worker-1", options: { messageId: waiting.messageId, activeTurnBehavior: "steer" } });
+  expect(Object.keys(f.sent[0].options).sort()).toEqual(["activeTurnBehavior", "messageId"]);
+  expect(f.sent[0].text.endsWith("\n\nPlease keep the old flag working.\n\nWhy was it removed?")).toBe(true);
+  expect(f.store.read().pullChangeRequests[key]).toMatchObject({ status: "sent" });
+  expect(f.store.read().pullChangeRequests[key].queue).toBeUndefined();
+  expect(f.requests.hasWaiting()).toBe(false);
+});
+
+test("a waiting request stops when the PR or its recipient is no longer what the person wrote for", async () => {
+  const cases: [string, (f: ReturnType<typeof fixture>) => void][] = [
+    ["a new head", f => { f.pull.headSha = newer; }],
+    ["GitHub no longer ready", f => { Object.assign(f.pull, { reason: "checks-failed" }); }],
+    ["another owner", f => { f.pull.judgment.ownerSessionId = "worker-2"; }],
+    ["the project left the board", f => { f.store.change(scope => { scope.projects = []; }); }],
+    ["the session ended", f => { f.agents["worker-1"]!.archivedAt = "2026-11-25T03:00:00.000Z"; }],
+  ];
+  for (const [name, change] of cases) {
+    const f = fixture();
+    Object.assign(f.agents["worker-1"]!, { status: "running", activeTurn: "turn-1", provider: "opencode" });
+    expect(await f.send()).toEqual({ status: "queued", recipientId: "worker-1" });
+    change(f);
+    Object.assign(f.agents["worker-1"]!, { status: "idle", activeTurn: null });
+    await f.requests.resume(f.sdk as never);
+    f.store.change(scope => { if (!scope.projects.length) scope.projects = ["alpha"]; });
+    expect([name, f.sent.length]).toEqual([name, 0]);
+    expect([name, f.store.read().pullChangeRequests[key].queue?.stopped]).toEqual([name, true]);
+    expect(f.requests.hasWaiting()).toBe(false);
+  }
+  // A recipient that turns to a permission request keeps the request waiting instead of stopping it.
+  const f = fixture();
+  Object.assign(f.agents["worker-1"]!, { status: "running", activeTurn: "turn-1", provider: "opencode" });
+  await f.send();
+  f.agents["worker-1"]!.pendingPermissions = [{ id: "p1" }];
+  await f.requests.resume(f.sdk as never);
+  expect(f.sent).toHaveLength(0);
+  expect(f.store.read().pullChangeRequests[key].queue?.stopped).toBe(false);
+});
+
+test("a waiting request can be cancelled, held for a parallel session and resumed", async () => {
+  const queued = async () => {
+    const f = fixture();
+    Object.assign(f.agents["worker-1"]!, { status: "running", activeTurn: "turn-1", provider: "opencode" });
+    await f.send();
+    const messageId = f.store.read().pullChangeRequests[key].messageId;
+    const card = { kind: "pull" as const, projectId: "alpha", repo: "org/example", number: 7, headSha: head };
+    return { f, messageId, card };
+  };
+  // Cancelling removes the request: nothing was sent, and the merge card returns.
+  const a = await queued();
+  expect(a.f.requests.control({ card: { ...a.card, headSha: newer }, messageId: a.messageId, action: "cancel" }, "opencode", 10)).toBeUndefined();
+  expect(a.f.requests.control({ card: a.card, messageId: "00000000-0000-4000-8000-00000000000f", action: "cancel" }, "opencode", 10)).toBeUndefined();
+  expect(a.f.requests.control({ card: a.card, messageId: a.messageId, action: "cancel" }, "opencode", 10)).toMatchObject({ recipientId: "worker-1" });
+  expect(a.f.store.read().pullChangeRequests).toEqual({});
+  expect(mergeHeldByChangeRequest(a.f.store.read(), "org/example", 7, head)).toBe(false);
+  // Reopening the merge card does the same for a request that never went out.
+  const w = await queued();
+  expect(w.f.requests.withdraw({ projectId: "alpha", repo: "org/example", number: 7, headSha: head })).toBe(true);
+  expect(w.f.store.read().pullChangeRequests).toEqual({});
+  // A parallel session is offered by the same rule as card replies: at once for a provider without mid-turn input.
+  const b = await queued();
+  expect(await b.f.requests.stillWaiting(b.f.sdk as never, { card: b.card, messageId: b.messageId })).toBe(true);
+  expect(b.f.requests.control({ card: b.card, messageId: b.messageId, action: "resume" }, "opencode", 10)).toBeUndefined();
+  expect(b.f.requests.control({ card: b.card, messageId: b.messageId, action: "parallel" }, "opencode", 10))
+    .toEqual({ title: "Add cache", recipientId: "worker-1", answer: "Please keep the old flag working.\n\nWhy was it removed?", images: [] });
+  expect(b.f.store.read().pullChangeRequests[key].queue?.parallel).toBe("held");
+  // While it is held, the original session resting does not send it.
+  Object.assign(b.f.pull, { lane: "progress", gate: "change-requested" });
+  Object.assign(b.f.agents["worker-1"]!, { status: "idle", activeTurn: null });
+  expect(b.f.requests.hasWaiting()).toBe(false);
+  await b.f.requests.resume(b.f.sdk as never);
+  expect(b.f.sent).toHaveLength(0);
+  expect(await b.f.requests.stillWaiting(b.f.sdk as never, { card: b.card, messageId: b.messageId })).toBe(false);
+  // The person resumes it, and it goes to the original session.
+  expect(b.f.requests.control({ card: b.card, messageId: b.messageId, action: "parallel" }, "opencode", 10)).toBeUndefined();
+  expect(b.f.requests.control({ card: b.card, messageId: b.messageId, action: "resume" }, "opencode", 10)).toBeDefined();
+  await b.f.requests.resume(b.f.sdk as never);
+  expect(b.f.sent).toHaveLength(1);
+  expect(b.f.store.read().pullChangeRequests[key].status).toBe("sent");
 });

@@ -19,6 +19,7 @@ import { changeDraftTarget, changeRequestKey, changeSignature, changeTargetKey, 
 import { DecisionReplyInput } from "./decision-reply";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
 import { SendButton } from "./send-input";
+import { QueuedAnswer } from "./queued-answer";
 
 type PullRequest = PullRequestView["items"][number];
 
@@ -297,6 +298,11 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
         changeRetry.current = finishedRetry;
         setChangeText(""); changePhotos.clear(); setPreview(null); setMethod(null);
         onChangeRequested?.({ recipientId: result.recipientId ?? recipientId, text, headSha });
+      } else if (result.status === "queued") {
+        // The recipient is in a turn that cannot take input. The request waits on the PR row, where it can be cancelled.
+        changeRetry.current = finishedRetry;
+        setChangeText(""); changePhotos.clear(); setPreview(null); setMethod(null);
+        onRefresh?.();
       } else {
         setChangeError(changeRequestWords[result.status]);
         // A request whose delivery is unknown takes the card down too. The PR row then says so and offers to reopen it.
@@ -393,7 +399,9 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
       {t("수정 요청을 받을 작업 세션이나 코디네이터가 없습니다.", "No work session or coordinator can take a change request.")}
     </Text>)}
     {changeError && <Text accessibilityLiveRegion="polite" selectable style={{color: c.statusWarning}}>{t(changeError[0], changeError[1])}</Text>}
-    {pr.gate === "change-requested" && !!pr.headSha && !!projectId && onRefresh && <View style={{...wrap, alignItems: "center"}}>
+    {pr.gate === "change-requested" && pr.changeQueue && !!pr.headSha && !!projectId && onRefresh &&
+      <QueuedAnswer queue={pr.changeQueue} card={{kind: "pull", projectId, repo: pr.repo, number: pr.number, headSha: pr.headSha}} theme={theme} onRefresh={onRefresh} />}
+    {pr.gate === "change-requested" && !pr.changeQueue && !!pr.headSha && !!projectId && onRefresh && <View style={{...wrap, alignItems: "center"}}>
       <Text style={{color: c.foregroundMuted, fontSize: 13, flexShrink: 1}}>
         {pr.changeRequest === "pending"
           ? t("수정 요청이 전달됐는지 확인하고 있습니다. 받은 세션에서 확인되면 보낸 것으로 바뀝니다. 다시 보내려면 병합 카드를 다시 여세요.", "Checking whether the change request arrived. It turns to sent once the board finds it in the recipient's conversation. Reopen the merge card to send again.")

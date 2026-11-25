@@ -28,7 +28,7 @@ type Options = {
 // Decide which GitHub-ready PRs become merge cards. Everything else stays in project progress.
 export function applyPullJudgments<T extends PullRequestItem>(items: readonly T[], options: Options): T[] {
   return items.map(item => {
-    const { gate: _gate, judgment: _judgment, changeRequest: _changeRequest, ...pr } = item;
+    const { gate: _gate, judgment: _judgment, changeRequest: _changeRequest, changeQueue: _changeQueue, ...pr } = item;
     const key = pullJudgmentKey(pr.repo, pr.number);
     const saved = Object.hasOwn(options.judgments, key) ? options.judgments[key] : undefined;
     const current = saved && pr.headSha && saved.headSha === pr.headSha ? saved : undefined;
@@ -127,7 +127,8 @@ export function pullStatusWords(pr: Pick<PullRequestItem, "reason" | "gate" | "j
     case "blocked": return reason ? [`막힘: ${reason}`, `Blocked: ${reason}`] : ["막힘", "Blocked"];
     case "judged": return ["코디네이터 확인 · 병합 검토 가능", "Coordinator checked · Ready for merge review"];
     case "ledger": return ["코디네이터 병합 안건", "Coordinator merge request"];
-    case "change-requested": return pr.changeRequest === "pending" ? ["수정 요청 전송 확인 중", "Checking whether the change request arrived"]
+    case "change-requested": return pr.changeRequest === "queued" ? ["수정 요청 전송 대기", "Change request queued"]
+      : pr.changeRequest === "pending" ? ["수정 요청 전송 확인 중", "Checking whether the change request arrived"]
       : ["수정 요청 보냄 · 새 커밋 대기", "Change request sent · Waiting for a new commit"];
     default: return githubWords.ready;
   }

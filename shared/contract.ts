@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { queueView } from "./busy-delivery";
 import { decisionSchema } from "./decision-actions";
 import { pullRequestViewSchema } from "./prs";
 import { trackedDecisionViewSchema } from "./tracked-decisions";
@@ -72,6 +73,7 @@ export const boardSnapshot = defineRpc({
     // Selected projects that open the same folder on disk share `rootKey`.
     projects: z.array(z.object({ id: z.string(), title: z.string(), path: z.string(), selected: z.boolean(),
       rootKey: z.string().optional(), temporary: z.boolean().optional(), operating: z.boolean().optional(), operatingActive: z.boolean().optional(), missing: z.literal(true).optional() })),
+    queuedConversations:z.array(queueView.extend({projectId:z.string(),sessionId:z.string(),version:z.string(),title:z.string()})).optional(),
     coordinator: sessionId.nullable(), coordinatorReach: coordinatorReachSchema.optional(), coordinatorTools: coordinatorToolsSchema.optional(), lastDigestAt: z.iso.datetime().optional(), clarifications:z.array(clarificationEntry).optional(), replyHistory: z.array(replyEntry).optional(), trackedDecisions: trackedDecisionViewSchema.optional(), pullRequests: pullRequestViewSchema.optional(),
     assignmentNotice: assignmentNotice.optional() }),
 });

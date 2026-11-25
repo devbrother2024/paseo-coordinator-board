@@ -3,6 +3,8 @@ import { z } from "zod";
 import { workImages } from "./work-images";
 import { questionBlockSchema } from "./question-block";
 
+export const changedDecisionMessage = "결정 카드 또는 수신자가 바뀌었습니다. 보드를 새로 고쳐 주세요. / The decision or recipient changed. Refresh the board.";
+
 export const decisionFields = z.object({
   question: z.string().trim().min(1).max(2000).optional(),
   recommendation: z.string().trim().min(1).max(2000).optional(),
@@ -14,6 +16,7 @@ export const decisionFields = z.object({
 });
 export const decisionSchema = decisionFields.extend({
   question: z.string().min(1),
+  deliverWhenIdle: z.boolean().optional(),
   questionMarkdown: z.string().max(2000).optional(),
   // Display only, outside the version: the text before the question and the options it names.
   contextMarkdown: z.string().max(2000).optional(),
@@ -38,6 +41,6 @@ export const decisionRequest = z.strictObject({
 export const sendDecision = defineRpc({
   name: "board.send-decision",
   input: decisionRequest.refine(input => !!input.text.trim() || !!input.images?.length, "Provide text or a photo."),
-  output: z.object({ ok: z.literal(true), recipientId: id, messageId: z.string().uuid() }),
+  output: z.object({ ok: z.literal(true), queued:z.literal(true).optional(), recipientId: id, messageId: z.string().uuid() }),
 });
 export type DecisionInput = z.input<typeof sendDecision.input>;

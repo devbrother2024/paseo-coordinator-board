@@ -55,17 +55,20 @@ export function recommendedTrackedReply(item: TrackedDecision) {
 // Where a card's one input is. Without questions it is the card's own. With one question it is that question's input.
 // With several, the card's input stays under them for a question, a change request or a note. A card tied to a session
 // question (and no questions of its own) uses the session card's input, and while the merge card takes a change request
-// the ledger side adds none.
+// the ledger side adds none, unless something was already written there.
 // Everything a card sends stays on screen: a reply written before a one-question card gained its question keeps its
 // editor, and a photo of a question that no longer exists has to be removed before sending.
 export function trackedDraftLayout<Photo extends { questionIndex?: number }>(
   item: Pick<TrackedDecision, "questions" | "matchedSessionId">, freeReply: string, photos: readonly Photo[], pullTakesInput = false,
 ) {
   const questions = item.questions.length;
-  const freeEditor = !pullTakesInput && (questions ? questions >= 2 : !item.matchedSessionId);
+  const written = !!freeReply.trim() || photos.some(photo => photo.questionIndex === undefined);
+  // The merge card's input takes over only while this side has nothing written. A draft or photo from before the merge
+  // input appeared keeps its editor, so it can still be read, sent or cleared.
+  const freeEditor = (!pullTakesInput || written) && (questions ? questions >= 2 : !item.matchedSessionId);
   return {
     freeEditor,
-    carried: questions > 0 && !freeEditor && (!!freeReply.trim() || photos.some(photo => photo.questionIndex === undefined)),
+    carried: questions > 0 && !freeEditor && written,
     orphaned: photos.filter(photo => photo.questionIndex !== undefined && photo.questionIndex >= questions),
   };
 }

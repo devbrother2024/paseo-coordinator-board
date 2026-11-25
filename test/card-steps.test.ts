@@ -203,7 +203,7 @@ test("steps sit under the recommendation and leave the folded evidence", () => {
   expect(card).toContain("visibleSteps(item.steps");
   // Rendered right after the one-line recommendation, before the reply form.
   expect(face.indexOf("steps.shown.map")).toBeGreaterThan(face.indexOf('t("추천", "Recommendation")'));
-  expect(face.indexOf("steps.shown.map")).toBeLessThan(face.indexOf("{queue && <View"));
+  expect(face.indexOf("steps.shown.map")).toBeLessThan(face.indexOf("{queue && <QueuedAnswer"));
 });
 
 test("the header shows how long the card waited and its due date only when it has one", () => {
