@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { OwnerHint } from "./remote-owner";
 import { closeSync, fstatSync, mkdirSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, parse } from "node:path";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
@@ -182,6 +183,13 @@ export class TrackedDecisionStore {
       }
     }
     return owners.size ? (owners.size === 1 ? [...owners][0] : null) : coordinator;
+  }
+
+  // Ledger cards that name this session on another host.
+  ownerHints(selected: Set<string>, sessionId: string): OwnerHint[] {
+    const {rows} = this.load(selected);
+    return [...rows.values()].flatMap(({item}) => item.sessionId === sessionId && item.sessionHost
+      ? [{sessionHost:item.sessionHost, projectId:item.projectId, mergeTarget:item.mergeTarget ?? null}] : []);
   }
 
   // First paint can show local titles while Paseo and GitHub resolve the actionable cards.

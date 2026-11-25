@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { applyPullJudgments, needsRunningConfirmation, ownerRunning, prunePullJudgments, pullColumn, pullJudgmentKey, pullStatusWords, type PullJudgment } from "../shared/pull-judgments";
+import { applyPullJudgments, needsRunningConfirmation, ownerRunning, prunePullJudgments, pullColumn, pullJudgmentKey, pullStatusWords, unknownStatusWords, type PullJudgment } from "../shared/pull-judgments";
 import type { PullRequestItem } from "../shared/prs";
 
 const head = "a".repeat(40);
@@ -119,4 +119,21 @@ test("without a coordinator GitHub decides, but a current non-ready verdict stil
   expect(applyPullJudgments([pr()], { ...off, judgments: judged("ready"), ledgerPulls: none })[0]).toMatchObject({ lane: "review", gate: "judged" });
   // Turning the setting off is the only way to ignore a current verdict.
   expect(applyPullJudgments([pr()], { enabled: false, coordinator: false, judgments: judged("blocked"), ledgerPulls: none })[0].gate).toBe("github");
+});
+
+test("each GitHub state has its own words, and status unknown is kept for lookups that failed", () => {
+  expect(pullStatusWords(pr({ reason: "computing", lane: "progress" }))).toEqual(["GitHub이 병합 가능 여부를 계산 중", "GitHub is still checking whether it can merge"]);
+  expect(pullStatusWords(pr({ reason: "review-required", lane: "progress" }))).toEqual(["리뷰 필요", "Review required"]);
+  expect(pullStatusWords(pr({ reason: "checks-pending", lane: "progress" }))[0]).toBe("검사 중");
+  expect(pullStatusWords(pr({ reason: "blocked", lane: "progress" }))[0]).toBe("병합 조건 대기");
+  expect(pullStatusWords(pr({ reason: "unknown", lane: "progress" }))[0]).toBe("상태 미확인");
+  expect(pullStatusWords(pr({ reason: "unknown", lane: "progress", detail: "gh-auth" }))).toEqual(["상태 미확인: 호스트의 gh 로그인 필요", "Status unknown: gh on the host needs to sign in"]);
+  expect(unknownStatusWords("unmapped")).toEqual(["상태 미확인: 저장소 연결 없음", "Status unknown: No repository linked"]);
+  expect(pullColumn(pr({ reason: "computing", lane: "progress" }))).toBe("running");
+  expect(pullColumn(pr({ reason: "review-required", lane: "progress" }))).toBe("review");
+});
+
+test("a verified remote owner's host is carried to the PR row", () => {
+  const [item] = applyPullJudgments([pr()], { ...on, judgments: judged("ready", { ownerSessionId: "far", ownerSessionHost: "peer-a" }), ledgerPulls: none });
+  expect(item.judgment).toMatchObject({ ownerSessionId: "far", ownerSessionHost: "peer-a" });
 });

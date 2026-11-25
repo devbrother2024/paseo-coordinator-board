@@ -1,10 +1,12 @@
 import { z } from "zod";
-import { commitSha, pullVerdict, repositorySlug, type PullGate, type PullRequestItem } from "./prs";
+import { commitSha, pullVerdict, repositorySlug, type PullDetail, type PullGate, type PullRequestItem } from "./prs";
 
 export const MAX_PULL_JUDGMENTS = 500;
 export const pullJudgmentSchema = z.object({
   repo: repositorySlug, number: z.number().int().positive(), headSha: commitSha, verdict: pullVerdict,
   reason: z.string().trim().min(1).max(300), ownerSessionId: z.string().min(1).max(256).optional(),
+  // The host where the board verified a remote owner (its serverId). Absent for a session on this host.
+  ownerSessionHost: z.string().min(1).max(256).optional(),
   at: z.iso.datetime(), coordinator: z.string(),
 });
 export type PullJudgment = z.output<typeof pullJudgmentSchema>;
@@ -30,6 +32,7 @@ export function applyPullJudgments<T extends PullRequestItem>(items: readonly T[
     const judgment = current && {
       verdict: current.verdict, reason: current.reason, at: current.at,
       ...(current.ownerSessionId ? { ownerSessionId: current.ownerSessionId } : {}),
+      ...(current.ownerSessionHost ? { ownerSessionHost: current.ownerSessionHost } : {}),
     };
     if (pr.reason !== "ready") return { ...pr, lane: "progress", ...(judgment ? { judgment } : {}) } as T;
     let gate: PullGate;
@@ -60,7 +63,7 @@ export type PullColumn = "human" | "review" | "running";
 export function pullColumn(pr: Pick<PullRequestItem, "lane" | "reason" | "gate" | "judgment">): PullColumn {
   if (pr.lane === "review") return "human";
   if (pr.gate === "needs-changes" || pr.gate === "blocked" || pr.gate === "stale") return "review";
-  if (["conflict", "checks-failed", "changes-requested", "blocked", "unknown"].includes(pr.reason)) return "review";
+  if (["conflict", "checks-failed", "changes-requested", "review-required", "blocked", "unknown"].includes(pr.reason)) return "review";
   return "running";
 }
 
@@ -68,15 +71,45 @@ const githubWords = {
   ready: ["병합 검토 가능", "Ready for merge review"], draft: ["초안", "Draft"],
   conflict: ["충돌 해결 필요", "Conflicts to resolve"], "checks-failed": ["검사 실패", "Checks failed"],
   "checks-pending": ["검사 중", "Checks pending"], "changes-requested": ["수정 요청", "Changes requested"],
-  blocked: ["병합 조건 대기", "Merge requirements pending"], unknown: ["상태 미확인", "Status unknown"],
+  "review-required": ["리뷰 필요", "Review required"],
+  blocked: ["병합 조건 대기", "Merge requirements pending"],
+  computing: ["GitHub이 병합 가능 여부를 계산 중", "GitHub is still checking whether it can merge"],
+  // Only when the board could not read the PR from GitHub.
+  unknown: ["상태 미확인", "Status unknown"],
   "auto-merge": ["자동 병합 대기", "Auto-merge enabled"],
 } as const satisfies Record<PullRequestItem["reason"], readonly [string, string]>;
 export const githubStatusWords: Record<PullRequestItem["reason"], readonly [string, string]> = githubWords;
 
+// Why a PR reads as status unknown, or why its lifecycle could not be read.
+export const pullDetailWords: Record<PullDetail | "scope" | "unmapped" | "off", readonly [string, string]> = {
+  "gh-missing": ["호스트에서 gh를 찾지 못함", "gh was not found on the host"],
+  "gh-auth": ["호스트의 gh 로그인 필요", "gh on the host needs to sign in"],
+  timeout: ["GitHub 응답 시간 초과", "GitHub took too long to answer"],
+  network: ["GitHub에 연결하지 못함", "Could not reach GitHub"],
+  "lookup-failed": ["GitHub 조회 실패", "GitHub lookup failed"],
+  closed: ["조회하는 사이 PR이 닫힘", "The PR closed while the board was reading it"],
+  "still-computing": ["GitHub이 병합 가능 여부를 계산하지 못함, 잠시 뒤 다시 확인", "GitHub has not worked out mergeability yet. The board checks again shortly"],
+  "check-result": ["결과가 없는 검사가 있음", "A check finished without a result"],
+  "review-state": ["알 수 없는 리뷰 상태", "Unrecognized review state"],
+  "merge-state": ["알 수 없는 병합 상태", "Unrecognized merge state"],
+  scope: ["관리 프로젝트의 저장소 연결과 다름", "Not the repository linked to this managed project"],
+  unmapped: ["저장소 연결 없음", "No repository linked"],
+  off: ["PR 조회 꺼짐", "PR lookup is off"],
+};
+
+// "Status unknown" always comes with its reason when the board knows it.
+export function unknownStatusWords(detail: keyof typeof pullDetailWords | undefined): readonly [string, string] {
+  const [ko, en] = githubWords.unknown;
+  if (!detail) return [ko, en];
+  const [why, whyEn] = pullDetailWords[detail];
+  return [`${ko}: ${why}`, `${en}: ${whyEn}`];
+}
+
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 300);
 
 // Korean and English status for a PR card. GitHub reasons come first unless GitHub says ready.
-export function pullStatusWords(pr: Pick<PullRequestItem, "reason" | "gate" | "judgment">): readonly [string, string] {
+export function pullStatusWords(pr: Pick<PullRequestItem, "reason" | "gate" | "judgment" | "detail">): readonly [string, string] {
+  if (pr.reason === "unknown") return unknownStatusWords(pr.detail);
   if (pr.reason !== "ready") return githubWords[pr.reason];
   const reason = pr.judgment ? oneLine(pr.judgment.reason) : "";
   switch (pr.gate) {

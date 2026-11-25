@@ -151,9 +151,11 @@ function Column({lane,entries,theme}: {lane:ColumnKind;entries:Entry[];theme:The
 
 export type Followup = {entry:ReplyEntry; kind:FollowupKind};
 type Props = Actions & {projectId:string; title:string; followups?:Followup[]; now:number; historyLinks:HistoryLinks; openRemote?:(host:string,id:string)=>void; decisions:number; cards:Card[]; records:TrackedDecision[]; requests:PullRequestItem[];
+  // Merge cards whose PR the board could not read. They wait here with the reason.
+  waiting?:TrackedDecision[]; renderWaiting?:(item:TrackedDecision)=>ReactNode;
   renderRecord:(item:TrackedDecision)=>ReactNode; theme:Theme; compact:boolean; recordLinks:(item:TrackedDecision)=>TrackedSessionLinks; renderPull:(pr:PullRequestItem,projectId:string)=>ReactNode};
 
-export function Project({projectId,title,decisions,cards,records,followups=[],now,historyLinks,openRemote,requests,renderRecord,theme,compact,recordLinks,renderPull,...actions}:Props) {
+export function Project({projectId,title,decisions,cards,records,waiting=[],renderWaiting,followups=[],now,historyLinks,openRemote,requests,renderRecord,theme,compact,recordLinks,renderPull,...actions}:Props) {
   const {t} = useBoardLanguage();
   const [width,setWidth] = useState(0);
   const groups:Record<ColumnKind,Entry[]> = {running:[],review:[],human:[],idle:[],done:[],unknown:[]};
@@ -172,6 +174,7 @@ export function Project({projectId,title,decisions,cards,records,followups=[],no
     const lane = pullColumn(pr);
     groups[lane].push({key:pr.url,content:renderPull(pr,projectId)});
   }
+  if (renderWaiting) for(const item of waiting) groups.review.push({key:"waiting:"+item.key,content:renderWaiting(item)});
   for(const {entry,kind} of followups) groups.review.push({key:"reply:"+entry.key,content:<ReplyFollowupCard entry={entry} kind={kind}
     links={historyLinks(entry)} now={now} theme={theme} open={actions.onOpen} openRemote={openRemote} />});
   const lanes=KANBAN_ORDER.filter(lane=>groups[lane].length);
