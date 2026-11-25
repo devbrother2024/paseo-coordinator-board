@@ -7,7 +7,7 @@ import { splitQuestionBlock, type QuestionBlock } from "../shared/question-block
 import { withAssignmentHost } from "./host-assignment";
 import { waitsForIdle } from "../shared/busy-delivery";
 import { questionIn, turnQuestion } from "./turn-question";
-import { questionContext, questionNotice, scanQuestions, settlingLines, type AssistantEvent, type FoundQuestion, type QuestionContext,
+import { mainQuestion, questionContext, questionNotice, scanQuestions, settlingLines, type AssistantEvent, type FoundQuestion, type QuestionContext,
   type LedgerView, type QuestionEvent, type QuestionScan } from "./open-questions";
 
 type Sdk = PluginHandlerContext["paseo"];
@@ -63,6 +63,8 @@ export function excerpt(page: Page): Evidence {
         lastInputSender = item.agentMessage.sender.id;
         deliveries.push({ id:item.callId.slice(prefix.length), sender:item.agentMessage.sender.id,
           bodyHash:createHash("sha256").update(item.agentMessage.text).digest("hex") });
+        events.push({ role: "relay", seq: seqEnd, sender: item.agentMessage.sender.id, id: item.callId.slice(prefix.length),
+          text: item.agentMessage.text.slice(0, 4000), ...(timestamp ? { at: timestamp } : {}) });
       }
     }
     if (item.type !== "assistant_message" && item.type !== "user_message") continue;
@@ -175,7 +177,7 @@ export function questionDetails(item: FoundQuestion) {
 
 /** The open question of an excerpt with the text before it and the options it names. */
 export function conversationQuestionDetails(evidence: Evidence, coordinatorDigest = false, context: QuestionContext = {}) {
-  const main = scanQuestions(withEvents(evidence), coordinatorDigest, context).open.at(-1);
+  const main = mainQuestion(scanQuestions(withEvents(evidence), coordinatorDigest, context));
   return main ? questionDetails(main) : null;
 }
 
@@ -195,7 +197,7 @@ export function classify(e: Evidence, row: SessionRow, decision?: Preferences["j
 
 // The card for the latest open question. Older open questions ride along on it.
 function asked(scan: QuestionScan, ended: boolean, now?: number): Candidate | null {
-  const main = scan.open.at(-1);
+  const main = mainQuestion(scan);
   const notice = questionNotice(scan, ended, now);
   if (!main || !notice) return null;
   return { lane: "human", detail: "세션의 확인 요청 · " + main.question, ...(main.askedAt ? { decisionRequestedAt: main.askedAt } : {}), keptQuestion: notice };

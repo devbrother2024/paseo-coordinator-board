@@ -18,7 +18,10 @@ Intent: [intent.md](intent.md)
 
 ### 2.1 확정 근거
 
-`sticky-conversation-question`의 닫힘 근거는 그대로다(board, session, choice, ledger, person).
+`sticky-conversation-question`의 닫힘 근거는 그대로다(board, session, choice, ledger, person). 더한 것(후속 고침):
+
+- relayed: 질문 뒤에 지금 코디네이터가 출처를 붙여 보낸 메시지의 답 줄(`Q1 · …: A · …`, `Q1 A`, 한 줄의 이름표)만 골라, 사람 글과 같은 판정으로 그 질문의 선택지·추천 답과 맞으면 닫는다. 닫힘 기록에 보낸 세션(`by`)과 메시지 ID(`messageId`). 다른 세션의 메시지는 근거가 아니고, 그 앞에 나온 질문 둘 이상에 맞으면 닫지 않는다. 보드는 설계 세션을 알지 못하므로 코디네이터만 본다.
+- 원장 카드 연결: `sessionMatch`(지금처럼 원장 카드 안에 대화 카드를 품음)에 더해, 같은 세션(`sessionId`)에 질문 글(정규화: `Q1 ·` 이름표, 대소문자, 공백, 문장부호 무시)이 같은 원장 카드도 그 질문을 맡는다(`heldByLedger`). 이 경우 원장 카드가 열려 있는 동안 대화 카드는 그 질문을 보이지 않고(원장 카드 우선), 코디네이터 판단 알림에서도 뺀다. 그 원장 카드 개정의 해결 영수증으로 닫히고, 해결 없이 빠지면 대화 카드로 돌아온다.
 
 ### 2.2 판단 필요
 

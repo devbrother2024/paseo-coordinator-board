@@ -8,6 +8,7 @@ import { verifiedBoardFact } from "../server/board-facts";
 import { snapshotHoldSessions } from "../shared/merge-hold";
 import { applyDoneNotes, decorateDecision } from "../server/session-decisions";
 import { PreferenceStore } from "../server/preferences";
+import { questionWords } from "../server/open-questions";
 import { answersChoices, closeQuestionByPerson, ledgerCardId, ledgerQuestionsBySession, questionContext, recordDisplay, saveScan, settlingLines } from "../server/open-questions";
 import { TrackedDecisionStore } from "../server/tracked-decisions";
 import { keptQuestionNotice } from "../client/kept-question";
@@ -37,7 +38,9 @@ const blockAsk: Step = ["assistant", "Pick a cache.\n\n```board-question\n" + JS
   options: [{ key: "A", text: "Memory", recommended: true }, { key: "B", text: "Disk" }] }], recommendedReply: "Use memory for now." }) + "\n```", 1];
 
 type Ledger = { cards: Record<string, string>; resolved?: string[] };
-const ledgerView = (ledger?: Ledger) => ledger && { questions: new Map([["worker", new Map(Object.entries(ledger.cards))]]),
+// Cards linked by an explicit sessionMatch: the ledger card shows the session's card inside it (`owns: false`).
+const ledgerView = (ledger?: Ledger) => ledger && { questions: new Map([["worker", new Map(Object.entries(ledger.cards)
+  .map(([question, card]) => [questionWords(question), { card, owns: false }]))]]),
   ...(ledger.resolved ? { resolved: new Set(ledger.resolved) } : {}) };
 /** Shows the card the way a snapshot does, and saves what it found. */
 function snapshot(scope: any, e: ReturnType<typeof evidence> | null, target = row(), ledgerCards?: Ledger) {

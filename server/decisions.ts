@@ -1,5 +1,5 @@
 import { applyDoneNotes, decorateDecision, restoreClarifiedDecision } from "./session-decisions";
-import { questionContext } from "./open-questions";
+import { mainQuestion, questionContext } from "./open-questions";
 import { join } from "node:path";
 import { SessionPhotoStore } from "./session-photos";
 import { describePhotos, photoReceiptId, saveLocalPhotos, readLocalPhoto, removeLocalPhotos } from "./reply-photos";
@@ -176,7 +176,7 @@ export class DecisionSender {
     // A bare reply joins the session's current turn only while the card's question is its latest message and nothing came
     // in after it. Otherwise the turn may be about something else: the reply waits for the turn to end and then goes
     // with the card information that binds it to the question.
-    const asked = row.decision.source === "conversation" ? scanOf(row)?.open.at(-1) : undefined;
+    const asked = row.decision.source === "conversation" ? mainQuestion(scanOf(row)) : undefined;
     const lastEvent = evidence.events?.at(-1);
     const bare = !restored &&
       (!asked || (!!asked.turn && lastEvent?.role === "assistant" && lastEvent.seq === asked.turn.seq && !evidence.laterInput));

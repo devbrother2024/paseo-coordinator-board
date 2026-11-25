@@ -38,6 +38,8 @@ export const raisedQuestionSchema = z.object({
   maybeAnswered: z.literal(true).optional(), moved: z.literal(true).optional(),
   // The ledger card the question moved to.
   movedTo: z.string().max(6000).optional(),
+  // A ledger card for the same session and the same question holds it: only the ledger card shows it.
+  heldByLedger: z.literal(true).optional(),
   // Why the coordinator should judge whether it was handled, while it has not.
   judge: z.enum(["others-open", "spoke-after", "person-wrote", "session-ended"]).optional(),
   // The coordinator's judgment that it still needs the person.
@@ -60,7 +62,9 @@ const raisedSession = z.object({
 });
 export type RaisedSession = z.output<typeof raisedSession>;
 const closedQuestion = z.object({
-  sessionId: z.string(), at: z.iso.datetime(), reason: z.enum(["board", "session", "choice", "ledger", "person", "coordinator"]),
+  sessionId: z.string(), at: z.iso.datetime(), reason: z.enum(["board", "session", "choice", "ledger", "person", "coordinator", "relayed"]),
+  // A relayed answer: the message that carried it (its sender is in `by`).
+  messageId: z.string().max(512).optional(),
   // A coordinator's judgment: its evidence, who judged, and the question for recent decisions.
   evidence: z.string().max(2000).optional(), by: z.string().max(256).optional(),
   question: z.string().max(340).optional(), projectId: z.string().max(4096).optional(),

@@ -182,7 +182,8 @@ A question the board finds in a session's conversation stays as a card until som
 
 - A reply you sent from that card on the board arrived in the session.
 - The session says it handled it, on its own line in a later message: `결정 반영: <요약>`, `Decision applied: <summary>`, or, when it moved the question to the ledger, `질문은 카드 <name>로 옮김` or `question moved to card <name>`. Lines inside code blocks or quotes do not count.
-- The same question moved to a ledger card and that ledger card was resolved. While the ledger card is open, it shows the question, and if it leaves the ledger without a resolution the question returns to its conversation card.
+- The coordinator relayed your answer to the session with its source, and an answer line in that message (`Q1 · question: A · text`, `Q1 A`, …) matches an option of the card. For example, you answered a ledger card and the coordinator passed your answer on. A message from any other session is not evidence, and an answer that fits two or more open questions closes none.
+- The same question moved to a ledger card and that ledger card was resolved. Besides a card the coordinator linked with `sessionMatch`, a ledger card for the same session (`sessionId`) with the same question words also takes the question; while it is open only the ledger card shows it. While the ledger card is open, it shows the question, and if it leaves the ledger without a resolution the question returns to its conversation card.
 - The coordinator reads the session's record, judges that it was handled, and records that with evidence (below).
 - What you wrote to the session yourself matches an option or the recommended reply of the card (for example `Q1 A`, `(b)`, an option's text, or the recommended reply). A question block with several questions needs every question answered, and an answer that fits two or more open questions closes none of them.
 

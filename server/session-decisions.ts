@@ -3,7 +3,7 @@ import { sourceQuestion } from "../shared/clarifications";
 import type { Note, SessionRow } from "../shared/contract";
 import type { Decision } from "../shared/decision-actions";
 import { questionDetails, scanOf, type Evidence } from "./conversation";
-import { questionContext, scanQuestions } from "./open-questions";
+import { mainQuestion, questionContext, scanQuestions } from "./open-questions";
 import type { Preferences } from "./preferences";
 
 /**
@@ -36,7 +36,7 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
     const structured = judgment?.kind === "question" && judgment.evidenceId === row.evidenceId && judgment.projectId === row.projectId;
     content = structured
       ? { ...judgment.content, source: "coordinator", question: judgment.content?.question || judgment.text }
-      : { source: "conversation", question: (row.keptQuestion && scanOf(row)?.open.at(-1)?.question) || row.detail.replace(/^세션의 확인 요청 · /, "") };
+      : { source: "conversation", question: (row.keptQuestion && mainQuestion(scanOf(row))?.question) || row.detail.replace(/^세션의 확인 요청 · /, "") };
   } else if (noteQuestion && !answeredNote && row.status === "idle" && row.evidenceId) {
     content = { source: note.origin === "agent" ? "agent-note" : "person-note", question: note.text };
   } else {
@@ -62,7 +62,7 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
     if (content.source !== "permission" && evidence?.deliverWhenIdle) row.decision.deliverWhenIdle = true;
     const scan = content.source !== "conversation" ? undefined
       : scanOf(row) ?? (evidence ? scanQuestions(evidence, row.id === prefs.coordinator, questionContext(prefs, row.id)) : undefined);
-    const main = scan?.open.at(-1);
+    const main = mainQuestion(scan);
     if (main) {
       const excerpt = questionDetails(main);
       // Display-only fields stay out of the version, so new context never reopens an answered card.
