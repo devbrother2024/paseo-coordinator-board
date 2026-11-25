@@ -36,6 +36,7 @@ import { discoverBoardSessions } from "./server/board-sessions";
 import { withAssignmentHost } from "./server/host-assignment";
 import { judgedMergeCardOptions, judgePullTool, registerMergeJudgmentSettings } from "./server/pull-judgments";
 import { applyPullJudgments } from "./shared/pull-judgments";
+import { changeRequestHistory, PullChangeRequests } from "./server/pull-change-requests";
 import { operatingDirectories, operatingDirectory } from "./server/operating-folders";
 import { CoordinatorToolStamps, readCoordinatorTools } from "./server/coordinator-tools";
 import { coveredSessionIds, decorateReviewWait, reviewWaitThreshold } from "./server/review-wait";
@@ -122,7 +123,7 @@ export default function contribute(server: PluginServerContext) {
       covered: coveredSessionIds(trackedDecisions.items), judgments: latest.judgments });
     // Ledger matching above sees GitHub readiness. Only then may coordinator verdicts move merge cards.
     pullRequests.items = applyPullJudgments(pullRequests.items, {
-      ...judgedMergeCardOptions(latest), judgments: latest.pullJudgments,
+      ...judgedMergeCardOptions(latest), judgments: latest.pullJudgments, changeRequests: latest.pullChangeRequests,
       ledgerPulls: new Set(trackedDecisions.items.flatMap(item => item.matchedPull ? [pullKey(item.matchedPull.repo, item.matchedPull.number)] : [])),
     });
     if (tracked.hasWaitingReplies()) {
@@ -156,6 +157,11 @@ export default function contribute(server: PluginServerContext) {
     }
     if (updates.size) prefs.change(current => {
       for (const [id,text] of updates) if (current.decisionReceipts[id]) current.decisionReceipts[id].response = text;
+    });
+    const changes = changeRequestHistory(latest, selected, evidence);
+    activity.push(...changes.entries);
+    if (changes.responses.size) prefs.change(current => {
+      for (const [key,text] of changes.responses) if (Object.hasOwn(current.pullChangeRequests, key)) current.pullChangeRequests[key].response = text;
     });
     for (const entry of activity) {
       const id = entry.recipientId ?? entry.pullMerge?.notification?.recipientId;
@@ -261,6 +267,7 @@ export default function contribute(server: PluginServerContext) {
     }
   });
   prs.register(server, invalidateCount,mergeNotifications);
+  new PullChangeRequests(prefs, sdk => buildSnapshot(sdk)).register(server, invalidateCount);
   registerMergeJudgmentSettings(server, prefs, invalidateCount);
   const onRecipientAvailable = async (event: {agent?: {id:string}}, context: PluginHandlerContext) => {
     if (!event.agent?.id) return;

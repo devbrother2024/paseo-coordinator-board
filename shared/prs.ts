@@ -23,8 +23,9 @@ export const pullVerdict = z.enum(["ready", "needs-changes", "in-progress", "blo
 export type PullVerdict = z.infer<typeof pullVerdict>;
 // Why a GitHub-ready PR is or is not a merge card: github (setting off or no coordinator),
 // ledger (a coordinator ledger merge card), judged (ready verdict on this head), awaiting
-// (no verdict), stale (verdict on an older head), or the coordinator's other verdicts.
-export const pullGate = z.enum(["github", "ledger", "judged", "awaiting", "stale", "needs-changes", "in-progress", "blocked"]);
+// (no verdict), stale (verdict on an older head), the coordinator's other verdicts, or change-requested
+// (the person sent a change request about this head from the merge card).
+export const pullGate = z.enum(["github", "ledger", "judged", "awaiting", "stale", "needs-changes", "in-progress", "blocked", "change-requested"]);
 export type PullGate = z.infer<typeof pullGate>;
 const pull = z.object({
   repo:repositorySlug, number:z.number().int().positive(), title:z.string(), url:z.string().url(),

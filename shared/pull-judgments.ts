@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { commitSha, pullVerdict, repositorySlug, type PullDetail, type PullGate, type PullRequestItem } from "./prs";
+import { holdsMergeCard, type PullChangeRequest } from "./pull-change-requests";
 
 export const MAX_PULL_JUDGMENTS = 500;
 export const pullJudgmentSchema = z.object({
@@ -20,6 +21,8 @@ type Options = {
   judgments: Record<string, PullJudgment>;
   // PRs that a coordinator ledger merge card already raised for the person.
   ledgerPulls: ReadonlySet<string>;
+  // Change requests the person sent from merge cards, by PR.
+  changeRequests?: Record<string, Pick<PullChangeRequest, "headSha" | "at" | "status" | "withdrawnAt">>;
 };
 
 // Decide which GitHub-ready PRs become merge cards. Everything else stays in project progress.
@@ -35,8 +38,12 @@ export function applyPullJudgments<T extends PullRequestItem>(items: readonly T[
       ...(current.ownerSessionHost ? { ownerSessionHost: current.ownerSessionHost } : {}),
     };
     if (pr.reason !== "ready") return { ...pr, lane: "progress", ...(judgment ? { judgment } : {}) } as T;
+    const asked = options.changeRequests && Object.hasOwn(options.changeRequests, key) ? options.changeRequests[key] : undefined;
     let gate: PullGate;
-    if (!options.enabled) gate = "github";
+    // The person asked for changes on this head instead of merging. That holds whatever the verdict setting says,
+    // until a new head or a later verdict on the same head.
+    if (holdsMergeCard(asked, pr.headSha, current?.at)) gate = "change-requested";
+    else if (!options.enabled) gate = "github";
     // A verdict bound to this exact head is the most specific evidence, even over a ledger card.
     // It still holds while no coordinator is designated.
     else if (current) gate = current.verdict === "ready" ? "judged" : current.verdict;
@@ -62,7 +69,7 @@ export type PullColumn = "human" | "review" | "running";
 // Project kanban column for a PR that is not covered by a ledger card.
 export function pullColumn(pr: Pick<PullRequestItem, "lane" | "reason" | "gate" | "judgment">): PullColumn {
   if (pr.lane === "review") return "human";
-  if (pr.gate === "needs-changes" || pr.gate === "blocked" || pr.gate === "stale") return "review";
+  if (pr.gate === "needs-changes" || pr.gate === "blocked" || pr.gate === "stale" || pr.gate === "change-requested") return "review";
   if (["conflict", "checks-failed", "changes-requested", "review-required", "blocked", "unknown"].includes(pr.reason)) return "review";
   return "running";
 }
@@ -120,6 +127,7 @@ export function pullStatusWords(pr: Pick<PullRequestItem, "reason" | "gate" | "j
     case "blocked": return reason ? [`막힘: ${reason}`, `Blocked: ${reason}`] : ["막힘", "Blocked"];
     case "judged": return ["코디네이터 확인 · 병합 검토 가능", "Coordinator checked · Ready for merge review"];
     case "ledger": return ["코디네이터 병합 안건", "Coordinator merge request"];
+    case "change-requested": return ["수정 요청 보냄 · 새 커밋 대기", "Change request sent · Waiting for a new commit"];
     default: return githubWords.ready;
   }
 }

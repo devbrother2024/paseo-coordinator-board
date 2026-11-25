@@ -137,3 +137,26 @@ test("a verified remote owner's host is carried to the PR row", () => {
   const [item] = applyPullJudgments([pr()], { ...on, judgments: judged("ready", { ownerSessionId: "far", ownerSessionHost: "peer-a" }), ledgerPulls: none });
   expect(item.judgment).toMatchObject({ ownerSessionId: "far", ownerSessionHost: "peer-a" });
 });
+
+test("a change request on the current head takes the merge card down until a new head, a later verdict or a withdrawal", () => {
+  const asked = (extra = {}) => ({ [pullJudgmentKey("org/example", 7)]: { headSha: head, at: "2026-11-24T02:00:00.000Z", status: "sent" as const, ...extra } });
+  const [item] = applyPullJudgments([pr()], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: asked() });
+  expect(item).toMatchObject({ lane: "progress", gate: "change-requested" });
+  expect(pullStatusWords(item)).toEqual(["수정 요청 보냄 · 새 커밋 대기", "Change request sent · Waiting for a new commit"]);
+  expect(pullColumn(item)).toBe("review");
+  // It is the person's own act, so it holds with the verdict setting off, without a coordinator, and over a ledger card.
+  expect(applyPullJudgments([pr()], { enabled: false, coordinator: false, judgments: {}, ledgerPulls: none, changeRequests: asked() })[0].gate).toBe("change-requested");
+  expect(applyPullJudgments([pr()], { ...on, judgments: {}, ledgerPulls: new Set([pullJudgmentKey("org/example", 7)]), changeRequests: asked() })[0].gate).toBe("change-requested");
+  // A new head: the request no longer applies, and the earlier verdict is stale as before.
+  expect(applyPullJudgments([pr({ headSha: newer })], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: asked() })[0].gate).toBe("stale");
+  // A verdict the coordinator wrote after the request, on the same head, is the newer word.
+  const later = judged("ready", { at: "2026-11-24T03:00:00.000Z" });
+  expect(applyPullJudgments([pr()], { ...on, judgments: later, ledgerPulls: none, changeRequests: asked() })[0]).toMatchObject({ lane: "review", gate: "judged" });
+  expect(applyPullJudgments([pr()], { ...on, judgments: judged("needs-changes", { at: "2026-11-24T03:00:00.000Z" }), ledgerPulls: none, changeRequests: asked() })[0].gate).toBe("needs-changes");
+  // Withdrawn or not yet confirmed as sent: the merge card stays.
+  expect(applyPullJudgments([pr()], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: asked({ withdrawnAt: "2026-11-24T02:30:00.000Z" }) })[0].gate).toBe("judged");
+  expect(applyPullJudgments([pr()], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: asked({ status: "pending" }) })[0].gate).toBe("judged");
+  // A PR GitHub does not call ready keeps GitHub's reason.
+  expect(applyPullJudgments([pr({ reason: "checks-failed", lane: "progress" })], { ...on, judgments: {}, ledgerPulls: none, changeRequests: asked() })[0].gate).toBeUndefined();
+  expect(applyPullJudgments([pr()], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: {} })[0].gate).toBe("judged");
+});

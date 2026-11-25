@@ -12,6 +12,7 @@ import { factSchema } from "../shared/board-facts";
 import { assignmentPolicy, hostIdentity } from "../shared/host-assignment";
 import { assignmentLocation, assignmentNotice } from "../shared/dispatch-hosts";
 import { pullJudgmentSchema } from "../shared/pull-judgments";
+import { pullChangeRequestSchema } from "../shared/pull-change-requests";
 import { conversationIdPattern } from "../shared/coordinator-tools";
 
 export const judgment = z.object({
@@ -31,6 +32,8 @@ const schema = z.object({
   // Merge cards need a coordinator verdict on the PR head unless the person turns this off.
   judgedMergeCards: z.boolean().default(true),
   pullJudgments: z.record(z.string(), pullJudgmentSchema).default({}),
+  // Change requests the person sent from merge cards, the newest one for each PR.
+  pullChangeRequests: z.record(z.string(), pullChangeRequestSchema.extend({ response: z.string().optional() })).default({}),
   lastDigest: z.object({ at: z.iso.datetime(), coordinator: z.string(), turnId: z.string() }).optional(),
   factHistory: z.record(z.string(), factSchema).default({}),
   workRequestIds: z.record(z.string(), z.string().uuid()).default({}),

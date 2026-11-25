@@ -89,3 +89,14 @@ test("review waits run on the settled list: a session named only by a merged car
   expect(coveredSessionIds([merged]).has("worker")).toBe(true);
   expect(coveredSessionIds(items).has("worker")).toBe(false);
 });
+
+test("a ledger merge card waits with its PR after a change request", () => {
+  const matched = card({ matchedPull: { repo: "example/app", number: 12 } });
+  const asked = pull({ reason: "ready", lane: "progress", gate: "change-requested" });
+  expect(waitingMergeCard(matched, view([asked]))).toEqual({ pr: asked });
+  expect(waitingMergeCard(card(), view([asked]))).toEqual({ pr: asked });
+  const trackedDecisions = { items: [matched], status: "ok" as const };
+  expect(decisionCount({ sessions: [], notes: {}, trackedDecisions, pullRequests: view([asked]) })).toBe(0);
+  // With a new head the PR is judged again, and the card follows the PR as before.
+  expect(decisionCount({ sessions: [], notes: {}, trackedDecisions, pullRequests: view([pull({ reason: "ready", lane: "review", gate: "judged" })]) })).toBe(1);
+});

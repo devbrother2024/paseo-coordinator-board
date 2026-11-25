@@ -11,9 +11,12 @@ type MergeCard = Pick<TrackedDecision, "kind" | "mergeTarget" | "matchedPull" | 
 // board has not confirmed yet (settleMergeCards moves confirmed ones out first), and boards without PR data keep their place.
 export function waitingMergeCard(item: MergeCard, view: PullRequestView | undefined): MergeWait | null {
   const target = item.mergeTarget;
-  if (!view || item.kind !== "merge" || !target || item.matchedPull) return null;
+  if (!view || item.kind !== "merge" || !target) return null;
   const pr = view.items.find(p => p.repo === target.repo && p.number === target.number &&
     (item.projectId === null || p.projectIds.includes(item.projectId)));
+  // The person asked for changes on this head from the merge card, so the card waits with its PR row.
+  if (pr?.gate === "change-requested") return { pr };
+  if (item.matchedPull) return null;
   if (pr) return pr.reason === "ready" ? null : { pr };
   const sources = view.projects.filter(p => p.repo === target.repo && (item.projectId === null || p.projectId === item.projectId));
   if (sources.some(p => p.status === "ok" || p.status === "truncated")) return null;
