@@ -174,3 +174,4 @@ Spec: [spec.md](spec.md)
 | [busy-session-delivery](busy-session-delivery/intent.md) | 승인 | 세션 | 작업 중인 세션에 현재 질문의 답을 보내고 대기 중인 답은 병렬 검토를 요청할 수 있다 |
 | [stable-coordinator-tools](stable-coordinator-tools/intent.md) | 구현됨 (PR #62) | 세션 | 코디네이터 도구를 계약으로 고정하고, 새 기능은 안내 도구와 범용 도구로 내어 운영 중인 대화를 그대로 쓴다 |
 | [single-card-input](single-card-input/intent.md) | 승인 | 세션 | 카드마다 입력창 하나로 답·질문·수정 요청을 보내고, 병합 카드 수정 요청과 세션 글의 질문 블록을 더한다 |
+| [sticky-conversation-question](sticky-conversation-question/intent.md) | 승인 | 세션 | 세션이 사람에게 물은 뒤 다른 세션의 보고에 답해도, 사람이 답하거나 질문이 닫힐 때까지 대화 카드를 남긴다 |
