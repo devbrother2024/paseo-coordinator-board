@@ -1,3 +1,4 @@
+import { supportsSteer } from "../shared/busy-delivery";
 import { createHash } from "node:crypto";
 import { readPages } from "../shared/pages";
 export { readPages } from "../shared/pages";
@@ -12,12 +13,11 @@ type Entry = AgentPage["entries"][number];
 type WorkspacePage = Awaited<ReturnType<Sdk["workspaces"]["list"]>>;
 type Workspace = WorkspacePage["entries"][number];
 
-// Only foreground coordinators with native mid-turn input can accept another
-// card immediately. Other providers and ordinary workers wait for idle.
-export function canReceiveBoardInput(agent:Pick<Entry["agent"],"status"|"activeTurn"|"pendingPermissions"|"attentionReason"|"provider">, coordinator:boolean) {
+// Callers opt in to active-turn delivery only for operations that permit it.
+export function canReceiveBoardInput(agent:Pick<Entry["agent"],"status"|"activeTurn"|"pendingPermissions"|"attentionReason"|"provider">, allowActive:boolean) {
   if (agent.pendingPermissions.length || agent.attentionReason==="permission" || agent.attentionReason==="error") return false;
   if (agent.status==="idle" && !agent.activeTurn) return true;
-  return coordinator && agent.status==="running" && !!agent.activeTurn && (agent.provider==="claude" || agent.provider==="codex");
+  return allowActive && agent.status==="running" && !!agent.activeTurn && supportsSteer(agent.provider);
 }
 
 export function permissionVersion(agent: Entry["agent"]) {

@@ -1,3 +1,4 @@
+import { QueuedAnswer } from "./queued-answer";
 import { useDecisionInteraction } from "./decision-editing";
 import { DecisionReplyInput } from "./decision-reply";
 import { SendButton } from "./send-input";
@@ -459,15 +460,9 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
         onPress={() => setStepsOpen(open => !open)} />}
     </View>}
     {!canReply && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{ledgerHistoryUnavailableText(t)}</Text>}
-    {queue && <View style={{gap:5, padding:10, borderRadius:7, backgroundColor:c.surface0}}>
-      {canReply && <Text accessibilityLiveRegion="polite" style={{color:queue.stopped ? c.statusWarning : c.foreground,fontWeight:"600"}}>
-        {queue.stopped ? t("자동 전송 중단 · 카드와 수신 세션을 확인해 주세요.", "Delivery paused. Check the card and its recipient.")
-          : t("전송 대기 · 세션이 준비되면 자동으로 보냅니다.", "Queued · sends automatically when the session is ready.")}
-      </Text>}
-      {!!queue.answer && <Text selectable style={{color:c.foreground}}>{queue.answer}</Text>}
-      {!!queue.imageCount && <Text style={{color:c.foregroundMuted}}>{t("첨부 사진 "+queue.imageCount+"장","Attached photos · "+queue.imageCount)}</Text>}
-      <View style={wrap}><Button theme={theme} {...named(t("전송 대기 취소","Cancel queued reply"))} disabled={busy} onPress={()=>void cancelWaiting()} /></View>
-    </View>}
+    {queue && <QueuedAnswer key={queue.messageId} queue={queue} theme={theme}
+      card={{kind:"ledger",source:item.source,id:item.id,projectId:item.projectId,fingerprint:item.fingerprint}}
+      onRefresh={()=>onResolved({status:"queued"})} onCancel={cancelWaiting} />}
     {showForm && canReply && recordActions && unreachable && <Text style={{color:c.foregroundMuted,fontSize:12}}>{routeText()}</Text>}
     {showForm && !unreachable && <View style={{ gap: 8 }}>
       {isMerge && !!item.questions.length && <Text accessibilityRole="header" style={{color:c.foreground, borderTopWidth:1, borderTopColor:c.border, paddingTop:10, fontSize:16, fontWeight:"600"}}>{followupTitle}</Text>}

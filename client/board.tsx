@@ -1,3 +1,4 @@
+import { ParallelWaitSetting, QueuedAnswer } from "./queued-answer";
 import type { BoardReadiness } from "../shared/readiness";
 import { historySessionLinks, type HistoryLinks } from "./history-sessions";
 import { ReplyHistory } from "./reply-history";
@@ -279,6 +280,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
               if (rowKey) remember({ rowKey, actionKey: sessionRowKey(card), projectIds: [card.session.projectId], status: result.handled ? "already-closed" : "sent", recipientId: card.session.id,
                 title: card.session.title + " · " + result.title, detail: result.detail || undefined });
             }} /> : undefined}
+          onQueued={onRefresh}
           onSent={result => {
             if (rowKey && result.action === "reply") remember({
               rowKey, actionKey: sessionRowKey(card), projectIds: [result.projectId], status: "sent", recipientId: result.recipientId,
@@ -438,6 +440,12 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         clear={() => setChosenProjects([])} toggle={group => setChosenProjects(previous => toggleProjectFilter(filterGroups, previous, group))} />}
       {!!error && showError && <Text selectable style={{ color: c.statusDanger }}>{error}</Text>}
       {settings && <BoardLanguageSetting theme={theme} />}
+      {settings && configured && <ParallelWaitSetting theme={theme} onSaved={onRefresh} />}
+      {!settings && snapshot?.queuedConversations?.filter(q=>inFilter(q.projectId)).map(q=><View key={q.messageId} style={{gap:5}}>
+        <Text style={{color:c.foreground,fontWeight:"600"}}>{q.title}</Text>
+        <QueuedAnswer card={{kind:"session",projectId:q.projectId,sessionId:q.sessionId,version:q.version}}
+          queue={q} theme={theme} onRefresh={onRefresh} />
+      </View>)}
       {settings && configured && <ReviewWaitSetting theme={theme} onSaved={onRefresh} />}
       {!!error && settings && <Button theme={theme} label={t("세션 다시 조회", "Retry session lookup")} disabled={loading} onPress={onRefresh} />}
       {snapshot && onProject && (pickingProjects || settings) && <View style={{ gap: 7 }}>

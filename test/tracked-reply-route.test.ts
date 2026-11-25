@@ -2,6 +2,7 @@ import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {manageQueuedAnswer} from "../shared/busy-delivery";
 import contribute from "../index.server";
 import { recordActionKey, recordRowKey } from "../client/decision-receipts";
 import {
@@ -21,7 +22,7 @@ import {
 const scratch: string[] = [];
 afterEach(() => { for (const path of scratch.splice(0)) rmSync(path, {recursive: true, force: true}); });
 
-type Agent = {project: string; status: string; archived?: boolean};
+type Agent = {project: string; status: string; provider?:string; permission?:boolean; archived?: boolean};
 const card = (id: string, extra: Record<string, unknown>) => ({id, title: "Card " + id, kind: "answer", ...extra});
 
 // Two selected checkouts of one repository: the ledger names "studio", one live session sits in "studio-copy".
@@ -46,11 +47,13 @@ async function fixture(items: Record<string, unknown>[], owner = "operator", roo
     ["elsewhere", {project: "studio-copy", status: "idle"}],
   ]);
   const sent: {id: string; text: string; messageId?: string}[] = [];
+  const optionsLog: {activeTurnBehavior?:string;sourceAgentId?:string}[]=[];
   const hidden = new Set<string>();
   // `lost`: the SDK call delivers the message and then fails. `history`: the recipient's timeline shows what arrived.
   const lost = new Set<string>();
   const history = {visible: false};
-  const actor = (id: string) => ({id, title: id, updatedAt: "1", status: agents.get(id)!.status, pendingPermissions: [],
+  const actor = (id: string) => ({id, title: id, updatedAt: "1", status: agents.get(id)!.status, pendingPermissions: agents.get(id)!.permission ? [{id:"request"}] : [],
+    provider:agents.get(id)!.provider, activeTurn:agents.get(id)!.status==="running" ? {id:"turn"} : null,
     ...(agents.get(id)!.archived ? {archivedAt: "2026-01-02T00:00:00.000Z"} : {})});
   const page = (entries: unknown[]) => ({entries, pageInfo: {hasMore: false, nextCursor: null}});
   const sdk = {
@@ -62,7 +65,8 @@ async function fixture(items: Record<string, unknown>[], owner = "operator", roo
         refresh: async () => agents.has(id) ? {agent: actor(id)} : null,
         timeline: {refetch: async () => ({epoch: id, entries: history.visible
           ? sent.filter(m => m.id === id).map(m => ({item: {type: "user_message", messageId: m.messageId, text: m.text}})) : []})},
-        send: async (text: string, options?: {messageId?: string}) => {
+        send: async (text: string, options?: {messageId?: string;activeTurnBehavior?:string;sourceAgentId?:string}) => {
+          optionsLog.push(options ?? {});
           sent.push({id, text, messageId: options?.messageId});
           if (lost.has(id)) throw new Error("connection lost");
         },
@@ -92,7 +96,7 @@ async function fixture(items: Record<string, unknown>[], owner = "operator", roo
     writeFileSync(scopePath, JSON.stringify({...scope, createdCoordinator: {id, previous: null, workspaceId: "board-workspace", config: {provider: "claude"}}}));
     agents.set(id, {project: "board-workspace", status: "idle"});
   };
-  return {board, find, reply, link, context, agents, hidden, sent, lost, history, ledgerItems, writeLedger, setOwner, createdBy};
+  return {rpc,optionsLog,board, find, reply, link, context, agents, hidden, sent, lost, history, ledgerItems, writeLedger, setOwner, createdBy};
 }
 
 const tenQuestions = Array.from({length: 10}, (_, index) => ({id: "Q" + (index + 1), text: "Question " + (index + 1),
@@ -639,4 +643,47 @@ test("the example answer is only a placeholder; the recommendation is inserted o
   expect(recommendedChoices(choices, index => index === 3)).toEqual({
     0: [JSON.stringify(["A", "One"])], 1: [JSON.stringify(["1", "Logs"]), JSON.stringify(["2", "Docs"])],
   });
+});
+
+test("a running worker steers only a person's reply, and an idle-only ledger card queues it", async()=>{
+  const f=await fixture([card("one",{where:"session",agentId:"worker"}),card("two",{where:"session",agentId:"worker",deliverWhenIdle:true})]);
+  f.agents.set("worker",{project:"studio",status:"running",provider:"codex"});
+  const first=(await f.find("one")).item;
+  expect(await f.reply(first,{recipientId:"worker",answer:"Keep two columns."})).toEqual({status:"sent"});
+  expect(f.sent[0].text).toBe("Keep two columns.");
+  expect(f.optionsLog[0]).toMatchObject({activeTurnBehavior:"steer"});
+  expect(f.optionsLog[0].sourceAgentId).toBeUndefined();
+  const second=(await f.find("two")).item;
+  expect(second.deliverWhenIdle).toBe(true);
+  expect(await f.reply(second,{recipientId:"worker"})).toEqual({status:"queued"});
+  expect(f.sent).toHaveLength(1);
+});
+
+test("parallel review holds the original reply across refresh and ambiguous delivery, and requires a human to resume",async()=>{
+  const f=await fixture([card("one",{where:"session",agentId:"worker"})]);
+  f.agents.set("worker",{project:"studio",status:"running",provider:"custom"});
+  const first=(await f.find("one")).item;
+  expect(await f.reply(first,{recipientId:"worker",answer:"Use blue."})).toEqual({status:"queued"});
+  const q=(await f.find("one")).item.queuedReply;
+  expect(q.offer).toBe(true);
+  const ref={card:{kind:"ledger",source:first.source,id:first.id,projectId:first.projectId,fingerprint:first.fingerprint},
+    messageId:q.messageId,coordinatorId:q.coordinatorId};
+  const act=action=>f.rpc(manageQueuedAnswer,{...ref,action});
+  f.agents.get("operator")!.permission=true;
+  expect(await act("parallel")).toEqual({status:"unavailable"});
+  expect(f.sent).toBeEmpty();
+  f.agents.get("operator")!.permission=false;
+  f.lost.add("operator");
+  const pair=await Promise.all([act("parallel"),act("parallel")]);
+  expect(pair.map(p=>p.status).sort()).toEqual(["changed","unconfirmed"]);
+  expect(f.sent).toHaveLength(1);
+  expect(f.sent[0]).toMatchObject({id:"operator"});
+  expect(f.sent[0].text).toContain("Use blue.");
+  expect(f.optionsLog[0]).toMatchObject({sourceAgentId:"plugin:coordinator-board",activeTurnBehavior:"steer"});
+  f.agents.get("worker")!.status="idle";
+  expect((await f.find("one")).item.queuedReply.parallel).toBe("held");
+  expect(f.sent).toHaveLength(1);
+  expect(await act("resume")).toEqual({status:"updated"});
+  for(let i=0;i<5 && f.sent.length===1;i++) { await f.board(); await Bun.sleep(5); }
+  expect(f.sent.map(m=>m.id)).toEqual(["operator","worker"]);
 });

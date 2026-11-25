@@ -170,3 +170,4 @@ Spec: [spec.md](spec.md)
 | [assign-explicit-route](assign-explicit-route/intent.md) | 구현됨 (PR #55) | 세션 | 코디네이터가 고른 모델 경로를 보드의 원격 배정에 전달한다 |
 | [sent-reply-receipt](sent-reply-receipt/intent.md) | 구현됨 (PR #54) | 세션 | 보낸 답장이 그 자리에 접힌 카드로 남아, 펼쳐서 무엇을 보냈는지 확인할 수 있다 |
 | [replace-bootstrap](replace-bootstrap/intent.md) | 구현됨 (PR #57) | 세션 | 보드에서 코디네이터를 교체하면 새 세션이 시작 지시로 옛 코디네이터의 일을 이어받고, 옛 세션은 사람이 설정에서 보관한다 |
+| [busy-session-delivery](busy-session-delivery/intent.md) | 승인 | 세션 | 작업 중인 세션에 현재 질문의 답을 보내고 대기 중인 답은 병렬 검토를 요청할 수 있다 |

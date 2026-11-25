@@ -1,12 +1,14 @@
 import { decorateDecision, restoreClarifiedDecision } from "./session-decisions";
 import { join } from "node:path";
 import { SessionPhotoStore } from "./session-photos";
-import { describePhotos, photoReceiptId } from "./reply-photos";
+import { describePhotos, photoReceiptId, saveLocalPhotos, readLocalPhoto, removeLocalPhotos } from "./reply-photos";
 import { sessionReplyMessage } from "./decision-message";
 import { createHash } from "node:crypto";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
-import type { DecisionInput } from "../shared/decision-actions";
+import { changedDecisionMessage as changed, type DecisionInput } from "../shared/decision-actions";
 import type { SessionRow } from "../shared/contract";
+import { canChangeQueue, type QueueAction } from "../shared/busy-delivery";
+import type { WorkImage } from "../shared/work-images";
 import { classify, ConversationReader } from "./conversation";
 import { isCurrentMembership, managedSessions } from "./session-links";
 import { canReceiveBoardInput } from "./discovery";
@@ -19,8 +21,8 @@ import { isManagedCoordinator, type Preferences, type PreferenceStore } from "./
 export { decorateDecision } from "./session-decisions";
 
 type Sdk = PluginHandlerContext["paseo"];
-type Receipt = { ok: true; recipientId: string; messageId: string };
-const changed = "결정 카드 또는 수신자가 바뀌었습니다. 보드를 새로 고쳐 주세요.";
+type Receipt = { ok: true; queued?:true; recipientId: string; messageId: string };
+const waiting = "예약이 변경되었습니다. / The queued reply changed.";
 const blocked = "이 세션의 현재 상태에서는 보낼 수 없습니다. 원래 세션에서 권한 요청과 작업 상태를 확인하세요.";
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -37,25 +39,32 @@ function messageUuid(key: string) {
 export class DecisionSender {
   private active = new Map<string, { fingerprint: string; result: Promise<Receipt> }>();
   private sendingCards = new Set<string>();
+  private queuePhotos:string;
   private sessionPhotos: SessionPhotoStore;
   constructor(private store: PreferenceStore, private notes: NoteStore, private reader: ConversationReader) {
+    this.queuePhotos = join(store.directory,"queued-conversation-photos");
     this.sessionPhotos = new SessionPhotoStore(join(store.directory, "session-photos"));
   }
 
   send(paseo: Sdk, input: DecisionInput): Promise<Receipt> {
+    return this.run(paseo,input);
+  }
+
+  private run(paseo:Sdk, input:DecisionInput, queuedId?:string, inspectOnly=false):Promise<Receipt> {
     const messageId = messageUuid(input.requestKey);
     const photos = describePhotos(input.images);
     const content = [input.projectId, input.sessionId, input.recipientId, input.version, input.action, input.text];
     // Keep text-only keys compatible with receipts written before photo support.
     const fingerprint = hash(photos.length ? [...content, photos] : content);
     const running = this.active.get(messageId);
+    if (running && inspectOnly) throw Error(waiting);
     if (running) {
       if (running.fingerprint === fingerprint) return running.result;
       return Promise.reject(Error("같은 전송 키로 다른 답을 보낼 수 없습니다."));
     }
     if (this.sendingCards.has(input.sessionId)) return Promise.reject(Error("이 카드의 이전 전송을 확인하고 있습니다."));
     this.sendingCards.add(input.sessionId);
-    const result = this.deliver(paseo, input, messageId, fingerprint).finally(() => {
+    const result = this.deliver(paseo, input, messageId, fingerprint, queuedId, inspectOnly).finally(() => {
       this.active.delete(messageId);
       this.sendingCards.delete(input.sessionId);
     });
@@ -63,11 +72,16 @@ export class DecisionSender {
     return result;
   }
 
-  private async deliver(paseo: Sdk, input: DecisionInput, messageId: string, fingerprint: string): Promise<Receipt> {
+  private async deliver(paseo: Sdk, input: DecisionInput, messageId: string, fingerprint: string, queuedId?:string, inspectOnly=false): Promise<Receipt> {
     const scope = this.store.read();
     requireScope(scope, input);
     messageId = photoReceiptId(messageId, !!input.images?.length, scope.decisionReceipts);
     const requestId = messageId;
+    const queued = Object.entries(scope.queuedDecisions).find(([id,q]) => id === messageId ||
+      (q.input.sessionId === input.sessionId && q.input.version === input.version));
+    if (queued && queued[1].fingerprint !== fingerprint) throw Error(waiting);
+    if (queuedId && (queued?.[0] !== queuedId || queued[1].stopped || queued[1].parallel === "held")) throw Error(waiting);
+    if (queued && !queuedId) return {ok:true,queued:true,messageId:queued[0],recipientId:input.recipientId};
     let earlier = scope.decisionReceipts[messageId];
     if (!earlier) {
       const previous = Object.entries(scope.decisionReceipts).find(([, saved]) =>
@@ -87,12 +101,12 @@ export class DecisionSender {
       (isManagedCoordinator(scope, input.recipientId) ? rows.find(r => r.id === input.recipientId) : undefined);
     if (!row || !destination) throw Error(changed);
     return withAssignmentHost(paseo, destination.serverId, sdk =>
-      this.deliverTo(paseo, sdk, row, destination, scope, input, receipt, requestId, fingerprint, earlier));
+      this.deliverTo(paseo, sdk, row, destination, scope, input, receipt, requestId, fingerprint, earlier, queuedId, inspectOnly));
   }
 
   private async deliverTo(paseo: Sdk, sdk: Sdk, row: SessionRow, destination: SessionRow, scope: Preferences,
     input: DecisionInput, receipt: Receipt, requestId: string, fingerprint: string,
-    earlier?: Preferences["decisionReceipts"][string],
+    earlier?: Preferences["decisionReceipts"][string], queuedId?:string, inspectOnly=false,
   ): Promise<Receipt> {
     const { messageId } = receipt;
     const recipient = sdk.agents.ref(input.recipientId);
@@ -117,9 +131,11 @@ export class DecisionSender {
       return receipt;
     }
 
-    if (row.nativePending || row.status !== "idle") throw Error(blocked);
+    const activeReply = row.status === "running" && input.action === "reply" && row.id === destination.id;
+    if (queuedId && (row.status==="closed" || row.status==="error")) throw Error(changed);
+    if (row.nativePending || (row.status !== "idle" && !activeReply)) throw Error(blocked);
     requireScope(this.store.read(), input);
-    const evidence = await this.reader.read(paseo, row, true);
+    const evidence = await this.reader.read(paseo, row, true, {openReply:activeReply});
     if (!evidence) throw Error(changed);
     const targets = row.id === destination.id ? [destination] : [row, destination];
     const latest = await Promise.all(targets.map(target => {
@@ -127,33 +143,60 @@ export class DecisionSender {
       return target.serverId === destination.serverId ? refresh(sdk) : withAssignmentHost(paseo, target.serverId, refresh);
     }));
     for (const { id, agent } of latest) {
-      if (!agent || agent.id !== id || agent.internal || agent.archivedAt || !canReceiveBoardInput(agent,input.action==="coordinate" && id===input.recipientId && id!==input.sessionId)) throw Error(blocked);
+      if (!agent || agent.id !== id || agent.internal || agent.archivedAt) throw Error(changed);
+      const runningReply = activeReply && agent.status === "running" && agent.activeTurn &&
+        !agent.pendingPermissions.length && agent.attentionReason !== "permission" && agent.attentionReason !== "error";
+      if (!runningReply && !canReceiveBoardInput(agent,input.action==="coordinate" && id===input.recipientId && id!==input.sessionId)) throw Error(blocked);
       if (id === input.sessionId && row.activityAt !== agent.updatedAt) throw Error(changed);
     }
     const note = this.notes.visible(new Set([row.id]))[row.id];
-    let text = "";
+    // Reconstruct the open card from fresh evidence with the same classification used when it was shown.
+    // The actual recipient state above still controls whether the reply can go out.
+    if (activeReply) row = {...row, status:"idle", lane:"idle", detail:""};
+    const current = this.store.read();
+    requireScope(current, input);
+    if (!isCurrentMembership(row, current) || (!isCurrentMembership(destination, current) && !isManagedCoordinator(current, destination.id))) throw Error(changed);
+    const prior = current.queuedDecisions[messageId];
+    if (queuedId && (!prior || prior.stopped || prior.parallel === "held" || prior.serverId !== (destination.serverId ?? null))) throw Error(waiting);
+    const judgment = current.judgments[row.id];
+    if (verifiedBoardFact(row, evidence, current, note)) throw Error(changed);
+    Object.assign(row, classify(evidence, row, judgment?.projectId === row.projectId ? judgment : undefined, row.id === current.coordinator), { evidenceId: evidence.id });
+    decorateDecision(row, note, current, evidence);
+    restoreClarifiedDecision(row, note, current, evidence);
+    if (!row.decision || row.decision.source === "permission" || row.decision.version !== input.version) throw Error(changed);
+    const agent = latest.find(target => target.id === destination.id)!.agent!;
+    const waitForTurn = activeReply && !canReceiveBoardInput(agent,!row.decision.deliverWhenIdle);
+    const decision = row.decision;
+    if (inspectOnly && !waitForTurn) throw Error(waiting);
+    if (waitForTurn) {
+      if (!prior && !inspectOnly) {
+        const {images,...request} = input;
+        const entry = {input:request,at:new Date().toISOString(),title:decision.question,
+          fingerprint,serverId:destination.serverId ?? null,photos:describePhotos(images),stopped:false};
+        const saved = saveLocalPhotos(this.queuePhotos,messageId,images ?? [],()=>{
+          this.store.change(scope=>{scope.queuedDecisions[messageId]=entry;});
+          return true;
+        });
+        if (!saved) throw Error("예약 사진 저장 실패 / Could not save queued photos.");
+      }
+      return {...receipt,queued:true};
+    }
+    const text = activeReply || queuedId ? input.text : sessionReplyMessage(row,input);
+    if (input.images?.length) this.sessionPhotos.save(input.recipientId, messageId, input.images);
     this.store.change(current => {
-      requireScope(current, input);
-      if (!isCurrentMembership(row, current) || (!isCurrentMembership(destination, current) && !isManagedCoordinator(current, destination.id))) throw Error(changed);
-      const judgment = current.judgments[row.id];
-      if (verifiedBoardFact(row, evidence, current, note)) throw Error(changed);
-      Object.assign(row, classify(evidence, row, judgment?.projectId === row.projectId ? judgment : undefined, row.id === current.coordinator), { evidenceId: evidence.id });
-      decorateDecision(row, note, current, evidence);
-      restoreClarifiedDecision(row, note, current, evidence);
-      if (!row.decision || row.decision.source === "permission" || row.decision.version !== input.version) throw Error(changed);
-      text = sessionReplyMessage(row,input);
-      if (input.images?.length) this.sessionPhotos.save(input.recipientId, messageId, input.images);
+      if (prior) delete current.queuedDecisions[messageId];
       current.decisionReceipts[messageId] = {
         ...(input.images?.length ? {messageId} : {}),
         messageHash:hash(text),
         activity: { origin:{sessionId:row.id, sessionHost:row.serverId, sessionProjectId:row.serverId ? row.projectId : undefined,
           cardId:row.id, revision:input.version, questions:[{id:input.version}]},
-          title: row.decision.question || row.title, at: new Date().toISOString(), projectId: input.projectId,
+          title: decision.question || row.title, at: new Date().toISOString(), projectId: input.projectId,
           ...(input.images?.length ? {imageCount:input.images.length} : {}),
           answer: input.text, recipientId: input.recipientId, coordinator: input.action === "coordinate" },
         fingerprint, sessionId: row.id, version: input.version, evidenceId: evidence.id, status: "pending", beforeAnswer: current.answers[row.id]?.version, ...(note?.kind === "question" ? { noteRevision: note.revision } : {}),
       };
     });
+    if (queuedId) removeLocalPhotos(this.queuePhotos,queuedId,input.images?.length ?? 0);
     try {
       await recipient.send(text, { messageId, activeTurnBehavior: "steer", ...(input.images?.length ? {images:input.images} : {}) });
     } catch {
@@ -161,6 +204,58 @@ export class DecisionSender {
     }
     this.finish(input, messageId);
     return receipt;
+  }
+
+  private queuedInput(id:string, entry:Preferences["queuedDecisions"][string]):DecisionInput {
+    const images:WorkImage[] = entry.photos.map((photo,index) => {
+      const image = readLocalPhoto(this.queuePhotos,id,index,photo);
+      if (!image) throw Error(changed);
+      return image;
+    });
+    return {...entry.input,...(images.length ? {images} : {})};
+  }
+
+  hasWaiting(sessionId?:string) {
+    return Object.values(this.store.read().queuedDecisions).some(entry =>
+      !entry.stopped && entry.parallel !== "held" && (!sessionId || entry.input.sessionId === sessionId));
+  }
+
+  async resume(sdk:Sdk, sessionId?:string) {
+    for (const [id,entry] of Object.entries(this.store.read().queuedDecisions)) {
+      if (entry.stopped || entry.parallel === "held" || (sessionId && entry.input.sessionId !== sessionId)) continue;
+      try { await this.run(sdk,this.queuedInput(id,entry),id); }
+      catch (error) {
+        if (!(error instanceof Error) || error.message !== changed) continue;
+        this.store.change(scope => {
+          const current = scope.queuedDecisions[id];
+          if (current && current.parallel !== "held") current.stopped = true;
+        });
+      }
+    }
+  }
+
+  async verifyQueue(sdk:Sdk,id:string) {
+    const entry = this.store.read().queuedDecisions[id];
+    if (!entry) return false;
+    await this.run(sdk,this.queuedInput(id,entry),id,true);
+    return true;
+  }
+
+  control(input:QueueAction, provider:string | null | undefined, minutes:number) {
+    const card = input.card;
+    if (card.kind !== "session") return;
+    const scope = this.store.read(), entry = scope.queuedDecisions[input.messageId];
+    if (!entry || !scope.projects.includes(card.projectId) || entry.input.projectId !== card.projectId ||
+        entry.input.sessionId !== card.sessionId || entry.input.version !== card.version) return;
+    if (!canChangeQueue(entry, input.action, provider, minutes)) return;
+    const request = {title:entry.title, recipientId:entry.input.recipientId, answer:entry.input.text,
+      images:input.action === "parallel" ? this.queuedInput(input.messageId,entry).images : undefined};
+    this.store.change(current => {
+      if (input.action === "cancel") delete current.queuedDecisions[input.messageId];
+      else current.queuedDecisions[input.messageId].parallel = input.action === "parallel" ? "held" : "resumed";
+    });
+    if (input.action === "cancel") removeLocalPhotos(this.queuePhotos,input.messageId,entry.photos.length);
+    return request;
   }
 
   private finish(input: DecisionInput, messageId: string, requestId = messageId) {

@@ -514,3 +514,16 @@ test("a reply's history says when its card was taken down from a fully read ledg
   rmSync(f.path);
   expect(f.read().history?.[0].cardRemoved).toBe(true);
 });
+
+test("an idle-only reservation does not hold a later steerable reply for the same worker", async()=>{
+  const f=fixture(); f.write([row("later",{deliverWhenIdle:true}),row("now")]);
+  const sent:string[]=[];
+  for(const item of f.read().items) {
+    const input={source:item.source,projectId:item.projectId,id:item.id,fingerprint:item.fingerprint,recipientId:"s",answer:item.id};
+    await f.service.deliver(input,()=>f.selected,async()=>({ready:false,stillCurrent:()=>true,accepted:async()=>false,send:async()=>{}}));
+  }
+  await f.service.resumeQueued(()=>f.selected,async item=>({ready:!item.deliverWhenIdle,verbatim:true,stillCurrent:()=>true,
+    accepted:async()=>false,send:async answer=>{sent.push(answer);}}),"s");
+  expect(sent).toEqual(["now"]);
+  expect(f.read().items.map(item=>item.id)).toEqual(["later"]);
+});
