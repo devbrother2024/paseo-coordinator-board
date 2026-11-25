@@ -36,17 +36,25 @@ function RemoteWorkSessionChip({ source, theme, title, label }: { source: Remote
     onPress={() => source.open(host.serverId, source.id)} />;
 }
 
-export function TrackedSessionChips({ links, title, theme }: { links: TrackedSessionLinks; title: string; theme: Theme }) {
+// `side` shows one chip. With `role`, the chip names what it opens: the coordinator or the work session that takes the
+// card's reply. Without `side`, both chips appear (kanban previews).
+export function TrackedSessionChips({ links, title, theme, side, role = false }: {
+  links: TrackedSessionLinks; title: string; theme: Theme; side?: "owner" | "source"; role?: boolean;
+}) {
   const { t } = useBoardLanguage();
-  const { owner, source } = links;
+  const owner = side === "source" ? undefined : links.owner;
+  const source = side === "owner" ? undefined : links.source;
+  const ownerLabel = role ? t("코디네이터 열기", "Open coordinator") : t("운영 코디네이터", "Operating coordinator");
+  const sourceLabel = role ? t("작업 세션 열기", "Open work session")
+    : links.owner ? t("원래 작업 세션", "Source work session") : source?.kind === "remote" ? t("작업 세션", "Work session") : t("연결 세션", "Linked session");
   return <>
-    {owner && <VerifiedSessionChip key={owner.id} theme={theme} label={t("운영 코디네이터", "Operating coordinator")}
+    {owner && <VerifiedSessionChip key={owner.id} theme={theme} label={ownerLabel}
       accessibilityLabel={title + " · " + t("운영 코디네이터 세션 열기", "Open operating coordinator session")}
       onPress={owner.open} gate={owner.gate} />}
-    {source?.kind === "local" && <SessionChip theme={theme} label={owner ? t("원래 작업 세션", "Source work session") : t("연결 세션", "Linked session")}
-      accessibilityLabel={title + " · " + (owner ? t("원래 작업 세션 열기", "Open source work session") : t("연결된 세션 열기", "Open linked session"))} onPress={source.open} />}
+    {source?.kind === "local" && <SessionChip theme={theme} label={sourceLabel}
+      accessibilityLabel={title + " · " + (role || links.owner ? t("원래 작업 세션 열기", "Open source work session") : t("연결된 세션 열기", "Open linked session"))} onPress={source.open} />}
     {source?.kind === "remote" && <RemoteWorkSessionChip key={JSON.stringify([source.id, source.hosts])} source={source}
-      theme={theme} title={title} label={owner ? t("원래 작업 세션", "Source work session") : t("작업 세션", "Work session")} />}
+      theme={theme} title={title} label={sourceLabel} />}
     {source?.kind === "unavailable" && <WorkSessionUnavailable theme={theme} />}
   </>;
 }

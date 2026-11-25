@@ -84,7 +84,7 @@ export function trackedRecovery(outcome: { status: string; reason?: string; requ
 }
 
 // Fill only questions the person has not answered or skipped, using the ledger's own recommended options.
-export function recommendedChoices(item: TrackedDecision, answered: (index: number) => boolean) {
+export function recommendedChoices(item: { questions: readonly TrackedDecision["questions"][number][] }, answered: (index: number) => boolean) {
   const picks: Record<number, string[]> = {};
   item.questions.forEach((question, index) => {
     const recommended = question.options.filter(option => option.recommended);
