@@ -2,7 +2,7 @@ import { useDecisionInteraction } from "./decision-editing";
 import { useRpc } from "@getpaseo/plugin/client";
 import { SendButton, SendTextInput } from "./send-input";
 import { useEffect, useRef, useState } from "react";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { askClarification, clarificationKey, type ClarificationCard, type ClarificationEntry } from "../shared/clarifications";
 import type { TrackedDecision } from "../shared/tracked-decisions";
 import { Button, type Theme } from "./controls";
@@ -14,11 +14,15 @@ import type { ChoiceRequest } from "./choice-display";
 type Props = {
   card: ClarificationCard | null; title: string; theme: Theme; recipientId: string | null; recipientTitle?: string;
   entries: ClarificationEntry[]; prior?: TrackedDecision["qa"]; onRefresh: () => void; onDraftChange?: (active:boolean) => void;
+  // A card can split the box: "ask" is the button and editor beside the reply, and "history" is the earlier questions
+  // and answers inside the card's evidence. A question asked in "ask" stays there until the board lists it, so its
+  // answer is not missed.
+  part?: "all" | "ask" | "history";
   /** A ready question this card suggests. The button only fills the box; the person sends it. */
   suggestion?: ChoiceRequest | null;
 };
 
-export function Clarification({card,title,theme,recipientId,recipientTitle,entries,prior = [],onRefresh,onDraftChange,suggestion}:Props) {
+export function Clarification({card,title,theme,recipientId,recipientTitle,entries,prior = [],onRefresh,onDraftChange,suggestion,part = "all"}:Props) {
   const {t} = useBoardLanguage();
   const ask = useRpc(askClarification);
   const photos = usePhotoDraft();
@@ -74,9 +78,27 @@ export function Clarification({card,title,theme,recipientId,recipientTitle,entri
     } catch { setError(true); }
     finally { sending.current = false; setBusy(false); onRefresh(); }
   }
+  const historyBox = (history.length > 0 || prior.length > 0) && <View style={{width:"100%",gap:7,padding:8,borderRadius:6,backgroundColor:c.surface0}}>
+      <Text accessibilityRole="header" style={{color:c.foreground,fontWeight:"600"}}>{t("문답","Questions and answers")}</Text>
+      {hidden > 0 && <Button theme={theme} label={t(`이전 문답 더 보기 · ${hidden}건`, `Show earlier questions · ${hidden}`)} onPress={() => setVisibleCount(count => count + 5)} />}
+      {prior.slice(hidden).map((row,index) => <View key={index+hidden} style={{gap:2}}>
+        <HistoryMarkdown theme={theme} source={"Q. " + row.q} />
+        {row.a ? <HistoryMarkdown theme={theme} source={"A. " + row.a} /> : <Text style={{color:c.foregroundMuted}}>{t("답변 대기","Awaiting reply")}</Text>}
+      </View>)}
+      {history.slice(Math.max(0,hidden-prior.length)).map(entry => <View key={entry.messageId} style={{gap:2}}>
+        {!!entry.question && <HistoryMarkdown theme={theme} source={"Q. " + entry.question} />}
+        {!!entry.imageCount && <Text style={{color:c.foregroundMuted,fontSize:12}}>{t(`질문에 첨부한 사진 ${entry.imageCount}장`, `${entry.imageCount} photo(s) attached to question`)}</Text>}
+        {entry.response ? <HistoryMarkdown theme={theme} source={"A. " + entry.response} />
+          : <Text accessibilityLiveRegion="polite" style={{color:c.foregroundMuted}}>{entry.status === "pending" ? t("전송 확인 중","Confirming delivery") : t("답변 대기","Awaiting reply")}</Text>}
+      </View>)}
+    </View>;
+  if (part === "history") return historyBox || null;
   return <>
-    <Button theme={theme} label={t("질문하기", "Ask a question")} accessibilityLabel={label("질문하기", "Ask a question")}
-      expanded={expanded} disabled={busy || photos.reading} onPress={toggle} />
+    {/* A small text button: asking first is the less common path beside the reply. */}
+    <Pressable accessibilityRole="button" accessibilityLabel={label("질문하기", "Ask a question")} accessibilityState={{expanded,disabled:busy || photos.reading}}
+      aria-expanded={expanded} disabled={busy || photos.reading} onPress={toggle} style={{paddingVertical:4}}>
+      <Text style={{color:c.foregroundMuted,fontSize:12,textDecorationLine:"underline",opacity:busy || photos.reading ? 0.6 : 1}}>{t("질문하기", "Ask a question")}</Text>
+    </Pressable>
     {suggestion && card && recipientId && <Button theme={theme} label={t(...suggestion.label)} accessibilityLabel={label(...suggestion.label)}
       disabled={busy || photos.reading} onPress={draftSuggestion} />}
     {expanded && <View style={{width:"100%",gap:6}}>
@@ -93,19 +115,6 @@ export function Clarification({card,title,theme,recipientId,recipientTitle,entri
           send={sendQuestion} selected /></View>
       </>}
     </View>}
-    {(history.length > 0 || prior.length > 0) && <View style={{width:"100%",gap:7,padding:8,borderRadius:6,backgroundColor:c.surface0}}>
-      <Text accessibilityRole="header" style={{color:c.foreground,fontWeight:"600"}}>{t("문답","Questions and answers")}</Text>
-      {hidden > 0 && <Button theme={theme} label={t(`이전 문답 더 보기 · ${hidden}건`, `Show earlier questions · ${hidden}`)} onPress={() => setVisibleCount(count => count + 5)} />}
-      {prior.slice(hidden).map((row,index) => <View key={index+hidden} style={{gap:2}}>
-        <HistoryMarkdown theme={theme} source={"Q. " + row.q} />
-        {row.a ? <HistoryMarkdown theme={theme} source={"A. " + row.a} /> : <Text style={{color:c.foregroundMuted}}>{t("답변 대기","Awaiting reply")}</Text>}
-      </View>)}
-      {history.slice(Math.max(0,hidden-prior.length)).map(entry => <View key={entry.messageId} style={{gap:2}}>
-        {!!entry.question && <HistoryMarkdown theme={theme} source={"Q. " + entry.question} />}
-        {!!entry.imageCount && <Text style={{color:c.foregroundMuted,fontSize:12}}>{t(`질문에 첨부한 사진 ${entry.imageCount}장`, `${entry.imageCount} photo(s) attached to question`)}</Text>}
-        {entry.response ? <HistoryMarkdown theme={theme} source={"A. " + entry.response} />
-          : <Text accessibilityLiveRegion="polite" style={{color:c.foregroundMuted}}>{entry.status === "pending" ? t("전송 확인 중","Confirming delivery") : t("답변 대기","Awaiting reply")}</Text>}
-      </View>)}
-    </View>}
+    {(part === "all" || sent.length > 0) && historyBox}
   </>;
 }

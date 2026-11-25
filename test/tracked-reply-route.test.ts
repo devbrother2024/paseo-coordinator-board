@@ -617,6 +617,18 @@ test("the example answer is only a placeholder; the recommendation is inserted o
   expect(recommendedTrackedReply({...item, recommendedReply: "Keep", recommend: []})).toBe("Keep");
   expect(recommendedTrackedReply({...item, recommendedReply: "Keep\nfor now"})).toBe("Delete");
   expect(recommendedTrackedReply({...item, recommendedReply: "x".repeat(121)})).toBe("Delete");
+  // The example reply is the sentence to send after following the recommendation, so it comes before the
+  // recommendation itself, which may be an instruction ("Disconnect the remote desktop") rather than a reply.
+  const done = {...item, recommend: ["Disconnect the remote desktop"], howToAnswer: "Disconnected the remote desktop"};
+  expect(recommendedTrackedReply({...done, recommendedReply: "Done"})).toBe("Done");
+  expect(recommendedTrackedReply(done)).toBe("Disconnected the remote desktop");
+  expect(recommendedTrackedReply({...done, howToAnswer: undefined})).toBe("Disconnect the remote desktop");
+  expect(recommendedTrackedReply({...done, recommendedReply: "x".repeat(121)})).toBe("Disconnected the remote desktop");
+  expect(recommendedTrackedReply({...done, howToAnswer: "Disconnected\nand checked"})).toBe("Disconnect the remote desktop");
+  expect(recommendedTrackedReply({...done, howToAnswer: "y".repeat(121)})).toBe("Disconnect the remote desktop");
+  // A reply format that lists choices or blanks to fill is a guide, not a sentence to send.
+  expect(recommendedTrackedReply({...done, howToAnswer: "Disconnected / Still connected"})).toBe("Disconnect the remote desktop");
+  expect(recommendedTrackedReply({...done, howToAnswer: "Disconnected at <time>"})).toBe("Disconnect the remote desktop");
   const choices = {...item, questions: [
     {id: "Q1", text: "Pick", multi: false, options: [{key: "A", text: "One", recommended: true}, {key: "B", text: "Two", recommended: false}]},
     {id: "Q2", text: "Pick any", multi: true, options: [{key: "1", text: "Logs", recommended: true}, {key: "2", text: "Docs", recommended: true}]},

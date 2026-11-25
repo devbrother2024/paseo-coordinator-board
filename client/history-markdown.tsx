@@ -33,14 +33,15 @@ function inline(tokens:Token[], theme:Theme):ReactNode[] {
   });
 }
 
-export function HistoryMarkdown({source,theme,pullRepository,preview=false,heading=false,muted=false}:{
-  source:string;theme:Theme;pullRepository?:string;preview?:boolean;heading?:boolean;muted?:boolean;
+// `preview` shows the first block in `lines` lines (two by default).
+export function HistoryMarkdown({source,theme,pullRepository,preview=false,lines=2,heading=false,muted=false}:{
+  source:string;theme:Theme;pullRepository?:string;preview?:boolean;lines?:number;heading?:boolean;muted?:boolean;
 }) {
   const tokens=useMemo(()=>lexBoardMarkdown(source),[source]);
   const colors=theme.colors;
   const base:TextStyle={color:muted ? colors.foregroundMuted : colors.foreground,fontSize:muted ? 13 : 14,lineHeight:21};
   function paragraph(token:Token,i:number,style?:TextStyle,title=false) {
-    return <Text key={i} accessibilityRole={title || token.type === "heading" ? "header" : undefined} selectable numberOfLines={preview ? 2 : undefined} style={[base,title && {fontSize:15,fontWeight:"600"},style]}>
+    return <Text key={i} accessibilityRole={title || token.type === "heading" ? "header" : undefined} selectable numberOfLines={preview ? lines : undefined} style={[base,title && {fontSize:15,fontWeight:"600"},style]}>
       {"tokens" in token && token.tokens ? renderInline(token.tokens) : "text" in token ? token.text : token.raw}
     </Text>;
   }
