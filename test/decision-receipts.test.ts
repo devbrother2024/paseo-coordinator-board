@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  foldReceipts, receiptDetails, receiptEntry, receiptsToFold, RECEIPT_KEEP_MS, settleReceipt, withReceiptPositions, type InlineReceipt,
+  foldReceipts, holdsActivityClosed, needsHostWideFilter, receiptDetails, receiptEntry, receiptInScope, receiptsToFold, RECEIPT_KEEP_MS,
+  sentTimeLabel, settleReceipt, withReceiptPositions, type InlineReceipt,
 } from "../client/decision-receipts";
 import type { ReplyEntry } from "../shared/reply-history";
 
@@ -136,4 +137,43 @@ describe("a sent reply stays as a folded card", () => {
     ]);
     expect(receiptDetails(sent({ detail: undefined }), undefined, undefined, en)).toEqual([]);
   });
+});
+
+describe("a sent reply's folded card is not a result line", () => {
+  const card = (status: InlineReceipt["status"], projectIds: (string | null)[], hidden = false): InlineReceipt =>
+    ({ actionKey: status, rowKey: status, projectIds, status, title: status, order: [], ...(hidden ? { hidden } : {}) });
+
+  test("it does not keep Recent decision activity closed when no decision is left", () => {
+    expect(holdsActivityClosed([card("sent", ["alpha"])])).toBe(false);
+    expect(holdsActivityClosed([card("merged", ["alpha"])])).toBe(true);
+    expect(holdsActivityClosed([card("unsent", ["alpha"])])).toBe(true);
+    expect(holdsActivityClosed([card("merged", ["alpha"], true)])).toBe(false);
+    expect(holdsActivityClosed([])).toBe(false);
+  });
+
+  test("a host-wide sent reply alone adds no Host-wide filter, yet still shows while no filter is set", () => {
+    expect(needsHostWideFilter([card("sent", [null])])).toBe(false);
+    expect(needsHostWideFilter([card("already-closed", [null])])).toBe(true);
+    expect(needsHostWideFilter([card("unsent", [null], true)])).toBe(false);
+    const listed = (id: string | null) => id === "alpha";
+    const all = () => true;
+    expect(receiptInScope(card("sent", [null]), listed, all)).toBe(true);
+    expect(receiptInScope(card("sent", [null]), listed, id => id === "alpha")).toBe(false);
+    expect(receiptInScope(card("merged", [null]), listed, all)).toBe(false);
+    expect(receiptInScope(card("sent", ["alpha"]), listed, all)).toBe(true);
+    expect(receiptInScope(card("sent", ["beta"]), listed, all)).toBe(false);
+  });
+});
+
+test("the folded card shows the time, and the date too when it was not sent today", () => {
+  const now = new Date(2026, 10, 25, 18, 0).getTime();
+  const today = new Date(2026, 10, 25, 9, 5).getTime();
+  const yesterday = new Date(2026, 10, 24, 23, 40).getTime();
+  const time = (at: number, locale: string) => new Date(at).toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+  expect(sentTimeLabel(today, now, "ko")).toBe(time(today, "ko-KR"));
+  expect(sentTimeLabel(today, now, "en")).toBe(time(today, "en-US"));
+  expect(sentTimeLabel(yesterday, now, "ko")).toBe("11월 24일 " + time(yesterday, "ko-KR"));
+  expect(sentTimeLabel(yesterday, now, "en")).toBe("Nov 24, " + time(yesterday, "en-US"));
+  expect(sentTimeLabel(new Date(2025, 10, 25, 9, 5).getTime(), now, "en")).toBe("Nov 25, 2025, " + time(new Date(2025, 10, 25, 9, 5).getTime(), "en-US"));
+  expect(sentTimeLabel(undefined, now, "ko")).toBe("");
 });

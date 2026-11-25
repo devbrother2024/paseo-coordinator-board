@@ -97,6 +97,29 @@ export function receiptDetails(receipt: Pick<InlineReceipt, "detail">, entry: Pi
   ].filter((line): line is { label: string; text: string } => !!line);
 }
 
+// A sent reply's folded card is not a result line: it neither keeps Recent decision activity closed when no decision is
+// left nor adds a Host-wide filter of its own. A host-wide one still shows while no filter is set.
+const resultLine = (receipt: InlineReceipt) => !receipt.hidden && receipt.status !== "sent";
+export const holdsActivityClosed = (receipts: readonly InlineReceipt[]) => receipts.some(resultLine);
+export const needsHostWideFilter = (receipts: readonly InlineReceipt[]) =>
+  receipts.some(receipt => resultLine(receipt) && receipt.projectIds.includes(null));
+export function receiptInScope(receipt: InlineReceipt, listed: (id: string | null) => boolean, inFilter: (id: string | null) => boolean) {
+  return receipt.projectIds.some(id => (listed(id) || (id === null && receipt.status === "sent")) && inFilter(id));
+}
+
+const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// When the reply was sent: the time, with the date when it was not today and the year when it was not this year.
+export function sentTimeLabel(sentAt: number | undefined, now: number, language: "ko" | "en") {
+  if (sentAt === undefined) return "";
+  const at = new Date(sentAt), today = new Date(now);
+  const time = at.toLocaleTimeString(language === "ko" ? "ko-KR" : "en-US", { hour: "numeric", minute: "2-digit" });
+  if (at.toDateString() === today.toDateString()) return time;
+  const year = at.getFullYear() !== today.getFullYear();
+  return language === "ko"
+    ? `${year ? at.getFullYear() + "년 " : ""}${at.getMonth() + 1}월 ${at.getDate()}일 ${time}`
+    : `${months[at.getMonth()]} ${at.getDate()}, ${year ? at.getFullYear() + ", " : ""}${time}`;
+}
+
 export function foldReceipts(receipts: InlineReceipt[], ids: readonly string[]) {
   if (!ids.length) return receipts;
   const fold = new Set(ids);

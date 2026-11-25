@@ -38,6 +38,12 @@ test("a card with several questions opens on its first unanswered question, with
   expect(openingStep([], [])).toBeNull();
 });
 
+test("a card that cannot take a reply shows all its questions at once, without steps", () => {
+  expect(usesSteps(ten.slice(0, 3), false)).toBe(false);
+  expect(usesSteps(ten.slice(0, 3), true)).toBe(true);
+  expect(openingStep(ten.slice(0, 3), [], false)).toBeNull();
+});
+
 test("the next question skips answered ones and wraps before the summary", () => {
   expect(firstOpenStep([false, false, false])).toBe(0);
   expect(firstOpenStep([true, false, true])).toBe(1);

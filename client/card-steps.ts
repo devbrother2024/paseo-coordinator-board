@@ -8,8 +8,9 @@ type Question = TrackedDecision["questions"][number];
 export type Step = number | "summary";
 export type QuestionDraft = { selected?: readonly string[]; typed?: string; skipped?: boolean; photos?: number };
 
-// A card with several questions shows one at a time. A single question keeps the whole form on the card.
-export const usesSteps = (questions: readonly Question[]) => questions.length >= 2;
+// A card with several questions shows one at a time. A single question keeps the whole form on the card, and so does a
+// card that cannot take a reply, since nothing would move it past the first question.
+export const usesSteps = (questions: readonly Question[], answerable = true) => answerable && questions.length >= 2;
 
 export function firstOpenStep(answered: readonly boolean[]): Step {
   const index = answered.findIndex(done => !done);
@@ -18,8 +19,8 @@ export function firstOpenStep(answered: readonly boolean[]): Step {
 
 // Where a card first shows: a card with several questions opens straight on its first unanswered question (the
 // summary once all are answered), with no Answer button to press first. A single question keeps the whole form (null).
-export function openingStep(questions: readonly Question[], answered: readonly boolean[]): Step | null {
-  if (!usesSteps(questions)) return null;
+export function openingStep(questions: readonly Question[], answered: readonly boolean[], answerable = true): Step | null {
+  if (!usesSteps(questions, answerable)) return null;
   return firstOpenStep(questions.map((_, index) => !!answered[index]));
 }
 

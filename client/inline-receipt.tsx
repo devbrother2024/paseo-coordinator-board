@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { SessionChip, type Theme } from "./controls";
 import { mergeNotificationLabel } from "./merge-notification";
-import { receiptDetails, type InlineReceipt } from "./decision-receipts";
+import { receiptDetails, sentTimeLabel, type InlineReceipt } from "./decision-receipts";
 import type { ReplyEntry } from "../shared/reply-history";
 import { useBoardLanguage } from "./language";
 
@@ -27,8 +27,7 @@ export function InlineDecisionReceipt({ receipt, theme, onOpen, onDismiss, entry
   const unsent = receipt.status === "unsent";
   const openLabel = t("받은 세션 열기", "Open receiving session");
   const folds = receipt.status === "sent";
-  const time = folds && receipt.sentAt !== undefined
-    ? new Date(receipt.sentAt).toLocaleTimeString(language === "ko" ? "ko-KR" : "en-US", { hour: "numeric", minute: "2-digit" }) : "";
+  const time = folds ? sentTimeLabel(receipt.sentAt, Date.now(), language) : "";
   const details = folds ? receiptDetails(receipt, entry, recipient, t) : [];
   const toggle = open ? t("보낸 내용 접기", "Hide what was sent") : t("보낸 내용 보기", "Show what was sent");
   const line = <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8, paddingVertical: 5 }}>

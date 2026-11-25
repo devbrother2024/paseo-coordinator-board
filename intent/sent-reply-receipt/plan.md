@@ -15,6 +15,7 @@ Spec: [spec.md](spec.md)
 5. `client/board.tsx`: 결과에 `sentAt`·`match`, 스냅숏마다 `settleReceipt`.
 6. `client/inline-receipt.tsx`: 접힌 줄과 펼친 내용.
 7. README·OVERVIEW 한 줄.
+8. 리뷰 반영: 보낸 시각의 날짜·연도(`sentTimeLabel`), 접힌 카드를 결과 줄 세기와 공통 필터에서 제외(`holdsActivityClosed`, `needsHostWideFilter`, `receiptInScope`).
 
 ## 검증
 

@@ -11,7 +11,7 @@ import { mentionsSecurityGate, trackedCoverage, trackedReplyRoute, usesSourceCoo
 import { projectFolderMap } from "../shared/project-folders";
 import { MergeFeedback, PullRequestCard, PullRequestSettings, WaitingMergeRow, type MergeNotice, type WorkSessionLink } from "./pull-requests";
 import { ownKanbanEntry, waitingMergeCard } from "../shared/merge-card-place";
-import { foldReceipts, pullRowKey, receiptEntry, receiptsToFold, recordActionKey, RECEIPT_FOLD_MS, sessionRowKey, settleReceipt, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
+import { foldReceipts, holdsActivityClosed, needsHostWideFilter, pullRowKey, receiptEntry, receiptInScope, receiptsToFold, recordActionKey, RECEIPT_FOLD_MS, sessionRowKey, settleReceipt, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
 import { rankDecisionRows, priorityLabel } from "./decision-priority";
 import { DecisionEditingRow, keepEditingPositions, useDecisionEditing } from "./decision-editing";
 import { InlineDecisionReceipt } from "./inline-receipt";
@@ -159,7 +159,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     projectIds.add(entry.projectId);
     if (entry.projectId && !displayed.has(entry.projectId)) displayed.set(entry.projectId,{id:entry.projectId,title:names.get(entry.projectId) ?? entry.projectId,cards:[]});
   }
-  if (inlineReceipts.some(receipt => !receipt.hidden && receipt.projectIds.includes(null))) projectIds.add(null);
+  if (needsHostWideFilter(inlineReceipts)) projectIds.add(null);
   for (const id of projectIds) {
     const list=decisionsFor(projectId=>projectId===id);
     byProject.set(id,list.records.length+list.sessions.length+list.prs.length);
@@ -233,8 +233,8 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const { positions, onEditing } = useDecisionEditing(rankedKeys);
   const shownKeys = keepEditingPositions(rankedKeys, positions).slice(0, digestLimit);
   const remaining = ranked.length - shownKeys.length;
-  const scopedReceipts = inlineReceipts.filter(receipt => receipt.projectIds.some(id => byProject.has(id) && inFilter(id)));
-  const showHistory = historyOpen ?? (filteredTotal === 0 && !scopedReceipts.some(receipt => !receipt.hidden));
+  const scopedReceipts = inlineReceipts.filter(receipt => receiptInScope(receipt, id => byProject.has(id), inFilter));
+  const showHistory = historyOpen ?? (filteredTotal === 0 && !holdsActivityClosed(scopedReceipts));
   const orderedKeys = withReceiptPositions(shownKeys, scopedReceipts);
   function remember(action: CompletedAction) {
     // The callback captures the order at the time the person pressed the button.

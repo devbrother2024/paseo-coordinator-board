@@ -24,14 +24,25 @@ Intent: [intent.md](intent.md)
   - 찾은 기록에 후속 응답이 있거나 `cardRemoved`면, 처음 본 새로 고침에는 표시만 해 두고(`settled`) 그다음 새로 고침에 접는다. 후속 응답 첫 줄을 한 번은 볼 수 있게 하기 위해서다.
   - 기록을 아직 찾지 못했으면 그대로 둔다.
 - 펼친 내용(`receiptDetails`): 보낸 글 전체, 사진 N장(기록의 `imageCount`), 받은 세션 이름, 후속 응답 첫 줄. 없는 줄은 빼고 보여 준다.
+- 보낸 시각(`sentTimeLabel`): 오늘이면 시각만, 오늘이 아니면 날짜도, 올해가 아니면 연도도 붙인다. 보드 언어를 따른다.
+- 접힌 카드는 결과 줄이 아니다: 결정이 0건일 때 최근 결정 기록이 저절로 펼쳐지는 것을 막지 않고(`holdsActivityClosed`), 프로젝트 없는 접힌 카드만 남았을 때 0건 "공통" 필터를 띄우지 않는다(`needsHostWideFilter`). 프로젝트 없는 접힌 카드는 필터를 고르지 않은 동안 보인다(`receiptInScope`).
 
-## 4. 시험 기준
+## 4. 요구사항과 시험
 
-- `settleReceipt`: 24시간 전후, 응답 첫 확인 → 표시만, 다음 새로 고침 → 접힘, `cardRemoved` 같은 흐름, 기록 없음 → 그대로, `sent` 아닌 결과와 숨긴 결과는 그대로.
-- `receiptsToFold`: `sent`는 6초 접기에서 빠진다.
-- `receiptEntry`: 카드·판본·받는 세션이 맞는 가장 최근 기록.
-- `receiptDetails`: 줄 구성과 두 언어.
-- 서버: 원장에 카드가 있으면 `cardRemoved` 없음, 원장에서 내려가면 있음, 일부만 읽으면 없음.
+| 요구 | 내용 | 시험 |
+|---|---|---|
+| R1 | 답장 보냄 결과는 6초 접기에서 빠지고, 다른 결과는 그대로 접힌다 | `test/decision-receipts.test.ts` "a finished result folds into recent activity after a few seconds, except a sent or unsent reply" |
+| R2 | 접힌 카드는 같은 카드·판본·받는 세션의 가장 최근 답장 기록을 찾는다 | 같은 파일 "finds the latest history entry for the same card, revision and recipient" |
+| R3 | 보낸 지 24시간이 지나면 접힌다 | "stays until a day has passed" |
+| R4 | 후속 응답은 한 번 보인 뒤 다음 새로 고침에 접힌다 | "a follow-up shows once, then the next refresh folds it" |
+| R5 | 원장에서 내려간 카드는 다음 새로 고침에 접힌다 | "a card taken down from the ledger folds on the next refresh" |
+| R6 | 다른 결과와 숨긴 결과는 접기 판정이 건드리지 않는다 | "other results and hidden ones are left alone" |
+| R7 | 펼친 내용은 보낸 글, 사진 장수, 받은 세션, 후속 응답 첫 줄이고 두 언어로 나온다 | "the opened card lists what was sent, photos, the recipient and the follow-up's first line" |
+| R8 | 서버는 원장을 온전히 읽었을 때만, 카드 키가 원장에 없으면 `cardRemoved`를 붙인다 | `test/tracked-decisions.test.ts` "a reply's history says when its card was taken down from a fully read ledger" |
+| R9 | 보낸 시각은 오늘이 아니면 날짜를, 올해가 아니면 연도를 함께 보인다 | `test/decision-receipts.test.ts` "the folded card shows the time, and the date too when it was not sent today" |
+| R10 | 접힌 카드는 최근 결정 기록의 자동 펼침을 막지 않는다 | "it does not keep Recent decision activity closed when no decision is left" |
+| R11 | 프로젝트 없는 접힌 카드만으로는 공통 필터를 띄우지 않고, 필터가 없을 때는 보인다 | "a host-wide sent reply alone adds no Host-wide filter, yet still shows while no filter is set" |
+| R12 | 접힌 줄, 펼치기, 결정 수 미포함이 화면에서 동작한다 | 지어낸 데이터의 웹 미리보기(한·영, 390px) |
 
 ## 5. 버린 설계
 

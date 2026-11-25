@@ -127,7 +127,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const [editedReply, setEditedReply] = useState<string | null>(null);
   const [more, setMore] = useState<Record<number, boolean>>({});
   // A card with several questions opens on its first question. There is no Answer button to press first.
-  const [rawStep, setStep] = useState<Step>(() => openingStep(item.questions, []) ?? 0);
+  const [rawStep, setStep] = useState<Step>(() => openingStep(item.questions, [], canReply) ?? 0);
   // Counts the person's moves between questions, so focus follows even when the question number stays the same.
   const [moves, setMoves] = useState(0);
   const questionHead = useRef<View>(null);
@@ -207,7 +207,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const offer = trackedReplyOffer(route, redirected, hasAnswerDraft || hasQuestionDraft);
   const offersFallback = offer.fallback;
   const unreachable = !offer.form;
-  const stepped = usesSteps(item.questions);
+  const stepped = usesSteps(item.questions, canReply);
   const step = clampStep(rawStep, item.questions.length);
   const stepping = stepped && step !== "summary";
   const inputFocus = useDecisionInteraction(canReply && !queue && !isClosed && !needsRefresh &&
@@ -246,7 +246,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   }
   function clearDraft() {
     attachments.clear(); setEditedReply(null); setAnswers(emptyAnswers); setMore({}); setLeadRemoved(false);
-    setStep(openingStep(item.questions, []) ?? 0);
+    setStep(openingStep(item.questions, [], canReply) ?? 0);
   }
   async function refreshRecord() {
     if (pending.current || !outcome) return;
@@ -476,7 +476,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
         <Button theme={theme} disabled={busy} {...named(t("추천대로 모두 고르기", "Choose all recommendations"))} onPress={() => chooseRecommended(allPicks, true)} />
       </View>}
       {stepped && canReply && progressDots(step)}
-      {!stepped && Object.keys(picks).length > 0 && <View style={wrap}><Button theme={theme} disabled={busy} {...named(t("추천 선택지 고르기", "Choose recommended options"))}
+      {!stepped && canReply && Object.keys(picks).length > 0 && <View style={wrap}><Button theme={theme} disabled={busy} {...named(t("추천 선택지 고르기", "Choose recommended options"))}
         onPress={() => chooseRecommended(picks, false)} /></View>}
       {stepped ? step !== "summary" && renderQuestion(step) : item.questions.map((_, index) => renderQuestion(index))}
       {stepped && step === "summary" && <View style={{ gap: 4 }}>
