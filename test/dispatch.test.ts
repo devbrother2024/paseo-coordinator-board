@@ -167,6 +167,14 @@ test("검증되지 않은 생성 모드는 완료로 보고하지 않고, 재시
   assert.equal(reqs.length, 1);
 });
 
+test("로컬 배정은 같은 요청 키에서 경로 출처만 바꿔도 거절한다", async () => {
+  const { sdk, submitted } = host();
+  const request = { ...task, expectedRoute: sol, needsHooks: true };
+  await dispatchWorker(sdk, request, () => state);
+  await assert.rejects(dispatchWorker(sdk, { ...request, routeSource: "coordinator" }, () => state), /다른 작업/);
+  assert.equal(submitted.length, 1);
+});
+
 test("권한과 경로 출처를 기록하기 전에 생성한 작업은 최초 페이로드 그대로 재확인한다", async () => {
   const { sdk, reqs, submitted } = host();
   const request = { ...task, needsHooks:true, expectedRoute:sol };
