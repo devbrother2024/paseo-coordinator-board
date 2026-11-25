@@ -149,7 +149,7 @@ RPC `board.request-pull-changes`:
 | R30 | Claude·Codex는 진행 중인 턴에 바로 받고, 그 밖의 실행기는 기다렸다가 쉬면 한 번만 받는다. 기다리는 동안 병합 카드는 내려가 있다 | `test/pull-change-requests.test.ts` "a session in its turn takes the request at once when its provider can, and otherwise the request waits" |
 | R31 | 기다리는 요청은 PR의 머리·준비 상태·받는 곳이 달라지면 멈추고 보내지 않는다. 권한 대기로 바뀌면 계속 기다린다 | 같은 파일 "a waiting request stops when the PR or its recipient is no longer what the person wrote for" |
 | R32 | 기다리는 요청은 취소(병합 카드 복귀), 병렬 세션 보류, 재개를 할 수 있다 | 같은 파일 "a waiting request can be cancelled, held for a parallel session and resumed" |
-| R21 | 화면: 카드 입력 하나, 보낸 뒤 접힘과 다시 열림, 병합 카드 수정 요청, 질문 블록 카드 | 지어낸 데이터의 웹 미리보기(한·영, 넓은 화면·390px) |
+| R21 | 화면: 카드 입력 하나, 보낸 뒤 접힘과 다시 열림, 병합 카드 수정 요청, 질문 블록 카드 | 지어낸 데이터의 웹 미리보기(한·영, 넓은 화면·390px), 캡처는 `docs/pr-assets/single-card-input/` |
 
 ## 5. 버린 설계
 
