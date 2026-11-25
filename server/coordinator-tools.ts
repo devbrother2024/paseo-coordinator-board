@@ -4,38 +4,14 @@ import { z } from "zod";
 import type { SessionRow } from "../shared/contract";
 import { boardActionName, boardGuideName, coordinatorContract, type CoordinatorContract } from "../shared/coordinator-contract";
 import {
-  guideNoteDue, nextToolStamp, providerKeepsTools, toolStaleness, validConversationId,
+  conversationProvider, guideNoteDue, nextToolStamp, providerKeepsTools, toolStaleness, validConversationId,
   type CoordinatorTools, type ServedTools, type ToolCall, type ToolStamp, type ToolStaleness,
 } from "../shared/coordinator-tools";
-import { heldContract, type Definitions } from "./board-guide";
+import { heldContract, inputShape, type Definitions } from "./board-guide";
 import type { PreferenceStore } from "./preferences";
 
 type Tool = Pick<AgentToolDefinition, "name" | "input">;
 type Sdk = Pick<PluginHandlerContext["paseo"], "agents">;
-
-// Keys whose value is a map of names to schemas, and keys whose value is data rather than a schema.
-const schemaMaps = new Set(["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]);
-const dataKeys = new Set(["enum", "const", "default", "examples"]);
-
-// The shape of an input schema: what a call may carry. Wording (descriptions and titles), key order
-// and the order of required field names do not change what a conversation can call.
-export function inputShape(schema: unknown): unknown {
-  if (Array.isArray(schema)) return schema.map(inputShape);
-  if (!schema || typeof schema !== "object") return schema;
-  const source = schema as Record<string, unknown>;
-  const shape: Record<string, unknown> = {};
-  for (const key of Object.keys(source).sort()) {
-    const value = source[key];
-    if (key === "description" || key === "title") continue;
-    if (dataKeys.has(key)) shape[key] = value;
-    else if (key === "required" && Array.isArray(value) && value.every(item => typeof item === "string")) shape[key] = [...value].sort();
-    else if (schemaMaps.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
-      const map = value as Record<string, unknown>;
-      shape[key] = Object.fromEntries(Object.keys(map).sort().map(name => [name, inputShape(map[name])]));
-    } else shape[key] = inputShape(value);
-  }
-  return shape;
-}
 
 // The contract surface: each tool's name and the shape of its input. The code that runs a tool lives
 // in the board and always runs the installed build, and wording is not part of the contract.
@@ -53,11 +29,14 @@ export function toolsFingerprint(tools: readonly Tool[]): string | undefined {
   return surface && createHash("sha256").update(JSON.stringify(surface)).digest("hex");
 }
 
-// The provider conversation a session runs now. /clear in Claude starts a new one under the same session.
-export async function providerSession(paseo: Sdk, id: string): Promise<string | null> {
+// The provider conversation a session runs now, and whether its provider keeps loaded tool definitions.
+// /clear in Claude starts a new conversation under the same session. A provider profile is judged by
+// the implementation it runs on, which the session's persistence record names.
+export async function providerConversation(paseo: Sdk, id: string): Promise<{ session: string | null; keepsTools: boolean }> {
   const agent = (await paseo.agents.ref(id).refresh())?.agent;
-  const session = agent?.id === id ? agent.persistence?.sessionId : undefined;
-  return validConversationId(session) ? session : null;
+  const persistence = agent?.id === id ? agent.persistence : undefined;
+  const session = persistence?.sessionId;
+  return { session: validConversationId(session) ? session : null, keepsTools: providerKeepsTools(conversationProvider(persistence)) };
 }
 
 export class CoordinatorToolStamps {
@@ -114,10 +93,10 @@ export class CoordinatorToolStamps {
   }
 
   // How the definitions held by the coordinator's current conversation compare with this board.
-  async definitions(paseo: Sdk, agent: { id: string; provider: string }): Promise<Definitions> {
-    if (!this.current || !providerKeepsTools(agent.provider)) return "unknown";
-    const session = await providerSession(paseo, agent.id);
-    if (!session) return "unknown";
+  async definitions(paseo: Sdk, agent: { id: string }): Promise<Definitions> {
+    if (!this.current) return "unknown";
+    const { session, keepsTools } = await providerConversation(paseo, agent.id);
+    if (!session || !keepsTools) return "unknown";
     const stamp = this.stamp(agent.id);
     // A conversation the board has not stamped loads its board tools now.
     if (!stamp || stamp.session !== session) return "current";
@@ -148,17 +127,17 @@ export function withGuideNote(result: AgentToolResult): { result: AgentToolResul
   return { result: { ...result, ...note, text: result.text ? `${result.text}\n\n${guideNote}` : guideNote }, told: true };
 }
 
-// Every board tool call from a Claude coordinator stamps its conversation. A conversation that has not
-// read the current guide is told so once, on a result it can read. Recording never changes or fails
-// the tool's own result.
+// Every board tool call from a Claude Code coordinator stamps its conversation. A conversation that has
+// not read the current guide is told so once, on a result it can read. Recording never changes or
+// fails the tool's own result.
 export function stampingTool<T extends AgentToolDefinition>(tool: T, stamps: CoordinatorToolStamps): T {
   return {
     ...tool,
     async execute(input, context) {
       const result: AgentToolResult = await tool.execute(input, context);
-      if (!providerKeepsTools(context.agent.provider)) return result;
       try {
-        const session = await providerSession(context.paseo, context.agent.id);
+        const { session, keepsTools } = await providerConversation(context.paseo, context.agent.id);
+        if (!keepsTools) return result;
         const guide = tool.name === boardGuideName;
         const call: ToolCall = { ...(guide || tool.name === boardActionName ? { held: heldContract(input) } : {}), readGuide: guide && !result.isError };
         const { noteDue } = stamps.called(context.agent.id, session, call);
@@ -176,19 +155,20 @@ export function stampingTool<T extends AgentToolDefinition>(tool: T, stamps: Coo
 
 // The notice for the board's own Claude coordinator. One on another host or another provider, a closed
 // or failed one (the reach notice covers those), or one whose conversation the board cannot read gets none.
-export function coordinatorToolsView(staleness: ToolStaleness, row: Pick<SessionRow, "status" | "serverId" | "provider"> | undefined): CoordinatorTools | undefined {
-  if (staleness !== "stale" || !row || row.serverId) return undefined;
-  if (row.status === "closed" || row.status === "error" || !providerKeepsTools(row.provider)) return undefined;
+export function coordinatorToolsView(staleness: ToolStaleness, row: Pick<SessionRow, "status" | "serverId"> | undefined, keepsTools: boolean): CoordinatorTools | undefined {
+  if (staleness !== "stale" || !row || row.serverId || !keepsTools) return undefined;
+  if (row.status === "closed" || row.status === "error") return undefined;
   return { stale: true };
 }
 
 // Reads the coordinator's conversation only when its stamp would be stale in the same conversation.
+// Only a conversation on a provider that keeps its definitions is ever stamped.
 export async function readCoordinatorTools(paseo: Sdk, stamps: Pick<CoordinatorToolStamps, "stamp" | "served" | "staleness">,
-  row: Pick<SessionRow, "id" | "status" | "serverId" | "provider"> | undefined): Promise<CoordinatorTools | undefined> {
-  if (!row || row.serverId || !providerKeepsTools(row.provider)) return undefined;
+  row: Pick<SessionRow, "id" | "status" | "serverId"> | undefined): Promise<CoordinatorTools | undefined> {
+  if (!row || row.serverId) return undefined;
   const stamp = stamps.stamp(row.id);
   if (!stamp || toolStaleness(stamp, stamps.served, stamp.session) !== "stale") return undefined;
-  let session: string | null;
-  try { session = await providerSession(paseo, row.id); } catch { return undefined; }
-  return coordinatorToolsView(stamps.staleness(row.id, session), row);
+  let conversation: Awaited<ReturnType<typeof providerConversation>>;
+  try { conversation = await providerConversation(paseo, row.id); } catch { return undefined; }
+  return coordinatorToolsView(stamps.staleness(row.id, conversation.session), row, conversation.keepsTools);
 }

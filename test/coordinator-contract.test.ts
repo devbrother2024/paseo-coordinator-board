@@ -64,22 +64,22 @@ test("contract 1 keeps the seven board tools and adds the guide and the action t
   ]);
 });
 
-test("every board tool is an action with usage text, and descriptions stay short", async () => {
+test("every board tool is an action, and the guide repeats the tool's own description", async () => {
   const tools = await coordinatorTools();
   const guide = tools.find(tool => tool.name === boardGuideName);
   const context = { agent: { id: "coordinator-1", provider: "codex" }, paseo: {} };
   const overview = JSON.parse((await guide.execute({ contract: 1 }, context)).text);
   const named = tools.filter(tool => tool.name !== boardGuideName && tool.name !== boardActionName);
   expect(overview.actions.map((action: any) => action.name)).toEqual(named.map(tool => tool.name));
+  // Contract 1 is the installed board: nothing yet exists only through board_action.
+  expect(overview.board).toEqual({ contract: coordinatorContract.version, guide: "" });
   for (const tool of named) {
     const topic = JSON.parse((await guide.execute({ contract: 1, topic: tool.name }, context)).text);
-    expect(topic.usage.length).toBeGreaterThan(80);
+    // The descriptions keep their full guidance, so a new conversation misses no rule.
+    expect(tool.description.length).toBeGreaterThan(150);
+    expect(topic.usage).toBe(tool.description);
     expect(topic.input.type).toBe("object");
     expect(topic.onlyThroughBoardAction).toEqual([]);
-    // What a conversation remembers is short and points at the guide.
-    expect(tool.description.length).toBeLessThan(330);
-    expect(tool.description).toContain(boardGuideName);
-    expect(tool.description).not.toContain("—");
   }
 });
 

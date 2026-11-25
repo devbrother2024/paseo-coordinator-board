@@ -11,7 +11,7 @@ import { coordinatorTool } from "../server/board-guide";
 import {
   CoordinatorToolStamps, coordinatorToolsView, guideNote, readCoordinatorTools, toolsFingerprint, withGuideNote,
 } from "../server/coordinator-tools";
-import { guideNoteDue, nextToolStamp, toolStaleness } from "../shared/coordinator-tools";
+import { conversationProvider, guideNoteDue, nextToolStamp, providerKeepsTools, toolStaleness } from "../shared/coordinator-tools";
 import { staleToolsNotice } from "../client/coordinator-tools";
 
 const ko = (korean: string) => korean;
@@ -34,19 +34,24 @@ function store(stamp?: Record<string, unknown>) {
   return prefs;
 }
 
-const planTool = (input: z.ZodType, description = "Plan an assignment.", usage = "Pass needsHooks for native hooks.") =>
-  coordinatorTool({ name: "plan_assignment", description, usage, input, execute: () => ({ text: "planned" }) });
+const planTool = (input: z.ZodType, description = "Plan an assignment.", accepts?: z.ZodType) =>
+  coordinatorTool({ name: "plan_assignment", description, input, ...(accepts ? { accepts } : {}), execute: () => ({ text: "planned" }) });
+const plain = z.object({ needsHooks: z.boolean() });
+// A build that accepts a field the tool definition does not list.
+const extended = (...fields: string[]) => [planTool(plain, "Plan an assignment.", plain.extend(Object.fromEntries(fields.map(name => [name, z.string().optional()]))))];
 const oldBuild = [planTool(z.object({ needsHooks: z.boolean() }))];
 const newBuild = [planTool(z.object({ needsHooks: z.boolean(), expectedHostId: z.string().optional() }))];
 const reworded = [planTool(z.object({ needsHooks: z.boolean() }), "Plan an assignment on a host.")];
-const listTool = coordinatorTool({ name: "read_board", description: "List.", usage: "Lists managed sessions.", input: z.object({}),
+const listTool = coordinatorTool({ name: "read_board", description: "List.", input: z.object({}),
   execute: () => ({ text: JSON.stringify([{ id: "worker-1" }]) }) });
 
-// A Paseo host where each session runs one provider conversation, which /clear replaces.
-function host(provider = "claude") {
+// A Paseo host where each session runs one provider conversation, which /clear replaces. `kind` is the
+// provider implementation a profile runs on, which Paseo records in the conversation's persistence metadata.
+function host(provider = "claude", kind?: string) {
   const conversations = new Map<string, string>([["coordinator-1", "conversation-1"], ["coordinator-2", "conversation-9"]]);
   const paseo = { agents: { ref: (id: string) => ({
-    refresh: async () => ({ agent: { id, persistence: conversations.has(id) ? { provider, sessionId: conversations.get(id) } : null } }),
+    refresh: async () => ({ agent: { id, persistence: conversations.has(id)
+      ? { provider, sessionId: conversations.get(id), ...(kind ? { metadata: { provider: kind } } : {}) } : null } }),
   }) } } as any;
   return { paseo, conversations, provider };
 }
@@ -83,10 +88,10 @@ test("staleness: a compatible contract is current, a new conversation is current
 
 test("a conversation keeps its first stamp, and a new conversation starts over with the served contract", () => {
   const first = nextToolStamp(undefined, served, "conversation-1")!;
-  expect(first).toEqual({ session: "conversation-1", fingerprint: "new", contract: 1 });
+  expect(first).toEqual({ session: "conversation-1", fingerprint: "new", contract: 1, guide: "" });
   const later = { ...served, fingerprint: "newer", contract: 2 };
   expect(nextToolStamp(first, later, "conversation-1")).toBe(first);
-  expect(nextToolStamp(first, later, "conversation-2")).toEqual({ session: "conversation-2", fingerprint: "newer", contract: 2 });
+  expect(nextToolStamp(first, later, "conversation-2")).toEqual({ session: "conversation-2", fingerprint: "newer", contract: 2, guide: "" });
   expect(nextToolStamp(first, later, null)).toBe(first);
   expect(nextToolStamp(first, undefined, "conversation-2")).toBe(first);
 });
@@ -106,8 +111,12 @@ test("a contract tool call tells which contract the conversation holds", () => {
 });
 
 test("the guide note is due until the conversation read or was told about this guide revision", () => {
-  const stamp = { session: "conversation-1", fingerprint: "new", contract: 1 };
+  // A new conversation starts at the empty revision: nothing beyond its tool definitions to learn.
+  const stamp = { session: "conversation-1", fingerprint: "new", contract: 1, guide: "" };
+  expect(guideNoteDue(stamp, { ...served, guide: "" })).toBe(false);
   expect(guideNoteDue(stamp, served)).toBe(true);
+  // A conversation stamped before the contract has never heard of the guide.
+  expect(guideNoteDue(legacy, { ...served, guide: "" })).toBe(true);
   expect(guideNoteDue({ ...stamp, noted: "g1" }, served)).toBe(false);
   expect(guideNoteDue({ ...stamp, guide: "g1" }, served)).toBe(false);
   expect(guideNoteDue({ ...stamp, guide: "g0", noted: "g0" }, served)).toBe(true);
@@ -146,7 +155,10 @@ test("a build that only rewords descriptions is not reported", async () => {
   await first.guide(h);
   const same = await board(prefs, reworded);
   expect(same.stamps.fingerprint).toBe(first.stamps.fingerprint);
+  expect(same.stamps.served!.guide).toBe(first.stamps.served!.guide);
   expect(same.stamps.staleness("coordinator-1", "conversation-1")).toBe("current");
+  // No screen notice and no note in a tool result.
+  expect((await same.call(h)).text).toBe("planned");
   expect(await readCoordinatorTools(h.paseo, same.stamps, { id: "coordinator-1", status: "idle", provider: "claude" })).toBeUndefined();
 });
 
@@ -230,28 +242,42 @@ test("the guide note is attached once per guide revision", async () => {
   const prefs = store();
   const h = host();
   const b = await board(prefs, oldBuild);
-  // A new conversation is told once, then left alone.
-  expect((await b.call(h)).text).toBe(`planned\n\n${guideNote}`);
+  // Nothing beyond the tool definitions: a new conversation is told nothing.
+  expect(b.stamps.served!.guide).toBe("");
   expect((await b.call(h)).text).toBe("planned");
-  await b.guide(h);
-  expect((await b.call(h)).text).toBe("planned");
-  expect(prefs.read().toolStamps["coordinator-1"].guide).toBe(b.stamps.served!.guide);
 
-  // An update that changes usage text or accepted input changes the guide revision.
-  const updated = await board(prefs, [planTool(z.object({ needsHooks: z.boolean() }), "Plan an assignment.", "Pass needsHooks. Pass host when the human names one.")]);
-  expect(updated.stamps.served!.guide).not.toBe(b.stamps.served!.guide);
+  // An update adds a field that only board_action can carry. The running conversation is told once.
+  const updated = await board(prefs, extended("host"));
+  expect(updated.stamps.served!.guide).toMatch(/^[a-f0-9]{12}$/);
+  expect(updated.stamps.fingerprint).toBe(b.stamps.fingerprint);
   expect(updated.stamps.staleness("coordinator-1", "conversation-1")).toBe("current");
   expect((await updated.call(h)).text).toBe(`planned\n\n${guideNote}`);
   expect((await updated.call(h)).text).toBe("planned");
-  // The guide's own result never carries the note.
+  // Told, but not read yet: a reload of the same build stays quiet.
+  expect((await (await board(prefs, extended("host"))).call(h)).text).toBe("planned");
+  await updated.guide(h);
+  expect(prefs.read().toolStamps["coordinator-1"].guide).toBe(updated.stamps.served!.guide);
+
+  // The next field is news again, once.
+  const again = await board(prefs, extended("host", "route"));
+  expect(again.stamps.served!.guide).not.toBe(updated.stamps.served!.guide);
+  expect((await again.call(h)).text).toBe(`planned\n\n${guideNote}`);
+  expect((await again.call(h)).text).toBe("planned");
+
+  // A conversation that starts on a build with such fields is told once as well.
   const fresh = store();
-  const c = await board(fresh, oldBuild);
-  expect((await c.guide(h)).text).not.toContain(guideNote);
+  const c = await board(fresh, extended("host"));
+  expect((await c.call(h)).text).toBe(`planned\n\n${guideNote}`);
   expect((await c.call(h)).text).toBe("planned");
+  // The guide's own result never carries the note, and reading it first leaves nothing to tell.
+  const first = store();
+  const d = await board(first, extended("host"));
+  expect((await d.guide(h)).text).not.toContain(guideNote);
+  expect((await d.call(h)).text).toBe("planned");
 });
 
 test("a JSON result does not count as told", async () => {
-  const prefs = store();
+  const prefs = store({ session: "conversation-1", fingerprint: "f".repeat(64) });
   const h = host();
   const b = await board(prefs, [...oldBuild, listTool]);
   const listing = await b.run("read_board", {}, h);
@@ -318,11 +344,45 @@ test("a failed conversation lookup never changes the tool's own result", async (
 test("a coordinator on another provider is neither stamped nor told anything", async () => {
   const prefs = store();
   const codex = host("codex");
-  expect((await (await board(prefs, oldBuild)).call(codex)).text).toBe("planned");
+  expect((await (await board(prefs, extended("host"))).call(codex)).text).toBe("planned");
   expect(prefs.read().toolStamps).toEqual({});
   // Even with a stamp left from a Claude conversation, another provider gets no note.
   await (await board(prefs, oldBuild)).call(host());
-  expect((await (await board(prefs, newBuild, { version: 2, compatibleFrom: 2 })).call(codex)).text).toBe("planned");
+  expect((await (await board(prefs, extended("host"), { version: 2, compatibleFrom: 2 })).call(codex)).text).toBe("planned");
+});
+
+test("a coordinator on a Claude Code profile is judged by what the profile runs on", async () => {
+  // A second Claude Code account is a provider with its own ID. Paseo records the implementation it runs on.
+  expect(conversationProvider({ provider: "claude-work", metadata: { provider: "claude" } })).toBe("claude");
+  expect(conversationProvider({ provider: "claude" })).toBe("claude");
+  expect(conversationProvider({ provider: "codex-work", metadata: { provider: "codex" } })).toBe("codex");
+  // Without that record the ID is all there is. A name that merely looks like Claude is not taken for it.
+  expect(conversationProvider({ provider: "claude-work" })).toBe("claude-work");
+  expect(providerKeepsTools(conversationProvider({ provider: "claude-work" }))).toBe(false);
+  // Missing or malformed records are unknown, never a guess.
+  for (const odd of [null, undefined, {}, { provider: 3 }]) expect(conversationProvider(odd as never)).toBeNull();
+  expect(conversationProvider({ provider: "claude", metadata: { provider: "" } })).toBe("claude");
+  expect(conversationProvider({ provider: "codex", metadata: "claude" } as never)).toBe("codex");
+
+  const prefs = store({ session: "conversation-1", fingerprint: "f".repeat(64) });
+  const profile = host("claude-work", "claude");
+  const b = await board(prefs, oldBuild);
+  const row = { id: "coordinator-1", status: "idle", provider: "claude-work" };
+  expect(await readCoordinatorTools(profile.paseo, b.stamps, row)).toEqual({ stale: true });
+  expect((await b.call(profile)).text).toBe(`planned\n\n${guideNote}`);
+  expect(JSON.parse((await b.guide(profile)).text).conversation.definitions).toBe("older");
+  expect(await readCoordinatorTools(profile.paseo, b.stamps, row)).toBeUndefined();
+  // A new conversation on the profile is stamped like any Claude Code conversation.
+  const fresh = store();
+  await (await board(fresh, oldBuild)).call(profile);
+  expect(fresh.read().toolStamps["coordinator-1"]).toMatchObject({ session: "conversation-1", contract: 1 });
+
+  // A profile of another provider, and a look-alike ID with no record, stay out.
+  for (const other of [host("codex-work", "codex"), host("claude-like")]) {
+    const quiet = store();
+    expect((await (await board(quiet, extended("host"))).call(other)).text).toBe("planned");
+    expect(quiet.read().toolStamps).toEqual({});
+  }
 });
 
 test("a conversation ID that is too long or oddly shaped is never stored, and a bad stored stamp does not stop the board", async () => {
@@ -349,19 +409,19 @@ test("a conversation ID that is too long or oddly shaped is never stored, and a 
 });
 
 test("the board shows the notice only for its own listed coordinator", () => {
-  const row = { status: "idle", provider: "claude" };
-  expect(coordinatorToolsView("stale", row)).toEqual({ stale: true });
-  expect(coordinatorToolsView("stale", { ...row, status: "running" })).toEqual({ stale: true });
-  expect(coordinatorToolsView("stale", { ...row, provider: "codex" })).toBeUndefined();
-  expect(coordinatorToolsView("stale", { ...row, provider: null })).toBeUndefined();
-  expect(coordinatorToolsView("current", row)).toBeUndefined();
-  expect(coordinatorToolsView("unknown", row)).toBeUndefined();
+  const row = { status: "idle" };
+  expect(coordinatorToolsView("stale", row, true)).toEqual({ stale: true });
+  expect(coordinatorToolsView("stale", { ...row, status: "running" }, true)).toEqual({ stale: true });
+  // A conversation on a provider that is not known to keep its definitions.
+  expect(coordinatorToolsView("stale", row, false)).toBeUndefined();
+  expect(coordinatorToolsView("current", row, true)).toBeUndefined();
+  expect(coordinatorToolsView("unknown", row, true)).toBeUndefined();
   // No coordinator, or one on another host.
-  expect(coordinatorToolsView("stale", undefined)).toBeUndefined();
-  expect(coordinatorToolsView("stale", { ...row, serverId: "host-b" })).toBeUndefined();
+  expect(coordinatorToolsView("stale", undefined, true)).toBeUndefined();
+  expect(coordinatorToolsView("stale", { ...row, serverId: "host-b" }, true)).toBeUndefined();
   // A closed or failed coordinator already has the reach notice.
-  expect(coordinatorToolsView("stale", { ...row, status: "closed" })).toBeUndefined();
-  expect(coordinatorToolsView("stale", { ...row, status: "error" })).toBeUndefined();
+  expect(coordinatorToolsView("stale", { ...row, status: "closed" }, true)).toBeUndefined();
+  expect(coordinatorToolsView("stale", { ...row, status: "error" }, true)).toBeUndefined();
 });
 
 test("the snapshot reads the coordinator's conversation only when its stamp may be stale", async () => {
@@ -378,9 +438,10 @@ test("the snapshot reads the coordinator's conversation only when its stamp may 
   const broken = await board(prefs, newBuild, { version: 2, compatibleFrom: 2 });
   expect(await readCoordinatorTools(counted, broken.stamps, row)).toEqual({ stale: true });
   expect(reads).toBe(1);
-  expect(await readCoordinatorTools(counted, broken.stamps, { ...row, provider: "codex" })).toBeUndefined();
   expect(await readCoordinatorTools(counted, broken.stamps, { ...row, serverId: "host-b" })).toBeUndefined();
   expect(reads).toBe(1);
+  // The same stamp under a conversation that another provider runs shows nothing.
+  expect(await readCoordinatorTools(host("codex").paseo, broken.stamps, row)).toBeUndefined();
   h.conversations.set("coordinator-1", "conversation-2");
   expect(await readCoordinatorTools(counted, broken.stamps, row)).toBeUndefined();
   const offline = { agents: { ref: () => ({ refresh: async () => { throw new Error("offline"); } }) } } as any;

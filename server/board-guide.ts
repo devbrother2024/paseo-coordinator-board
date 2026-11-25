@@ -5,18 +5,18 @@ import { boardActionName, boardGuideName, coordinatorContract } from "../shared/
 
 // A coordinator tool as the board keeps it. `input` is the contract: what a conversation loaded and
 // keeps. `accepts` is what the installed board takes for the same action, which may have grown since.
-// `usage` is the detailed guidance, served by the guide so that an update reaches running conversations.
+// `usage` is guidance beyond the description, for what only board_action reaches: the guide serves it.
 // An `actionOnly` tool has no definition of its own and runs through board_action alone.
 export type CoordinatorTool = AgentToolDefinition & { usage?: string; accepts?: z.ZodType; actionOnly?: boolean };
 
 export function coordinatorTool<Input extends z.ZodType, Accepts extends z.ZodType = Input>(tool: {
-  name: string; title?: string; description: string; usage: string; input: Input; accepts?: Accepts; actionOnly?: boolean;
+  name: string; title?: string; description: string; usage?: string; input: Input; accepts?: Accepts; actionOnly?: boolean;
   execute(input: z.output<Accepts>, context: AgentToolContext): AgentToolResult | Promise<AgentToolResult>;
 }): CoordinatorTool {
   const { usage, accepts, actionOnly, ...definition } = tool;
   return {
-    ...defineAgentTool(definition as Parameters<typeof defineAgentTool>[0]), usage,
-    ...(accepts ? { accepts } : {}), ...(actionOnly ? { actionOnly } : {}),
+    ...defineAgentTool(definition as Parameters<typeof defineAgentTool>[0]),
+    ...(usage ? { usage } : {}), ...(accepts ? { accepts } : {}), ...(actionOnly ? { actionOnly } : {}),
   };
 }
 
@@ -68,16 +68,38 @@ export function boardActions(tools: readonly CoordinatorTool[]): Map<string, Boa
   return actions;
 }
 
-const sorted = (value: unknown): unknown => Array.isArray(value) ? value.map(sorted)
-  : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sorted((value as Record<string, unknown>)[key])]))
-  : value;
+// Keys whose value is a map of names to schemas, and keys whose value is data rather than a schema.
+const schemaMaps = new Set(["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]);
+const dataKeys = new Set(["enum", "const", "default", "examples"]);
 
-// Changes when the guidance or the accepted input of any action changes. A conversation that read
-// another revision is told once to read the guide again.
-export function guideRevision(actions: ReadonlyMap<string, BoardAction>, contract: number = coordinatorContract.version): string {
-  const described = [...actions.values()].sort((a, b) => a.name.localeCompare(b.name))
-    .map(action => [action.name, action.summary, action.usage, action.tool, sorted(schemaOf(action.accepts))]);
-  return createHash("sha256").update(JSON.stringify([contract, described])).digest("hex").slice(0, 12);
+// The shape of an input schema: what a call may carry. Wording (descriptions and titles), key order
+// and the order of required field names do not change what a conversation can call.
+export function inputShape(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(inputShape);
+  if (!schema || typeof schema !== "object") return schema;
+  const source = schema as Record<string, unknown>;
+  const shape: Record<string, unknown> = {};
+  for (const key of Object.keys(source).sort()) {
+    const value = source[key];
+    if (key === "description" || key === "title") continue;
+    if (dataKeys.has(key)) shape[key] = value;
+    else if (key === "required" && Array.isArray(value) && value.every(item => typeof item === "string")) shape[key] = [...value].sort();
+    else if (schemaMaps.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+      const map = value as Record<string, unknown>;
+      shape[key] = Object.fromEntries(Object.keys(map).sort().map(name => [name, inputShape(map[name])]));
+    } else shape[key] = inputShape(value);
+  }
+  return shape;
+}
+
+// What a conversation cannot learn from its own tool definitions: actions without a definition, and
+// actions that accept more than their definition lists. Empty while there is none. It changes when
+// one appears or its accepted input changes, and a conversation that read another revision is told
+// once to read the guide. Wording is not part of it.
+export function guideRevision(actions: ReadonlyMap<string, BoardAction>): string {
+  const beyond = [...actions.values()].filter(action => !action.tool || action.beyond.length).sort((a, b) => a.name.localeCompare(b.name))
+    .map(action => [action.name, action.tool, inputShape(schemaOf(action.accepts))]);
+  return beyond.length ? createHash("sha256").update(JSON.stringify(beyond)).digest("hex").slice(0, 12) : "";
 }
 
 // The contract number written in the definition the calling conversation holds. The description
@@ -128,8 +150,8 @@ export function boardGuideTool(actions: ReadonlyMap<string, BoardAction>, revisi
   definitions: (context: AgentToolContext) => Promise<Definitions> = async () => "unknown"): CoordinatorTool {
   return defineAgentTool({
     name: boardGuideName,
-    description: "Read what the installed board accepts now: its actions, each one's detailed usage and current input schema, and what changed since this conversation received its board tools. "
-      + "Without a topic, list the actions. With an action name as topic, describe that action. Read it once per conversation, and again when a board tool result says the guide changed.",
+    description: "Read what the installed board accepts now, and what it added since this conversation received its board tools: actions without a tool of their own, and input fields that the tool definitions here do not list. "
+      + `Without a topic, list the actions. With an action name as topic, return that action's usage and current input schema. Read it when a board tool result says so, and before using ${boardActionName}.`,
     input: z.strictObject({
       contract: contractField(),
       topic: z.string().min(1).max(64).optional().describe("An action name. Omit it for the list."),
@@ -150,7 +172,7 @@ export function boardGuideTool(actions: ReadonlyMap<string, BoardAction>, revisi
         use: [
           "Call the board's named tools as this conversation defines them.",
           `${boardActionName}({ contract, action, input }) runs any action below with the installed board's checks. Use it for an action without a tool, or for a field your tool definition lacks.`,
-          `${boardGuideName}({ contract, topic: "<action>" }) returns that action's detailed usage and current input schema. Read the topic before you first use an action.`,
+          `${boardGuideName}({ contract, topic: "<action>" }) returns that action's usage and current input schema. Read it before passing a field under onlyThroughBoardAction or running an action with tool: false.`,
           "A result and its permission checks are the same through either path.",
         ],
         actions: [...actions.values()].map(action => ({ name: action.name, summary: action.summary, tool: action.tool, onlyThroughBoardAction: action.beyond })),

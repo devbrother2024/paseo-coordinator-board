@@ -17,6 +17,7 @@ const audit = () => coordinatorTool({
   input: z.strictObject({ depth: z.number().int().positive().optional() }),
   execute: input => ({ text: `audited ${input.depth ?? "all"}` }),
 });
+const exact_other = () => coordinatorTool({ name: "read_board", description: "List.", input: z.strictObject({}), execute: () => ({ text: "[]" }) });
 const build = () => {
   const tools = [plan(), audit()];
   const actions = boardActions(tools);
@@ -98,6 +99,8 @@ test("the guide lists actions and describes one", async () => {
   const topic = JSON.parse((await guide.execute({ contract: 1, topic: "plan_assignment" }, context)).text!);
   expect(topic.action).toBe("plan_assignment");
   expect(topic.usage).toBe("Pass the selected projectId. Pass route only when the human chose one.");
+  // Without separate usage text, the tool's own description is the usage.
+  expect(JSON.parse((await boardGuideTool(boardActions([exact_other()]), "", async () => "current").execute({ contract: 1, topic: "read_board" }, context)).text!).usage).toBe("List.");
   expect(topic.tool).toBe(true);
   expect(topic.onlyThroughBoardAction).toEqual(["route", "route.effort", "route.model"]);
   expect(Object.keys(topic.input.properties)).toEqual(["projectId", "route"]);
@@ -112,6 +115,7 @@ test("the guide says when the conversation's definitions are older, or cannot be
   const actions = boardActions([plan()]);
   const read = async (definitions: "current" | "older" | "unknown") =>
     JSON.parse((await boardGuideTool(actions, "rev", async () => definitions).execute({ contract: 1 }, context)).text!).conversation;
+  expect((await read("current")).note).toContain("onlyThroughBoardAction");
   expect((await read("older")).note).toContain("board_action");
   expect((await read("older")).note).toContain("older");
   expect((await read("unknown")).definitions).toBe("unknown");
@@ -120,15 +124,23 @@ test("the guide says when the conversation's definitions are older, or cannot be
   expect(JSON.parse((await failing.execute({ contract: 1 }, context)).text!).conversation.definitions).toBe("unknown");
 });
 
-test("the guide revision follows usage and accepted input, not order", () => {
-  const base = guideRevision(boardActions([plan(), audit()]));
+test("the guide revision follows what only board_action can reach, not wording or order", () => {
+  // With nothing beyond the tool definitions there is nothing for a conversation to learn.
+  const exact = coordinatorTool({ name: "plan_assignment", description: "Plan an assignment.", input: z.strictObject({ projectId: z.string() }), execute: () => ({}) });
+  expect(guideRevision(boardActions([exact]))).toBe("");
+  expect(guideRevision(boardActions([coordinatorTool({ ...exact, description: "Plan where a worker runs.", usage: "Pass the selected projectId." })]))).toBe("");
+
+  const base = guideRevision(boardActions([plan(), exact_other()]));
   expect(base).toMatch(/^[a-f0-9]{12}$/);
-  expect(guideRevision(boardActions([audit(), plan()]))).toBe(base);
-  const reworded = coordinatorTool({ ...plan(), usage: "Pass the selected projectId." });
-  expect(guideRevision(boardActions([reworded, audit()]))).not.toBe(base);
-  const widened = coordinatorTool({ ...audit(), usage: audit().usage!, accepts: z.strictObject({ depth: z.number().optional(), since: z.string().optional() }) });
-  expect(guideRevision(boardActions([plan(), widened]))).not.toBe(base);
-  expect(guideRevision(boardActions([plan(), audit()]), 2)).not.toBe(base);
+  expect(guideRevision(boardActions([exact_other(), plan()]))).toBe(base);
+  // Rewording a description, usage text or a field description is not news.
+  const reworded = coordinatorTool({ ...plan(), description: "Plan where a worker runs.", usage: "Pass the selected projectId.",
+    accepts: z.strictObject({ projectId: z.string().trim().min(1), route: z.strictObject({ model: z.string().describe("The model ID."), effort: z.string().nullable().optional() }).optional() }) });
+  expect(guideRevision(boardActions([reworded, exact_other()]))).toBe(base);
+  // Another accepted field, and a feature without a tool definition, are.
+  const widened = coordinatorTool({ ...plan(), accepts: z.strictObject({ projectId: z.string().trim().min(1), route: z.strictObject({ model: z.string(), effort: z.string().nullable().optional() }).optional(), host: z.string().optional() }) });
+  expect(guideRevision(boardActions([widened, exact_other()]))).not.toBe(base);
+  expect(guideRevision(boardActions([plan(), exact_other(), audit()]))).not.toBe(base);
 });
 
 test("action names are unique and never shadow the contract tools", () => {
