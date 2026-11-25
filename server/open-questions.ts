@@ -38,6 +38,8 @@ export type QuestionContext = {
   ledgerQuestions?: ReadonlyMap<string, LedgerLink>;
   // Sessions whose sourced messages may relay the person's answer: the coordinator.
   relaySenders?: ReadonlySet<string>;
+  // The ledger could not be read: the board cannot confirm a ledger card holds a question, so the session card shows it.
+  ledgerUnreadable?: true;
   // Keys of ledger cards with a resolution on record. Undefined when the resolutions could not be read.
   ledgerResolved?: ReadonlySet<string>;
   now?: number;
@@ -279,6 +281,8 @@ export function scanQuestions(evidence: { epoch?: string; events?: readonly Ques
       else if (context.ledgerResolved) { delete item.moved; delete item.movedTo; delete item.heldByLedger; }
     }
   }
+  // Held only while the board can see the ledger card that holds it. Moved stays, so its resolution can still close it later.
+  if (context.ledgerUnreadable) for (const item of list) delete item.heldByLedger;
   return { epoch, open: list.filter(item => !item.closed).map(({ closed: _closed, ...item }) => item), closed };
 }
 
@@ -319,7 +323,8 @@ export function questionNotice(scan: QuestionScan, ended: boolean, _now = Date.n
 }
 
 /** The context a session's scan needs from the host settings. */
-export type LedgerView = { questions: ReadonlyMap<string, ReadonlyMap<string, LedgerLink>>; resolved?: ReadonlySet<string> };
+// `unreadable`: the ledger could not be read in full (missing, invalid, partial), so no question is held by it now.
+export type LedgerView = { questions: ReadonlyMap<string, ReadonlyMap<string, LedgerLink>>; resolved?: ReadonlySet<string>; unreadable?: true };
 
 /** The open questions a session card shows: not those a ledger card holds (the ledger card shows them). */
 export function shownQuestions(scan: QuestionScan) {
@@ -346,7 +351,8 @@ export function questionContext(scope: Pick<Preferences, "closedQuestions" | "ra
   return { closed, boardMessageIds, clarificationIds: new Set(Object.keys(scope.clarifications ?? {})),
     relaySenders: new Set(scope.coordinator ? [scope.coordinator] : []),
     records: scope.raisedQuestions?.[sessionId]?.questions ?? [],
-    ...(ledger ? { ledgerQuestions: ledger.questions.get(sessionId) ?? new Map(), ...(ledger.resolved ? { ledgerResolved: ledger.resolved } : {}) } : {}),
+    ...(ledger?.unreadable ? { ledgerUnreadable: true as const }
+      : ledger ? { ledgerQuestions: ledger.questions.get(sessionId) ?? new Map(), ...(ledger.resolved ? { ledgerResolved: ledger.resolved } : {}) } : {}),
     ...(now === undefined ? {} : { now }) };
 }
 

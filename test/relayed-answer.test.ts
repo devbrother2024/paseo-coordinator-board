@@ -129,3 +129,19 @@ test("a ledger card with only some of a block's questions does not take the bloc
   expect(held.decision).toBeUndefined();
   expect(whole.read().raisedQuestions.worker.questions[0].heldByLedger).toBe(true);
 });
+
+test("a question a ledger card held shows again on its session card while the ledger cannot be read", () => {
+  const prefs = store();
+  const ledger: LedgerView = { questions: ledgerQuestionsBySession([{ key: "m5", fingerprint: "f1", sessionId: "worker",
+    questions: [{ id: "Q1", text: "Screen proxy resolution?" }] } as any]), resolved: new Set() };
+  expect(snapshot(prefs, evidence(asked), ledger).decision).toBeUndefined();
+  // The ledger file is missing or unreadable: the board cannot confirm the ledger card holds it, so the session card shows it.
+  const unreadable = snapshot(prefs, evidence(asked), { questions: new Map(), unreadable: true });
+  expect(unreadable.decision?.source).toBe("conversation");
+  // Nothing closed meanwhile, and the ledger card takes it again once the ledger reads.
+  expect(Object.keys(prefs.read().closedQuestions)).toEqual([]);
+  expect(snapshot(prefs, evidence(asked), ledger).decision).toBeUndefined();
+  // A session the board does not read (working, ended) follows the same rule from the record.
+  const working = snapshot(prefs, null, { questions: new Map(), unreadable: true }, row({ status: "running", lane: "running", detail: "Working" }));
+  expect(working.decision?.source).toBe("conversation");
+});

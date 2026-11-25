@@ -331,7 +331,8 @@ export default function contribute(server: PluginServerContext) {
     // A ledger the board cannot read in full leaves every moved question open.
     const ledgerView = tracked.read(new Set(scope.projects), [], { items: [], projects: [] });
     const resolved = tracked.resolvedKeys();
-    const ledger = ledgerView.status === "ok" ? { questions: ledgerQuestionsBySession(ledgerView.items), ...(resolved ? { resolved } : {}) } : undefined;
+    const ledger = ledgerView.status === "ok" ? { questions: ledgerQuestionsBySession(ledgerView.items), ...(resolved ? { resolved } : {}) }
+      : { questions: new Map(), unreadable: true as const };
     const [evidence, roots] = await Promise.all([
       reader.decorate(paseo, sessions, scope, ledger),
       projectRoots.describe(projects, new Set(scope.projects)),
