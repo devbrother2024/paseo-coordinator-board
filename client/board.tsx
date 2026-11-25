@@ -37,6 +37,8 @@ import { CoordinatorReplaceLoader } from "./coordinator-replace";
 import { blocksReplies, opensSession, readSessionReach } from "../shared/coordinator-reach";
 import { Button, type Theme } from "./controls";
 import { Project } from "./project-kanban";
+import { KnownPullRepositories } from "./history-markdown";
+import { knownPullRepositories } from "./pull-repositories";
 import { SessionProgress } from "./session-progress";
 import { BoardLanguageSetting, useBoardLanguage } from "./language";
 import { projectCards, type Card, type Snapshot } from "./model";
@@ -339,7 +341,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   });
   const c = theme.colors;
   const assignmentNotice = !settings && snapshot?.assignmentNotice;
+  const knownRepositories = useMemo(() => knownPullRepositories(snapshot), [snapshot]);
   return (
+    <KnownPullRepositories.Provider value={knownRepositories}>
     <ScrollView ref={scroll} style={{ flex: 1, backgroundColor: c.surface0 }} contentContainerStyle={{ gap: 20, padding: layout.compact ? 12 : 22 }}>
       <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <View style={{ flex: 1, minWidth: 140, gap: 3 }}>
@@ -455,5 +459,6 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         <RemoteRunning groups={visiblePeers} projects={activeProjects} open={onOpenHostSession} theme={theme} />
       </SessionProgress>}
     </ScrollView>
+    </KnownPullRepositories.Provider>
   );
 }

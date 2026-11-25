@@ -4,14 +4,35 @@ import {
   cardCompletionRequest, choiceExplanationRequest, deferredNotice, missingChoicesNotice, OTHER_CHOICES, type Bilingual, type ChoiceGaps,
 } from "../shared/question-choices";
 
-/** The first `count` lines of Markdown, with an open code fence closed so the rest of the card renders normally. */
+const tableDivider = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const isTableStart = (line: string, next: string | undefined) => line.includes("|") && next !== undefined && next.includes("|") && tableDivider.test(next);
+const isHeading = (line: string) => /^\s{0,3}#{1,6}(\s|$)/.test(line);
+
+/**
+ * The first `count` lines of Markdown, cut so no block shows as a broken half: an open code fence is closed,
+ * a table keeps its header with its first row (the header and divider count as one line), and a heading at the end
+ * keeps the first thing under it.
+ */
 export function previewMarkdown(markdown: string, count = 4) {
   const lines = markdown.split(/\r?\n/);
   const kept: string[] = [];
   let fence: string | null = null;
-  for (const line of lines) {
-    if (kept.filter(Boolean).length >= count) break;
+  let units = 0;
+  let i = 0;
+  while (i < lines.length) {
+    const lastShown = kept.findLast(line => line.trim());
+    if (units >= count && !(fence === null && lastShown !== undefined && isHeading(lastShown))) break;
+    const line = lines[i];
+    if (fence === null && isTableStart(line, lines[i + 1])) {
+      kept.push(line, lines[i + 1]);
+      i += 2;
+      units++;
+      if (i < lines.length && lines[i].trim() && lines[i].includes("|")) { kept.push(lines[i]); i++; units++; }
+      continue;
+    }
     kept.push(line);
+    i++;
+    if (line.trim()) units++;
     const opener = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
     if (opener) fence = fence ? null : opener;
   }
