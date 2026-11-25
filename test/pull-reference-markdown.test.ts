@@ -150,8 +150,10 @@ test("dropped links: plain words right before a number and lines that name repos
   expect(links("other/thing#16 와 alpha-web #17")).toEqual(one("studio/alpha-web", 17));
 });
 
-test("names the board does not know, away from the number, do not stop the card repository", () => {
-  // 규칙 4 의 단서 목록 밖: 번호 옆이 아닌 모르는 슬러그·CamelCase 이름은 단서로 읽지 않는다.
+test("known limitation: an unknown repository name away from the number does not stop the card repository", () => {
+  // 알려진 한계. 보드가 모르는 저장소 이름이 번호 옆이 아닌 곳에만 있으면 카드 저장소로 간다.
+  // 실제 글의 저장소 이름은 대부분 보드 목록(관리 프로젝트, 원장, 열린 PR, 병합 기록)에 있어 다른 저장소 단서로 걸린다.
+  // 하이픈 든 모르는 단어로 막으면 re-review, follow-up 같은 흔한 말 때문에 링크가 넓게 빠지므로 막지 않는다.
   for (const text of ["zeta-api 병합 완료 #26", "#26 zeta-api 병합", "ZetaApp 수정 (#26)"]) {
     expect({ text, found: links(text, card) }).toEqual({ text, found: one(card, 26) });
   }
