@@ -487,3 +487,30 @@ test("snapshot delivery evidence settles a lost acknowledgement only for the sam
   expect(f.service.read(f.selected,[],{items:[],projects:[]},evidence("coord",body)).history?.[0].status).toBe("sent");
   expect(f.read().items).toBeEmpty();
 });
+
+test("a reply's history says when its card was taken down from a fully read ledger",()=>{
+  let partial=false;
+  const f=fixture(()=>({items:[],partial}));
+  f.write([row("answered"),row("other")]);
+  const [card]=f.read().items;
+  writeFileSync(join(f.dir,"tracked-decisions.resolved.json"),JSON.stringify({version:1,items:[{
+    key:card.key,fingerprint:card.fingerprint,recipientId:"coordinator",answer:"Keep it",
+    at:"2026-11-25T03:00:00.000Z",messageId:"c96bfed2-f9ef-41ff-aca6-9f8b138a141f",pending:false,
+  }]}));
+  // The answered card leaves the list at once, but the ledger still has it.
+  expect(f.read().items.map(i=>i.id)).toEqual(["other"]);
+  expect(f.read().history?.[0]).toMatchObject({status:"sent",answer:"Keep it"});
+  expect(f.read().history?.[0].cardRemoved).toBeUndefined();
+  // A newer revision of the same card is not a removal.
+  f.write([row("answered",{title:"Renamed"}),row("other")]);
+  expect(f.read().history?.[0].cardRemoved).toBeUndefined();
+  f.write([row("other")]);
+  expect(f.read().history?.[0].cardRemoved).toBe(true);
+  // A ledger read only in part cannot tell a removal from a source that did not load.
+  partial=true;
+  expect(f.read().status).toBe("partial");
+  expect(f.read().history?.[0].cardRemoved).toBeUndefined();
+  partial=false;
+  rmSync(f.path);
+  expect(f.read().history?.[0].cardRemoved).toBe(true);
+});
