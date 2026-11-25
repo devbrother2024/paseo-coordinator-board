@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   advancesOnChoice, answerSummary, clampStep, firstOpenStep, foldsAsk, isHumanCheck, nextOpenStep, openingStep,
-  applyPicks, chooseAnswer, emptyAnswers, photoPlacement, recordHeaderParts, skipQuestion, startWriting, stepAfterAnswer, stepText, typeAnswer,
+  chooseAnswer, emptyAnswers, photoPlacement, recordHeaderParts, skipQuestion, startWriting, stepAfterAnswer, stepText, typeAnswer,
   trackedChipSide, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps,
 } from "../client/card-steps";
 import { optionId } from "../client/tracked-reply-draft";
@@ -244,12 +244,6 @@ test("answer drafts: choosing, typing, writing, skipping and recommended picks k
   expect(skipped).toMatchObject({ skipped: { 0: true }, selected: { 0: [] } });
   expect(skipped.typed[0]).toBeUndefined();
   expect(skipQuestion(skipped, 0).skipped[0]).toBe(false);
-  // Recommended picks overwrite only the questions they fill, and undo their typed answers and skips.
-  const picked = applyPicks(typeAnswer(skipQuestion(draft, 6), 7, "mine"), { 6: [a] });
-  expect(picked.selected[6]).toEqual([a]);
-  expect(picked.skipped[6]).toBe(false);
-  expect(picked.typed[7]).toBe("mine");
-  expect(picked.selected[0]).toEqual([b]);
 });
 
 test("the step after an answer: a single choice or a skip moves on, other answers wait for Next", () => {

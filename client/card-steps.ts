@@ -1,6 +1,6 @@
 import type { TrackedDecision, TrackedReplyRoute } from "../shared/tracked-decisions";
 import { dueTime, waitStart } from "../shared/decision-priority";
-import { optionId, recommendedChoices, recommendedTrackedReply } from "./tracked-reply-draft";
+import { optionId, recommendedTrackedReply } from "./tracked-reply-draft";
 
 type Translate = (korean: string, english: string) => string;
 type Question = TrackedDecision["questions"][number];
@@ -173,14 +173,6 @@ export function startWriting(draft: AnswerDrafts, index: number): AnswerDrafts {
 export function skipQuestion(draft: AnswerDrafts, index: number): AnswerDrafts {
   return { ...draft, skipped: { ...draft.skipped, [index]: !draft.skipped[index] }, selected: { ...draft.selected, [index]: [] },
     typed: { ...draft.typed, [index]: undefined } };
-}
-
-// Recommended picks replace the questions they fill, including a typed answer or a skip there, and nothing else.
-export function applyPicks(draft: AnswerDrafts, picks: Readonly<Record<number, string[]>>): AnswerDrafts {
-  const indexes = Object.keys(picks);
-  return { ...draft, selected: { ...draft.selected, ...picks },
-    typed: { ...draft.typed, ...Object.fromEntries(indexes.map(index => [index, undefined])) },
-    skipped: { ...draft.skipped, ...Object.fromEntries(indexes.map(index => [index, false])) } };
 }
 
 // Where a one-at-a-time card goes after an answer: on to the next open question after a single choice or a skip,

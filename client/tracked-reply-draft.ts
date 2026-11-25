@@ -96,14 +96,3 @@ export function trackedRecovery(outcome: { status: string; reason?: string; requ
   const blocking = changed && (outcome.reason !== "revised" || awaitingRevision);
   return { needsRefresh, awaitingRevision, stuck: blocking && (streak?.count ?? 0) >= 2 };
 }
-
-// Fill only questions the person has not answered or skipped, using the ledger's own recommended options.
-export function recommendedChoices(item: { questions: readonly TrackedDecision["questions"][number][] }, answered: (index: number) => boolean) {
-  const picks: Record<number, string[]> = {};
-  item.questions.forEach((question, index) => {
-    const recommended = question.options.filter(option => option.recommended);
-    if (answered(index) || !recommended.length || (!question.multi && recommended.length > 1)) return;
-    picks[index] = recommended.map(optionId);
-  });
-  return picks;
-}

@@ -6,7 +6,7 @@ import {manageQueuedAnswer} from "../shared/busy-delivery";
 import contribute from "../index.server";
 import { recordActionKey, recordRowKey } from "../client/decision-receipts";
 import {
-  closedRevision, nextFailureStreak, recommendedChoices, recommendedTrackedReply, redirectAwaitsCheck, trackedBasisRecipient, trackedDraftLayout,
+  closedRevision, nextFailureStreak, recommendedTrackedReply, redirectAwaitsCheck, trackedBasisRecipient, trackedDraftLayout,
   trackedRecovery, trackedReplyBasis, trackedRetryFingerprint,
 } from "../client/tracked-reply-draft";
 import { trackedWorkSession } from "../client/tracked-session-targets";
@@ -665,9 +665,6 @@ test("the example answer is only a placeholder; the recommendation is inserted o
     {id: "Q4", text: "Answered", multi: false, options: [{key: "A", text: "One", recommended: true}]},
   ]} as typeof item;
   expect(recommendedTrackedReply(choices)).toBe("");
-  expect(recommendedChoices(choices, index => index === 3)).toEqual({
-    0: [JSON.stringify(["A", "One"])], 1: [JSON.stringify(["1", "Logs"]), JSON.stringify(["2", "Docs"])],
-  });
 });
 
 test("a running worker steers only a person's reply, and an idle-only ledger card queues it", async()=>{
