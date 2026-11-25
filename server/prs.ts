@@ -381,17 +381,21 @@ export class ProjectPullRequests {
         return {projectId,mode,repo:resolved,status:resolved?"ok":native===null?"unavailable":"unmapped"};
       } catch { return {projectId,mode,repo:null,status:"unavailable"}; }
     }));
-    const budget = {left:mergeabilityRetry.perRead};
     const sources = new Map(await Promise.all([...pending].map(async ([repo,group]) => {
       let value = await group.read;
       // A queued lookup can lose its last authorized project while a slower
       // mapping for the same repository is still in progress.
       if (value === null && group.allowed()) value = await this.pulls(repo,false,group.allowed);
-      if (value?.items.some(p => p.reason === "computing")) {
-        value = {...value, items:await this.mergeability.apply(value.items,task=>this.limited(task),group.allowed,budget)};
-      }
       return [repo,value] as const;
     })));
+    // PRs whose mergeability GitHub is still computing are asked one by one, all repositories together.
+    const computing = [...sources].flatMap(([repo,value]) => value?.items.some(p => p.reason === "computing")
+      ? [{repo, value, allowed:pending.get(repo)!.allowed}] : []);
+    if (computing.length) {
+      const checked = await this.mergeability.apply(computing.map(({value,allowed}) => ({items:value.items, allowed})),
+        task=>this.limited(task), mergeabilityRetry.perRead);
+      computing.forEach(({repo,value}, index) => sources.set(repo, {...value, items:checked[index]}));
+    }
     // A PR seen open again may have been reopened after a closed answer.
     for (const source of sources.values()) for (const p of source?.items ?? []) this.settled.delete(settledKey(p.repo, p.number));
     const latest = this.store.read();

@@ -338,12 +338,12 @@ test("a slow single read does not hold up the board: this read says computing, a
   const pending = parseOpenPulls("org/example", JSON.stringify([raw(1,{mergeable:"UNKNOWN"})])).items;
   const run = <T,>(task: () => Promise<T>) => task();
   const started = Date.now();
-  expect((await checks.apply(pending, run, () => true, {left:3}))[0].reason).toBe("computing");
+  expect((await checks.apply([{items:pending, allowed:() => true}], run, 3))[0][0].reason).toBe("computing");
   expect(Date.now() - started).toBeLessThan(1_000);
   // Another read while it is still running neither waits long nor asks GitHub again.
-  expect((await checks.apply(pending, run, () => true, {left:3}))[0].reason).toBe("computing");
+  expect((await checks.apply([{items:pending, allowed:() => true}], run, 3))[0][0].reason).toBe("computing");
   release(); await slow; await new Promise(resolve => setTimeout(resolve, 0));
-  expect((await checks.apply(pending, run, () => true, {left:3}))[0].reason).toBe("ready");
+  expect((await checks.apply([{items:pending, allowed:() => true}], run, 3))[0][0].reason).toBe("ready");
   expect(reads).toEqual([1]);
 });
 
@@ -384,4 +384,17 @@ test("a closed answer is dropped when the PR shows up open again, and rechecked 
   expect(readSecond().get("org/example#2")?.state).toBe("CLOSED");
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(asked.length).toBe(before + 1);
+});
+
+test("the single-read budget goes to unanswered PRs across all repositories before any refresh", async () => {
+  const f = fixture(["root","runtime"]);
+  f.store.change(s => { s.projectRepositories.root = {mode:"manual",repo:"org/first"}; s.projectRepositories.runtime = {mode:"manual",repo:"org/second"}; });
+  const rows = new Map([["org/first", Array.from({length:6},(_,i)=>raw(i+1,{mergeable:"UNKNOWN"}))], ["org/second", [raw(1,{mergeable:"UNKNOWN"})]]]);
+  f.behavior.rows = [];
+  const deps = (f.service as any).deps;
+  deps.githubPulls = async (repo: string) => parseOpenPulls(repo, JSON.stringify(rows.get(repo) ?? []));
+  for (let poll = 0; poll < 10; poll++) { await f.read(); f.tick(30_000); }
+  expect(f.log.single).toContain("org/second#1");
+  // All seven PRs were asked before any answered one was refreshed.
+  expect(new Set(f.log.single.slice(0, 7)).size).toBe(7);
 });
