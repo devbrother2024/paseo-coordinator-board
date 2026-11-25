@@ -145,11 +145,31 @@ export function answersChoices(text: string, question: { block?: QuestionBlock; 
  */
 export function relaysAnswer(text: string, question: { block?: QuestionBlock; choices?: readonly Choice[] }) {
   const block = question.block;
-  const lines = text.split("\n").map(line => line.trim()).filter(Boolean).filter(line => block
+  // Lines inside code blocks and quotes are examples or citations, not the person's answer.
+  let fenced = false;
+  const plain = text.split("\n").map(line => line.trim()).filter(line => {
+    if (/^(?:`{3,}|~{3,})/.test(line)) { fenced = !fenced; return false; }
+    return !fenced && !line.startsWith(">");
+  });
+  const lines = plain.filter(Boolean).filter(line => block
     ? filledLine(line, block) !== null || (parts(line).length > 0 && parts(line).every(part =>
       block.questions.some((item, index) => answersBlockPart(part, item, index, block.questions.length, true))))
     : answersChoices(line, question));
   return lines.length > 0 && answersChoices(lines.join("\n"), question);
+}
+
+/**
+ * The ledger card that carries a question. An explicit sessionMatch links it by its words, as before. A card linked by the
+ * same session and words takes a block of several questions only when it has every one of them, so a card with some of
+ * them neither hides nor closes the rest.
+ */
+function ledgerLinkFor(item: FoundQuestion, ledger: ReadonlyMap<string, LedgerLink>) {
+  const link = ledger.get(questionWords(item.question));
+  const block = item.turn?.block ?? item.record?.block;
+  if (!block || block.questions.length < 2 || (link && !link.owns)) return link;
+  const links = block.questions.map(question => ledger.get(questionWords(question.text)));
+  const card = links[0]?.card;
+  return links.every(each => each?.owns && each.card === card) ? links[0] : undefined;
 }
 
 function choicesOf(item: FoundQuestion) {
@@ -248,7 +268,7 @@ export function scanQuestions(evidence: { epoch?: string; events?: readonly Ques
   if (context.ledgerQuestions) {
     for (const item of list) {
       if (item.closed) continue;
-      const link = context.ledgerQuestions.get(questionWords(item.question));
+      const link = ledgerLinkFor(item, context.ledgerQuestions);
       if (link) {
         item.moved = true; item.movedTo = link.card;
         if (link.owns) item.heldByLedger = true; else delete item.heldByLedger;

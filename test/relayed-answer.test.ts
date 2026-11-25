@@ -103,3 +103,29 @@ test("a ledger card for another session with the same words does not touch the q
     questions: [{ id: "Q1", text: "Screen proxy resolution?" }] } as any]), resolved: new Set() };
   expect(snapshot(prefs, evidence(asked), other).decision?.source).toBe("conversation");
 });
+
+test("an example inside a code block of the coordinator's message is not a relayed answer", () => {
+  const prefs = store();
+  const example: Step = ["agent", "To answer, the person can write a line like this:\n```\nQ1 · Screen proxy resolution?: A · 720p\n```\n> Q1 A\nWaiting for the answer.", 1, "coord"];
+  expect(snapshot(prefs, evidence(asked, example)).lane).toBe("human");
+  expect(Object.keys(prefs.read().closedQuestions)).toEqual([]);
+});
+
+test("a ledger card with only some of a block's questions does not take the block, and its resolution closes nothing", () => {
+  const two: Step = ["assistant", block([{ id: "Q1", text: "Screen proxy resolution?" }, { id: "Q2", text: "Keep the source files?" }]), 2];
+  const card = (questions: { id: string; text: string }[], resolved: string[] = []): LedgerView => ({
+    questions: ledgerQuestionsBySession([{ key: "m5", fingerprint: "f1", sessionId: "worker", questions } as any]), resolved: new Set(resolved) });
+  const partial = store();
+  const shown = snapshot(partial, evidence(two), card([{ id: "Q1", text: "Screen proxy resolution?" }]));
+  expect(shown.decision?.source).toBe("conversation");
+  expect(partial.read().raisedQuestions.worker.questions[0].heldByLedger).toBeUndefined();
+  // The partial card goes away resolved: the block's question stays open.
+  const after = snapshot(partial, evidence(two), { questions: new Map(), resolved: new Set([JSON.stringify(["m5", "f1"])]) });
+  expect(after.decision?.source).toBe("conversation");
+  expect(Object.keys(partial.read().closedQuestions)).toEqual([]);
+  // A card with every question of the block takes it.
+  const whole = store();
+  const held = snapshot(whole, evidence(two), card([{ id: "Q1", text: "Screen proxy resolution?" }, { id: "Q2", text: "Keep the source files?" }]));
+  expect(held.decision).toBeUndefined();
+  expect(whole.read().raisedQuestions.worker.questions[0].heldByLedger).toBe(true);
+});
