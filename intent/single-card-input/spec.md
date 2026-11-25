@@ -1,0 +1,146 @@
+# Spec: 카드 입력 하나, 병합 카드 수정 요청, 세션 글의 질문 블록
+
+Intent: [intent.md](intent.md)
+승인: 2026-11-25 유지관리자(세션)
+상태: 승인
+
+## 1. 범위
+
+- 화면: 원장 카드(`client/tracked-decisions.tsx`), 세션 대화 카드(`client/decision-actions.tsx`), 병합 카드(`client/pull-requests.tsx`), 접힌 카드(`client/decision-receipts.ts`, `client/inline-receipt.tsx`), 조립(`client/board.tsx`).
+- 판정: `client/card-input.ts`, `shared/question-block.ts`, `shared/pull-change-requests.ts`, `shared/pull-judgments.ts`, `shared/merge-card-place.ts`.
+- 서버: 카드 정보 머리(`server/decision-message.ts`), 원장 답장 기록(`server/tracked-decisions.ts`), 수정 요청 전송(`server/pull-change-requests.ts`), 대화 읽기(`server/conversation.ts`, `server/session-decisions.ts`), 호스트 설정(`server/preferences.ts`).
+
+이 폴더를 만든 이유: 세션에 보내는 전송이 하나 늘고(수정 요청), 서버와 화면 사이 RPC 계약과 플러그인 데이터 파일(호스트 설정, 원장 답장 기록)에 필드가 더해지며, 세션이 쓰는 공개 형식(질문 블록)이 생긴다. 버린 대안도 남길 가치가 있다.
+
+## 2. 동작 계약
+
+### 2.1 카드 입력 하나
+
+- 원장 카드와 세션 대화 카드는 입력창 하나와 **보내기** 하나를 낸다. 카드의 **질문하기**(따로 열리는 질문 입력)는 내지 않는다. 지난 문답은 **근거·이력 보기**에 그대로 보인다.
+- 버튼 이름(`sendWords`): 결정 카드는 "보내기 / Send", 병합 카드는 "수정 요청 보내기 / Send change request". 받는 곳은 버튼 옆 한 줄과 접근성 이름에 적는다.
+- 원장 카드의 입력창(`trackedDraftLayout`):
+  - 질문이 없는 카드: 지금의 자유 입력창이 그 입력창이다.
+  - 질문이 하나인 카드: 그 질문의 입력창이 그 입력창이다(선택지를 고르거나 글을 쓴다).
+  - 질문이 여럿인 카드: 질문 아래에 카드 입력창이 늘 보인다. **보내기**도 늘 보인다.
+  - 세션 질문과 묶인 카드(질문 없음)는 묶인 세션 카드의 입력창을 쓴다. 병합 카드가 수정 요청 입력을 내는 동안에는 원장 쪽 자유 입력창을 내지 않는다.
+- 보낼 수 있는 때(`openQuestionsBlock`): 답하지 않은 질문이 남아 있어도, 카드 입력창에 글이나 사진이 있으면 보낼 수 있다. 글도 사진도 없으면 지금처럼 모든 질문에 답하거나 건너뛰어야 한다.
+- 선택지 설명이 빠진 카드의 요청 문장 넣기 버튼은 카드 입력창을 채운다(`withRequest`: 이미 쓴 글은 두고 한 번만 덧붙인다). 보내는 것은 사람이다.
+- 보드는 글을 분류하지 않는다. 전송 경로, 받는 곳 판정, 대기열은 지금과 같다(`board.resolve-tracked-decision`, `board.send-decision`의 `reply`).
+
+### 2.2 받는 쪽에 알리는 값
+
+카드 글 앞에 붙는 카드 정보(JSON 한 줄)에 값을 더한다.
+
+```json
+{"action":"reply","mayBe":["decision","question","change-request"]}
+```
+
+- `mayBe`는 "이 글은 이 가운데 하나일 수 있다"는 뜻이다. 문장이 아니고, 사람이 쓴 글은 지금처럼 빈 줄 뒤에 그대로 붙는다.
+- 붙는 곳: 원장 카드 답(`trackedReplyMessage`), 세션 대화 카드 답(`sessionReplyMessage`의 `reply`), 병합 카드 수정 요청. 코디네이터 조율 요청과 승인 요청 카드의 질문은 지금 그대로다.
+- 호환: 원장 답장 기록에 선택 필드 `headerVersion?: 2`. 이 필드가 없는 기록(이 변경 전에 쓰였거나 대기열에 있던 답)을 다시 보내거나 확인할 때는 옛 모양(값 없음)으로 글을 만든다. 기록된 메시지 해시가 그대로 맞는다.
+- 받는 쪽이 할 일(README와 코디네이터 헌장에 적는다): 결정이면 처리하고 카드를 내린다. 질문이나 수정 요청이면 답하거나 반영하고, 사람이 정할 일이 남았으면 카드를 새 내용으로 다시 올린다.
+
+### 2.3 닫힘과 다시 열림
+
+- 원장 답장 기록은 지금처럼 개정(카드 열쇠와 내용 지문)마다 하나다. 보낸 개정은 "내 결정"에서 빠지고, 카드가 새 내용으로 올라오면(지문이 달라지면) 다시 열린다. 저장 형식은 바뀌지 않는다.
+- 기록의 뜻은 "이 개정에 보냈다"이다. 화면 문구에서 "기록을 닫았습니다"를 쓰지 않는다.
+- 접힌 "보냄" 카드(`settleReceipt`):
+  - 보낸 지 24시간이 지나면 접는다(그대로).
+  - 원장에서 카드가 내려갔으면(`cardRemoved`) 한 번 보인 뒤 다음 새로 고침에 접는다(그대로).
+  - 원장 카드 답: 받는 쪽 응답이 와도 카드가 원장에 남아 있는 동안에는 접지 않는다. 응답 첫 줄이 계속 보인다. **바뀜**: 지금은 응답이 오면 다음 새로 고침에 접는다.
+  - 세션 대화 카드 답과 수정 요청: 응답이 오면 한 번 보인 뒤 접는다(그대로).
+- 지금 흐름과 차이: 저장과 "내 결정" 목록은 같다. 달라지는 것은 (1) 질문만 써서 보내도 그 개정이 목록에서 빠진다는 점(전에는 질문하기로 보내면 카드가 남았다), (2) 접힌 카드가 원장에서 카드가 내려갈 때까지 남는다는 점, (3) 받는 쪽이 다시 물을 때 카드를 새 내용으로 올려야 한다는 약속이다.
+
+### 2.4 병합 카드 수정 요청
+
+RPC `board.request-pull-changes`:
+
+- 입력: `projectId`, `repo`, `number`, `headSha`(40자 hex), `recipientId`, `text`(4,000자 이내), `images`(선택), `requestKey`. 글이나 사진 가운데 하나는 있어야 한다.
+- 출력: `status`가 `sent`, `changed`, `busy`, `unconfirmed` 가운데 하나. `sent`에는 `recipientId`.
+- 받는 곳(`changeRequestRecipient`): 병합 판단 기록의 `ownerSessionId`가 이 호스트의 관리 세션이고, 그 PR의 프로젝트에 있고, 종료·오류가 아니며 권한 요청을 기다리지 않으면 그 세션. 아니면(없음, 보관됨, 다른 기기, 종료, 오류, 권한 대기) 코디네이터. 코디네이터도 없으면 보낼 수 없다.
+- 서버 검사(순서대로): 프로젝트가 관리 대상인가. PR이 지금 병합 카드인가(GitHub 준비됨, 병합 카드 줄). 머리 커밋이 입력과 같은가. 받는 곳이 판정과 같은가. 받는 세션이 살아 있고(`archivedAt`, `internal` 아님) `canReceiveBoardInput`을 통과하는가(작업 세션은 쉬는 중, 코디네이터는 지금 규칙대로). 통과하지 못하면 `changed` 또는 `busy`이고 아무것도 보내지 않는다.
+- 전송: 카드 정보 머리와 사람이 쓴 글. 출처 없이 보낸다(사람이 쓰고 누른 글). 머리의 `action`은 `change-request`, `mayBe`는 2.2와 같고, `repo`, `number`, `url`, `headSha`, `title`이 들어간다.
+- 저장(호스트 설정 `pullChangeRequests`, 선택 필드, PR마다 최신 하나, 최대 200개): `repo`, `number`, `projectId`, `headSha`, `title`, `text`, `recipientId`, `coordinator`, `messageId`, `messageHash`, `fingerprint`, `at`, `status`(`pending` → `sent`), `imageCount?`, `withdrawnAt?`.
+- 재시도: 같은 `requestKey`로 다시 부르면 다시 보내지 않는다. 기록이 `sent`면 `sent`, `pending`이면 받는 세션 대화에서 그 메시지를 찾아 있으면 `sent`, 없으면 `unconfirmed`. 다른 요청의 `pending`은 10분 동안 새 전송을 막는다(`unconfirmed`).
+- 병합 카드가 내려가는 조건(`applyPullJudgments`): `sent`이고 거두지 않은 요청의 `headSha`가 PR의 지금 머리와 같고, 그 머리에 요청 뒤에 쓰인 병합 판단이 없으면 줄이 `progress`, 문이 `change-requested`. 병합 판단 설정이 꺼져 있어도 같다.
+- 원장 병합 카드(`waitingMergeCard`): 그 PR의 문이 `change-requested`면 프로젝트 진행의 PR 줄로 기다린다.
+- 다시 뜨는 조건: 새 머리 커밋(있던 판단이 풀리고 다시 판단을 거친다), 같은 머리에 요청 뒤 코디네이터가 쓴 새 판단, 사람이 누른 **병합 카드 다시 열기**(`board.withdraw-pull-change-request`, 아무것도 보내지 않고 기록에 `withdrawnAt`만 남긴다).
+- 보낸 뒤 화면: 그 자리에 접힌 "수정 요청 보냄" 카드(보낸 글, 받은 세션, 응답 첫 줄). 최근 결정 기록에도 남는다.
+
+### 2.5 세션 글의 질문 블록
+
+세션이 글의 맨 끝에 쓰는 펜스 코드 블록이다. 언어 이름은 `board-question`, 안은 JSON이다.
+
+````markdown
+```board-question
+{
+  "questions": [
+    {
+      "id": "Q1",
+      "text": "캐시를 어디에 둘까요?",
+      "options": [
+        { "key": "A", "text": "메모리", "does": "프로세스 안에 둡니다", "pros": "빠릅니다", "cons": "재시작하면 비워집니다", "recommended": true },
+        { "key": "B", "text": "디스크", "does": "파일로 남깁니다" }
+      ]
+    }
+  ],
+  "recommend": "A. 지금 규모에서는 메모리로 충분합니다.",
+  "recommendedReply": "Q1은 A로 진행해 주세요."
+}
+```
+````
+
+- 필드: `questions`(1개에서 8개). 질문마다 `text`(필수, 500자), `id`(선택, 24자), `multi`(선택, 여러 개 선택), `options`(0개에서 8개). 선택지마다 `key`(필수, 16자), `text`(필수, 300자), `does`·`pros`·`cons`(선택, 400자), `recommended`(선택). 블록에 `recommend`(선택, 600자), `recommendedReply`(선택, 2,000자). 모르는 필드는 무시한다.
+- 크기: 블록 안 글은 12,000자까지. 글자 수는 제어 문자와 양방향 제어 문자를 지우고 공백을 정리한 뒤에 센다(`recommendedReply`는 줄 바꿈을 남긴다).
+- 틀린 블록: JSON이 아니거나, 상한을 넘거나, 필수 값이 비었거나, 한 질문 안에서 `key`가 겹치거나, 질문 이름표(`id · text`)가 겹치면 블록 전체를 쓰지 않는다. 글은 지금처럼 그대로 보인다.
+- 자리: 글의 마지막이어야 한다. 블록 뒤에 다른 글이 있으면 블록으로 읽지 않는다.
+- 맞는 블록이면: 그 글은 블록을 뺀 나머지로 읽고, 블록 앞 글에 질문 문장이 없어도 결정 카드가 된다(제목은 첫 질문). 글에서 이름표를 찾는 안내는 내지 않는다.
+- RPC 계약: 세션의 `decision`에 선택 필드 `block`(위 모양을 정리한 값). 카드 판본(`version`)에는 넣지 않는다(판본은 대화 근거에 묶여 있다).
+- 화면: 질문마다 선택지를 원장 카드처럼 그린다. 고르면 입력창에 `Q1 · 캐시를 어디에 둘까요?: A · 메모리` 같은 줄이 채워진다(`applyBlockChoice`). 고른 표시는 입력창의 글에서 읽는다(`blockPicks`). 그래서 사람이 그 줄을 고치거나 지우면 표시도 따라 바뀐다. **추천대로 모두 고르기**는 아직 고르지 않은 질문에 추천 선택지를 채우고, **추천 답 넣기**는 `recommendedReply`를 입력창에 넣는다. `does`·`pros`·`cons`는 **근거·이력 보기**를 펼치면 보인다.
+
+## 3. 경계와 실패 처리
+
+- 수정 요청 전송이 실패하거나 결과를 모르면 병합 카드는 그대로 남고, 같은 글로 다시 누르면 확인만 한다.
+- 받는 세션이 일하는 중이면 `busy`를 돌려주고 대기열에 넣지 않는다. 일하는 중인 세션 전달은 별도 작업이 바꾼다.
+- 호스트 설정의 `pullChangeRequests`가 없거나 비어 있으면 지금과 같이 동작한다. 원장 답장 기록의 `headerVersion`이 없으면 옛 모양으로 읽는다.
+- 질문 블록을 읽다가 나는 오류는 모두 "블록 없음"으로 처리한다. 보드는 멈추지 않는다.
+- 코디네이터가 없고 작업 세션도 받을 수 없으면 병합 카드의 입력은 꺼지고 이유를 보인다.
+
+## 4. 요구사항과 시험
+
+| 요구 | 내용 | 시험 |
+|---|---|---|
+| R1 | 버튼 이름은 결정 카드 "보내기", 병합 카드 "수정 요청 보내기"이고 받는 곳을 함께 적는다 | `test/card-input.test.ts` "a decision card sends with Send, a merge card with Send change request" |
+| R2 | 입력창 자리는 질문 수와 묶인 세션, 병합 카드 입력에 따라 정해진다 | `test/tracked-reply-draft.test.ts` "a card has one input: its own, its single question's, or the merge card's" |
+| R3 | 글이나 사진이 있으면 답하지 않은 질문이 있어도 보낼 수 있다 | `test/card-input.test.ts` "open questions block sending only while the card's input is empty" |
+| R4 | 요청 문장은 이미 쓴 글을 두고 한 번만 덧붙는다 | 같은 파일 "a suggested request joins what the person wrote, once" |
+| R5 | 카드 답의 머리에 `mayBe`가 들어가고 사람 글은 그대로다 | `test/decision-message.test.ts` "a card reply says it may be a decision, a question or a change request" |
+| R6 | `headerVersion`이 없는 기록은 옛 모양으로 다시 확인되고, 새 기록은 `headerVersion: 2`다 | `test/tracked-decisions.test.ts` "a reply queued before the header change is still delivered as it was written" |
+| R7 | 질문에 답하지 않고 글만 보낸 개정은 목록에서 빠지고, 새 내용으로 올라오면 다시 열린다 | 같은 파일 "a free-text reply to a card with questions hides that revision until the card changes" |
+| R8 | 원장 카드 답의 접힌 카드는 응답이 와도 원장에서 내려갈 때까지 남는다 | `test/decision-receipts.test.ts` "a ledger reply stays through its follow-up until the card is taken down" |
+| R9 | 받는 곳은 살아 있고 권한 대기가 아닌 담당 세션, 아니면 코디네이터다 | `test/pull-change-requests.test.ts` "the request goes to the owner session, or to the coordinator when the owner cannot take it" |
+| R10 | 지금 머리에 보낸 요청이 있으면 병합 카드가 내려간다. 새 머리, 요청 뒤의 새 판단, 거두기로 다시 뜬다 | `test/pull-judgments.test.ts` "a change request on the current head takes the merge card down until a new head, a later verdict or a withdrawal" |
+| R11 | 원장 병합 카드도 그 PR 줄과 함께 기다리고 결정 수에서 빠진다 | `test/merge-card-place.test.ts` "a ledger merge card waits with its PR after a change request" |
+| R12 | 서버는 병합 카드가 아니거나 머리·받는 곳이 다르면 보내지 않고, 권한 대기·일하는 중이면 `busy`다 | `test/pull-change-requests.test.ts` "nothing is sent unless the PR is a merge card on that head and the recipient can take input" |
+| R13 | 같은 요청을 다시 부르면 다시 보내지 않고, 전송에는 출처를 붙이지 않는다 | 같은 파일 "a retry confirms the earlier request instead of sending again" |
+| R14 | 거두기는 아무것도 보내지 않고 기록만 남긴다 | 같은 파일 "withdrawing reopens the merge card without sending" |
+| R15 | 맞는 블록은 정리된 값으로 읽히고 글에서 빠진다 | `test/question-block.test.ts` "a block at the end of a message is read and taken out of the text" |
+| R16 | 틀린 블록, 상한을 넘는 블록, 끝이 아닌 블록은 쓰지 않는다 | 같은 파일 "a malformed, oversized or misplaced block is ignored" |
+| R17 | 제어 문자와 양방향 제어 문자는 지워진다 | 같은 파일 "control characters are removed before the block is shown" |
+| R18 | 선택지를 고르면 입력창의 그 질문 줄이 채워지고, 고른 표시는 글에서 읽는다 | 같은 파일 "choosing an option writes that question's line, and the text says what is chosen" |
+| R19 | 추천대로 모두 고르기는 고르지 않은 질문만 채운다 | 같은 파일 "recommended options fill only unanswered questions" |
+| R20 | 블록이 있는 글은 질문 문장이 없어도 결정 카드가 되고 `decision.block`이 실린다 | `test/conversation.test.ts` "a message ending in a question block becomes a decision card with its options" |
+| R21 | 화면: 카드 입력 하나, 보낸 뒤 접힘과 다시 열림, 병합 카드 수정 요청, 질문 블록 카드 | 지어낸 데이터의 웹 미리보기(한·영, 넓은 화면·390px) |
+
+## 5. 버린 설계
+
+- `action`을 `reply`에서 다른 값으로 바꾸기: 옛 기록의 해시가 맞지 않고, 값을 읽던 쪽이 있으면 깨진다. 값을 더하는 쪽을 골랐다.
+- 수정 요청을 병합 대기(`MergeHold`)로 다루기: 대기는 화면이 다른 기기까지 읽어 계산한다. 수정 요청은 서버가 아는 사실이므로 병합 판단과 같은 자리(문)에서 정한다. 결정 수와 화면이 같은 값을 본다.
+- 요청이 `pending`일 때도 병합 카드를 내리기: 전송이 실패한 경우 다시 누를 자리가 사라진다.
+- 블록의 고른 표시를 따로 저장하기: 입력창의 글과 표시가 어긋날 수 있다. 글 하나만 진실로 둔다.
+- 블록을 글 어디에 있든 읽기: 예시로 쓴 블록이 카드가 된다.
+
+## 6. 열린 질문 (제안 답)
+
+- 질문이 여럿인 원장 카드의 **다르게(직접 적기)**도 카드 입력창으로 합칠까: 이번에는 두었다. 질문별 사진과 답 요약이 그 입력에 묶여 있다. 합치려면 단계 화면을 다시 짜야 하므로 따로 정한다.
+- 수정 요청에 일하는 중인 담당 세션을 대기열로 받을까: 일하는 중인 세션 전달 작업이 들어온 뒤 그 규칙을 따른다.

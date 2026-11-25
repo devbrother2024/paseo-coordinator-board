@@ -169,3 +169,4 @@ Spec: [spec.md](spec.md)
 | [intent-workflow](intent-workflow/intent.md) | 구현됨 (PR #52) | 세션 | 이 저장소에 intent·spec·plan 구조를 들이고, 세션 경로와 접수 경로를 정한다 |
 | [assign-explicit-route](assign-explicit-route/intent.md) | 구현됨 (PR #55) | 세션 | 코디네이터가 고른 모델 경로를 보드의 원격 배정에 전달한다 |
 | [sent-reply-receipt](sent-reply-receipt/intent.md) | 구현됨 (PR #54) | 세션 | 보낸 답장이 그 자리에 접힌 카드로 남아, 펼쳐서 무엇을 보냈는지 확인할 수 있다 |
+| [single-card-input](single-card-input/intent.md) | 승인 | 세션 | 카드마다 입력창 하나로 답·질문·수정 요청을 보내고, 병합 카드 수정 요청과 세션 글의 질문 블록을 더한다 |

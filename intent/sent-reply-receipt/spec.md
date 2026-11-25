@@ -22,6 +22,7 @@ Intent: [intent.md](intent.md)
 - 접기 판정(`settleReceipt`), 스냅숏이 새로 올 때마다:
   - 보낸 지 24시간(`RECEIPT_KEEP_MS`)이 지났으면 접는다.
   - 찾은 기록에 후속 응답이 있거나 `cardRemoved`면, 처음 본 새로 고침에는 표시만 해 두고(`settled`) 그다음 새로 고침에 접는다. 후속 응답 첫 줄을 한 번은 볼 수 있게 하기 위해서다.
+    - 원장 카드 답은 [single-card-input](../single-card-input/spec.md)에서 바뀌었다: 후속 응답만으로는 접지 않고, 원장에서 카드가 내려갈 때까지 남는다.
   - 기록을 아직 찾지 못했으면 그대로 둔다.
 - 펼친 내용(`receiptDetails`): 보낸 글 전체, 사진 N장(기록의 `imageCount`), 받은 세션 이름, 후속 응답 첫 줄. 없는 줄은 빼고 보여 준다.
 - 보낸 시각(`sentTimeLabel`): 오늘이면 시각만, 오늘이 아니면 날짜도, 올해가 아니면 연도도 붙인다. 보드 언어를 따른다.
