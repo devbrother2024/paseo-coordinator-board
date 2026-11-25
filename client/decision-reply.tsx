@@ -1,8 +1,7 @@
-import { SendTextInput, type SendAction } from "./send-input";
-import { useState } from "react";
-import { useWindowDimensions, View } from "react-native";
+import { AutoGrowInput } from "./auto-grow-input";
+import type { SendAction } from "./send-input";
+import { View } from "react-native";
 import { Button, type Theme } from "./controls";
-import { isLongReply } from "./decision-reply-state";
 import { useBoardLanguage } from "./language";
 
 type ReplyInputProps = {
@@ -18,32 +17,26 @@ type ReplyInputProps = {
   onBlur: () => void;
   reviewRequired?: boolean;
   onReview?: () => void;
+  onOverflowChange?: (overflows: boolean | undefined) => void;
 };
 
 export function DecisionReplyInput({
   theme, value, onChangeText, accessibilityLabel, placeholder, maxLength, disabled, send,
-  onFocus, onBlur, reviewRequired = false, onReview,
+  onFocus, onBlur, reviewRequired = false, onReview, onOverflowChange,
 }: ReplyInputProps) {
   const { t } = useBoardLanguage();
-  const { height } = useWindowDimensions();
-  const [expanded, setExpanded] = useState(false);
-  const long = isLongReply(value);
-  const showFull = long && expanded && !reviewRequired;
-  const toggleLabel = showFull ? t("입력창 접기", "Collapse editor") : t("답장 전문 보기", "View full reply");
   const c = theme.colors;
+  // The input grows with the reply. Only a suggested reply too tall for it (it scrolls inside) waits for one press that says it was read.
+  const confirmLabel = t("답장 전문 확인", "Confirm full reply");
   return <View style={{ gap: 4 }}>
-    <SendTextInput send={send} value={value} onChangeText={onChangeText} multiline editable={!disabled} maxLength={maxLength}
+    <AutoGrowInput send={send} onOverflowChange={onOverflowChange} value={value} onChangeText={onChangeText} multiline editable={!disabled} maxLength={maxLength}
       accessibilityLabel={accessibilityLabel} placeholder={placeholder} placeholderTextColor={c.foregroundMuted}
       onFocus={onFocus} onBlur={onBlur}
-      style={{ minHeight: 56, height: showFull ? Math.max(168, Math.min(480, height * 0.48)) : undefined,
-        padding: 8, color: c.foreground, textAlignVertical: "top", backgroundColor: c.surface0,
+      style={{ minHeight: 56, padding: 8, color: c.foreground, textAlignVertical: "top", backgroundColor: c.surface0,
         borderColor: c.border, borderWidth: 1, borderRadius: 7 }} />
-    {long && <View style={{ alignSelf: "flex-start" }}>
-      <Button theme={theme} label={toggleLabel} accessibilityLabel={accessibilityLabel + " · " + toggleLabel}
-        expanded={showFull} disabled={disabled} onPress={() => {
-          setExpanded(!showFull);
-          if (!showFull) onReview?.();
-        }} />
+    {reviewRequired && <View style={{ alignSelf: "flex-start" }}>
+      <Button theme={theme} label={confirmLabel} accessibilityLabel={accessibilityLabel + " · " + confirmLabel}
+        disabled={disabled} onPress={() => onReview?.()} />
     </View>}
   </View>;
 }

@@ -39,14 +39,26 @@ The board records a fingerprint of the tool definitions (names, descriptions and
 
 There are two fixes.
 
-1. Choose **Replace with a new session**. This creates a coordinator in the operations folder and keeps current work and decision cards.
+1. Choose **Replace with a new session**. This creates a coordinator in the operations folder and keeps current work and decision cards. The new session follows its start instructions to read the previous coordinator's record and carry on (see **Handover after a replacement** below).
 2. Choose **Open coordinator session** and type `/clear` yourself. A new conversation starts in the same session, without the earlier conversation. The board never types `/clear` or `/compact` for you.
 
 The notice goes away once the new conversation starts. Some board tools that answer in plain text also say in their result that a replacement is needed when called with the old definitions. Tools that answer in JSON keep their result unchanged, so for those the notice on the board is the only signal. The board shows this only for Claude Code coordinators. Other providers may receive the new tools when Paseo reopens the session, which the board cannot tell, so it shows nothing for them.
 
+### Handover after a replacement
+
+A replacement coordinator starts without the old conversation. The confirmation box says so, and the board puts start instructions into the request that creates the new session. They open with **[Coordinator Board · Coordinator start]** to show they come from the board, and they carry the previous coordinator's session ID, a request to read its record with `read_board_conversation` and list the work in progress and the promises made before carrying on, and the number of open decisions and ledger cards. The new coordinator can read that record through the tool even when the previous coordinator sits outside the managed projects, as in the operations folder. Only the coordinator right before it can be read this way, and only while the session the board created by replacement is the coordinator. The board sends no separate message to the old or the new session. **Replace with a new session** in the board update notice follows the same flow.
+
+The previous coordinator stays after a replacement. **Settings → Replace coordinator** shows a **Previous coordinator · Archive** row: press **Archive** once the new coordinator has read the record. While the old session is still running or waiting on a permission request, the button is off and the reason is shown. The row appears only for a coordinator the board created. Tidy up a session you designated yourself in Paseo.
+
+A host administrator can put `coordinator-start.md` in the plugin data folder (`$PASEO_HOME/plugin-data/coordinator-board`) to add start instructions for every new coordinator. The board reads it each time it creates a coordinator and appends it to the start instructions, also on a first creation with no previous coordinator. A missing or empty file is ignored, only the first 4,000 characters are used, and control and bidirectional control characters other than line breaks and tabs are removed. For example:
+
+```markdown
+When you start, follow the START.md steps in the operations folder first.
+```
+
 ## Work with a coordinator
 
-Use **Expand editor** next to **Request for the coordinator** to review a longer draft. Collapsing and reopening the editor preserves your text and photos.
+The input grows and shrinks with its text. Past 60% of the window height it stops growing and scrolls inside. Request, reply, follow-up question and session note inputs all behave the same way.
 
 Requests you send stay under **Sent requests** below the editor, up to the latest 20. Expand it to read the full text, the time, attached photos, and the delivery state (Delivery unconfirmed, Sent, or Delivered), and open the conversation with **Receiving coordinator session**. Delivered means the board found the message in the coordinator's conversation. Requests sent before a coordinator replacement show **Earlier receiving coordinator** instead. Photos stay viewable only while they are among the host's most recent 20 photo messages. The history is kept in the plugin's data on the host, and a request is still delivered when its history cannot be saved.
 
@@ -68,7 +80,7 @@ Each session decision has an **Open work session** chip beside the project. It o
 
 A worker asking “Which project does this session belong to?” can receive a verified answer from the designated coordinator during a requested digest. The project card shows a record of the response. **Settings → Automatic replies to factual questions** lets you turn this off for the host. Receiving a reply can start the worker's model and use its provider allowance. A decision such as deleting a work folder still requires the person responsible.
 
-- **Reply to a session.** Each decision has its own card. Edit the suggested reply in the input, or choose an option. Expand a long reply to review it. Press the send button below the input to send the displayed text to the named recipient.
+- **Reply to a session.** Each decision has its own card. Edit the suggested reply in the input, or choose an option. A suggested reply is shown in full as the input grows, so you can send it right away. Only when the reply is too long and scrolls inside the input does **Confirm full reply** appear, and the send button turns on after you press it. Press the send button below the input to send the displayed text to the named recipient.
 - **Ask for clarification.** Use **Ask a question** to send a question to the work session. To coordinate across tasks, choose **Ask coordinator to coordinate**, review the recipient, then use **Send request to coordinator**.
 - **Answer a question or a plan on the board.** A session that stops to wait for you appears in **My decisions** as a **Requests awaiting a response** card. A question shows its original text and options: choose one, choose several when it says **Select all that apply**, or type your own answer under **Other**, then press **Submit answer**. In a single-choice question, an option and a typed answer replace each other. **Dismiss without answering** closes the question the way Paseo's own app does. A plan shows its opening lines and **View full plan**. The approve button says what approving changes (Claude Code: **Switch to auto-accept edits and implement**, Codex: **Leave plan mode and implement**). The first press asks you to confirm, and **Confirm** sends it. **Reject plan · Do not implement** leaves the session stopped. A choice that widens the permission mode further, such as implementing in the previous mode, is not offered on the board: use **Open work session**.
 - **Respond to a tool or mode request.** For a shell command, the card shows the risk level, working folder, command groups, and relevant file targets. **View full command** reveals the original command. File and MCP requests show the operation and target. Choose **Open work session** to approve or reject in Paseo's permission dialog. Questions and plans the board cannot handle also go to the work session. The board answers questions that Claude Code, Codex and OpenCode ask the user, and plans from Claude Code and Codex. A yes or no dialog from another provider or an extension can approve a tool run even though it looks like a question, so it stays in the work session. A question that asks for a hidden answer masks what you type, and the value is not kept on the card or in the record afterwards.

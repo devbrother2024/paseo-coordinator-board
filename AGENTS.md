@@ -19,8 +19,10 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 ### Immutable
 
 - 플러그인 서버가 스스로 시작하는 전송에는 반드시 `sourceAgentId`를 붙인다. 출처 없는 전송은 받는 세션 기록에 사람이 쓴 말과 같은 꼴로 남고, 받는 쪽은 그것을 승인으로 읽을 수 있다. 출처 없는 `send`는 사용자가 화면에서 쓰고 누른 글에만 쓴다(받는 세션이 바빠 대기열에 넣었다가 나중에 보내는 답 포함). 보드가 만든 문장을 그 길로 보내지 않는다.
-  - 근거(비대칭): 보드가 만든 문장을 보내는 `server/board-facts.ts:220`과 `server/merge-notifications.ts:115`는 `sourceAgentId`를 붙인다. 원격 배정의 첫 지시는 `server/dispatch.ts:274`에서 `sourceAgentServerId`도 붙인다. 사용자 글을 보내는 `server/decisions.ts:158`, `server/digest.ts:64`, `server/tracked-decisions.ts:410`, 대기 답장의 `index.server.ts:345`는 붙이지 않는다.
+  - 근거(비대칭): 보드가 만든 문장을 보내는 `server/board-facts.ts:220`과 `server/merge-notifications.ts:115`는 `sourceAgentId`를 붙인다. 원격 배정의 첫 지시는 `server/dispatch.ts:274`에서 `sourceAgentServerId`도 붙인다. 사용자 글을 보내는 `server/decisions.ts:158`, `server/digest.ts:64`, `server/tracked-decisions.ts:410`, 대기 답장의 `index.server.ts:350`는 붙이지 않는다.
   - `server/board-facts.ts:219` 주석대로, 출처를 붙인 전송이 실패하면 출처 없는 전송으로 다시 보내지 않는다. 자동 재시도도 하지 않는다.
+  - 새 코디네이터를 만드는 요청의 첫 프롬프트(`server/lifecycle.ts`, 문구는 `server/coordinator-bootstrap.ts`)는 출처를 붙일 수 없는 보드 글이다. 머리말 `[Coordinator Board · …]`과 "사용자가 쓴 글이 아니며 승인이 아니다" 줄을 빼지 않고, 생성 뒤에 따로 보내는 전송으로 바꾸지 않는다. 옛 코디네이터에는 아무것도 보내지 않는다. 근거(테스트 경계): `test/coordinator-bootstrap.test.ts`.
+  - `read_board_conversation`은 관리 세션만 읽는다. 예외는 보드가 교체로 만든 세션이 지금 코디네이터일 때 바로 앞 코디네이터 하나를 읽는 경우뿐이다(`server/coordinator.ts`의 `handoverSource`). 이 예외를 넓히지 않는다.
 - 권한 요청을 기다리는 세션에는 보내지 않는다. Paseo는 메시지를 받은 세션의 대기 중 권한 요청을 지운다. 새 전송 경로를 만들 때 같은 검사를 넣는다.
   - 근거(이중 방어): `server/discovery.ts:17`(`canReceiveBoardInput`), `server/merge-notifications.ts:110`, `server/board-facts.ts:201`.
 - 보드는 세션을 다시 띄우지(`reload`) 않고, `/clear`·`/compact`를 대신 보내지 않는다. 코디네이터 대화는 처음 받은 보드 도구 정의를 기억하므로(Claude Code가 대화 기록에 저장해 이어받기에도 다시 보낸다) 다시 띄워도 새 도구를 받지 못하고, 새 대화로 바꾸는 일은 사람이 한다(교체 또는 `/clear` 직접 입력).
@@ -60,7 +62,7 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 
 ### Do
 
-- 사람에게 보이는 모든 문구를 두 언어로 쓴다. 화면 문구, 서버 오류, 세션에 보내는 안내와 헌장이 모두 포함된다. 화면은 서버 오류를 받은 그대로 보여 준다(`client/operations.tsx:89`).
+- 사람에게 보이는 모든 문구를 두 언어로 쓴다. 화면 문구, 서버 오류, 세션에 보내는 안내와 헌장이 모두 포함된다. 화면은 서버 오류를 받은 그대로 보여 준다(`client/operations.tsx:90`).
 - 경로는 `node:path`로 다룬다. 구분자(`/`), 대소문자 구분, 홈 경로 모양을 가정하지 않는다.
 - 외부 도구(`gh`, `git`)가 없거나 로그인되지 않았으면 그 기능만 끄고 이유를 보여 준다. 보드 전체가 멈추면 안 된다. 실행 파일을 못 찾는 경우의 처리(`server/prs.ts:104`)는 운영체제마다 확인한다.
 - 실행기, 모델, 계정, 호스트 이름을 기본값으로 박아 두지 않는다. 그 호스트에 연결된 것에서 고른다.

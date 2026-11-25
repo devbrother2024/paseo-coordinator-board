@@ -168,13 +168,15 @@ export class ConversationReader {
     for (const id of this.cache.keys()) if (!ids.has(id)) this.cache.delete(id);
   }
 
-  async read(paseo: Sdk, row: SessionRow, fresh = false): Promise<Evidence | null> {
+  // A closed session is normally answered from the cache only. `closed` fetches its stored timeline anyway,
+  // for a read a coordinator was explicitly allowed to make (the handover from the previous coordinator).
+  async read(paseo: Sdk, row: SessionRow, fresh = false, { closed = false }: { closed?: boolean } = {}): Promise<Evidence | null> {
     const entry = this.cache.get(row.id);
     const cached = entry?.serverId === row.serverId ? entry : undefined;
-    if (row.status === "closed") {
+    if (row.status === "closed" && !closed) {
       return cached?.stamp === row.activityAt ? cached?.page ?? null : null;
     }
-    if (row.status !== "idle" && row.status !== "error") return null;
+    if (row.status !== "idle" && row.status !== "error" && row.status !== "closed") return null;
     if (!fresh && cached && cached.stamp === row.activityAt && Date.now() - cached.at < 60_000) return cached.page;
     const page = withAssignmentHost(paseo, row.serverId, client =>
       client.agents.ref(row.id).timeline.refetch({ direction: "tail", projection: "projected", limit: 48 })).then(excerpt);

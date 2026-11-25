@@ -1,6 +1,7 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { coordinatorOwnerKey, coordinatorStartPrompt, readBootstrapExtra, retiredCoordinator, retiredState, type OpenCards } from "./coordinator-bootstrap";
 import { operatingDirectory } from "./operating-folders";
 import { type Preferences, PreferenceStore, setCoordinator } from "./preferences";
 
@@ -12,7 +13,9 @@ type Start = {
   verifyRoute?: (scope: Preferences) => void;
 };
 
-const ownerKey = "coordinator-board/operating-session";
+const ownerKey = coordinatorOwnerKey;
+const countTimeoutMs = 10_000;
+const changed = "옛 코디네이터 정보가 바뀌었습니다. 설정을 새로 고쳐 주세요. / The previous coordinator changed. Refresh Settings.";
 const stale = "코디네이터 설정이 바뀌었습니다. 보드를 새로 고쳐 주세요.";
 function sameConfig(a: Pending["config"], b: Pending["config"]) {
   return a.provider === b.provider && a.thinkingOptionId === b.thinkingOptionId && a.modeId === b.modeId;
@@ -49,7 +52,8 @@ const charter = [
 export class CoordinatorLifecycle {
   private queue: Promise<void> = Promise.resolve();
 
-  constructor(private readonly prefs: PreferenceStore, private readonly operatingRoot: string) {}
+  constructor(private readonly prefs: PreferenceStore, private readonly operatingRoot: string,
+    private readonly openCards?: (paseo: Sdk) => Promise<OpenCards>) {}
 
   private inOrder<T>(operation: () => Promise<T>) {
     const result = this.queue.then(operation);
@@ -94,6 +98,39 @@ export class CoordinatorLifecycle {
     if (target.workspace.pinnedAt || (automatic && !latest.autoPinCoordinatorWorkspace)) return;
     const result = await target.handle.setPinned(true);
     if (!result.pinnedAt) throw new Error("워크스페이스 고정을 확인할 수 없습니다.");
+  }
+
+  // Counting reads the whole board. A slow or failed read leaves the count out rather than holding up the replacement.
+  private async countOpenCards(paseo: Sdk): Promise<OpenCards | null> {
+    if (!this.openCards) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([this.openCards(paseo), new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), countTimeoutMs); })]);
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // The settled coordinator a board replacement retired. It is archived only from a person's press in Settings.
+  async retired(paseo: Sdk) {
+    const id = retiredCoordinator(this.prefs.read());
+    if (!id) return null;
+    const agent = (await paseo.agents.ref(id).refresh())?.agent;
+    return retiredCoordinator(this.prefs.read()) === id ? retiredState(id, agent) : null;
+  }
+
+  archiveRetired(paseo: Sdk, id: string) {
+    return this.inOrder(async () => {
+      if (retiredCoordinator(this.prefs.read()) !== id) throw new Error(changed);
+      const state = await this.retired(paseo);
+      if (state?.id !== id) throw new Error(changed);
+      if (!state.archivable) throw new Error(state.reason === "waiting"
+        ? "옛 코디네이터가 권한 요청을 기다리고 있어 보관하지 않았습니다. / The previous coordinator is waiting on a permission request, so it was not archived."
+        : "옛 코디네이터가 아직 진행 중이라 보관하지 않았습니다. / The previous coordinator is still in progress, so it was not archived.");
+      await paseo.agents.ref(id).archive();
+    });
   }
 
   private async prepare(paseo: Sdk, { expectedCoordinator, replace, config, language = "ko", verifyRoute }: Start) {
@@ -151,9 +188,13 @@ export class CoordinatorLifecycle {
     let snapshot = (await handle.refresh())?.agent;
     requirePending(this.prefs.read());
     if (!snapshot) {
+      // The handover rides in the creation request itself. No message goes to the old or the new session afterwards.
+      const openCards = pending.previous ? await this.countOpenCards(paseo) : null;
+      const prompt = coordinatorStartPrompt({ language, previous: pending.previous, openCards, extra: readBootstrapExtra(this.prefs.directory) });
+      requirePending(this.prefs.read());
       await workspace.agents.create({
         agentId: pending.id, idempotencyKey: pending.id,
-        title: "코디네이터 세션", metadata: { [ownerKey]: true },
+        title: "코디네이터 세션", metadata: { [ownerKey]: true }, ...(prompt ? { prompt } : {}),
         config: {
           ...config, systemPrompt: charter,
           ...(config.provider.startsWith("opencode/") ? { options: { auto_accept: false } } : {}),
