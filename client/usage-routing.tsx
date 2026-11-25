@@ -7,7 +7,7 @@ import type { Theme } from "./controls";
 import { useBoardLanguage } from "./language";
 import { countdownClock, type ClockHost } from "./countdown-clock";
 import { resetCountdown } from "./reset-countdown";
-import { nearestExpiry, resetPassFreshness, resetPassRows } from "./reset-passes";
+import { resetPassClockTimes, resetPassFreshness, resetPassRows } from "./reset-passes";
 
 function AccountCard({label,report,supplemental,issue,provider,busy,now,onInclude,theme}: AccountCardData & {busy:boolean;now:number;onInclude:(provider:string,included:boolean)=>void;theme:Theme}) {
   const {t,language} = useBoardLanguage();
@@ -117,7 +117,7 @@ export function UsageRouting({providers,reports,supplemental=[],busy,usage,onInc
   const {cards,allOff} = accountCards(providers,reports,supplemental);
   const now = useCountdownClock(cards.flatMap(card => [
     ...card.report?.status === "available" ? [...card.report.windows.map(w => w.resetsAt), ...card.report.balances.map(b => b.resetsAt)] : [],
-    ...(card.report?.resetPasses ?? []).filter(pass => pass.left > 0).map(pass => nearestExpiry(pass, Date.now())),
+    ...resetPassClockTimes(card.report, Date.now()),
   ]));
   const ordering = t("사용량으로 순서 정하기","Order by remaining usage");
   return <View style={{gap:9,padding:12,borderRadius:8,backgroundColor:c.surface1}}>

@@ -1,4 +1,4 @@
-import { recentReading, type AccountUsage, type ResetPass } from "../shared/usage-routing";
+import { readingFreshFor, recentReading, type AccountUsage, type ResetPass } from "../shared/usage-routing";
 import { resetCountdown } from "./reset-countdown";
 
 export type ResetPassRow = { key: string; name: string; value: string; empty: boolean; expiry: string | null; note?: string };
@@ -10,6 +10,17 @@ export function resetPassFreshness(report: AccountUsage, now: number) {
   const own = report.resetPassesFetchedAt;
   const fetchedAt = own ?? report.fetchedAt;
   return { fetchedAt, separate: own !== undefined, stale: !recentReading(fetchedAt, now) };
+}
+
+// The times the settings clock must wake at for a card's passes: each nearest expiry still ahead, and the moment
+// the passes turn old. Without the second, a card with no expiry ahead would leave the clock idle and the passes
+// would keep looking fresh. Passed times are dropped by the clock itself.
+export function resetPassClockTimes(report: AccountUsage | undefined, now: number): string[] {
+  const passes = report?.resetPasses ?? [];
+  if (!report || !passes.length) return [];
+  const expiries = passes.filter(pass => pass.left > 0).flatMap(pass => nearestExpiry(pass, now) ?? []);
+  const fetched = Date.parse(resetPassFreshness(report, now).fetchedAt ?? "");
+  return Number.isFinite(fetched) ? [...expiries, new Date(fetched + readingFreshFor + 1).toISOString()] : expiries;
 }
 
 // The soonest expiry still ahead. Passed dates are not shown, while the count left stays as the host reported it.

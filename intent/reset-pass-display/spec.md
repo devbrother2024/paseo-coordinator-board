@@ -45,6 +45,7 @@ Intent: [intent.md](intent.md)
 - 지난 만료일은 표시에서만 뺀다. 남은 장수는 파일 값을 그대로 따른다. 만료가 모두 지났으면 만료 줄을 숨긴다.
 - `note`가 있으면 그 아래 작게 보인다.
 - `resetPassesFetchedAt`이 있으면 초기화권 칸에 그 조회 시각을 따로 보인다. 계정 측정의 "이전 측정"과 같은 기준(15분)으로 오래되면 "초기화권 이전 보고 …" / "Reset passes last known …"로 바꾸고 장수를 흐리게 보인다. 표시 전용 카드는 카드의 조회 시각을 함께 쓴다.
+- 설정 화면을 연 동안 카운트다운 시계는 초기화 시각, 남은 만료와 함께 초기화권이 오래되는 시각에도 깨어난다. 세는 시각이 하나도 없어도 화면을 연 채로 "이전 보고"로 바뀐다.
 - 칸 아래에 표시 전용이며 배정에 쓰지 않는다는 안내를 두 언어로 보인다.
 
 ## 3. 경계와 실패 처리
@@ -67,6 +68,7 @@ Intent: [intent.md](intent.md)
 | R5 | 덧붙인 초기화권은 자기 보고 시각으로 신선도를 따로 판정하고, 표시 전용 카드는 카드 시각을 씀 | 같은 파일의 `passes on a measured account show their own report time and turn old with it` |
 | R6 | 기존 표시 전용 카드 동작(빈칸 채우기, 측정 시각 보존, 깨진 파일·큰 파일·심볼릭 링크 무시) 유지 | [`test/usage-routing.test.ts`](../../test/usage-routing.test.ts)의 `host readings fill only configured provider gaps and preserve the original observation time` |
 | R7 | 넓은 화면·390px, 한·영에서 초기화권 칸과 이전 보고 줄이 겹치지 않게 보임 | 저장소 밖 react-native-web 하네스에서 지어낸 데이터로 화면 확인 |
+| R8 | 세는 초기화·만료 시각이 없어도 초기화권이 오래되는 시각에 시계가 깨어나 이전 보고로 바뀜. 남은 만료도 시계가 봄 | [`test/reset-passes.test.ts`](../../test/reset-passes.test.ts)의 `the settings clock wakes when passes turn old even with nothing counting down` |
 
 ## 5. 버린 설계
 

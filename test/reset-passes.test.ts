@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { mergeHostUsage, readDisplayUsage } from "../server/display-usage";
-import { nearestExpiry, resetPassFreshness, resetPassRows } from "../client/reset-passes";
+import { nearestExpiry, resetPassClockTimes, resetPassFreshness, resetPassRows } from "../client/reset-passes";
+import { countdownClock } from "../client/countdown-clock";
 import type { AccountUsage, ResetPass } from "../shared/usage-routing";
 
 const now = Date.parse("2026-11-25T07:00:00Z");
@@ -111,4 +112,28 @@ test("passes on a measured account show their own report time and turn old with 
   // Passes on a host report card share the card's time and its footer.
   expect(resetPassFreshness(measured, now)).toEqual({ fetchedAt: "2026-11-25T06:59:00Z", separate: false, stale: false });
   expect(resetPassFreshness(report("runner", { fetchedAt: "2026-11-25T06:40:00Z" }), now).stale).toBe(true);
+});
+
+test("the settings clock wakes when passes turn old even with nothing counting down", () => {
+  const measured = report("runner", { resetPasses: [{ ...weekly, expiresAt: [] }, { id: "model", label: "Model reset", left: 0, expiresAt: ["2026-12-01T00:00:00Z"] }],
+    resetPassesFetchedAt: "2026-11-25T06:50:00Z", windows: [{ id: "weekly", label: "Weekly", remainingPct: 40, resetsAt: null, summary: true }] });
+  // No reset or expiry ahead, so only the moment the passes turn old keeps the clock going. A pass with none left adds no expiry.
+  const times = resetPassClockTimes(measured, now);
+  expect(times).toEqual(["2026-11-25T07:05:00.001Z"]);
+  let time = now, timer: { due: number; run: () => void } | null = null;
+  const ticks: number[] = [];
+  const clock = countdownClock({ now: () => time, appState: () => "active", onAppState: () => () => {},
+    setTimer: (run, wait) => (timer = { due: time + wait, run }), clearTimer: () => { timer = null; } }, tick => ticks.push(tick));
+  clock.setResets(times);
+  expect(resetPassFreshness(measured, ticks.at(-1)!).stale).toBe(false);
+  // Follow the timers past the boundary: the last tick lands on it and the passes read as old.
+  while (timer && timer.due <= Date.parse(times[0])) { const due: { due: number; run: () => void } = timer; timer = null; time = due.due; due.run(); }
+  expect(ticks.at(-1)).toBe(Date.parse(times[0]));
+  expect(resetPassFreshness(measured, ticks.at(-1)!).stale).toBe(true);
+  clock.stop();
+  // Expiries ahead are watched too, and a card without passes asks for nothing.
+  expect(resetPassClockTimes(report("runner", { fetchedAt: "2026-11-25T06:59:00Z", resetPasses: [weekly] }), now))
+    .toEqual(["2026-12-11T07:00:00Z", "2026-11-25T07:14:00.001Z"]);
+  expect(resetPassClockTimes(report("runner"), now)).toEqual([]);
+  expect(resetPassClockTimes(undefined, now)).toEqual([]);
 });

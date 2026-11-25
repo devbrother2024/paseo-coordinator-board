@@ -35,9 +35,12 @@ export function recentUsage(report:AccountUsage, now=Date.now()) {
   return recentReading(report.fetchedAt, now);
 }
 
+// How long a reading counts as current before the card calls it the last known one.
+export const readingFreshFor = 15 * 60000;
+
 export function recentReading(fetchedAt:string|null|undefined, now=Date.now()) {
   const fetched = fetchedAt ? Date.parse(fetchedAt) : NaN;
-  return Number.isFinite(fetched) && fetched <= now + 60000 && now - fetched <= 15 * 60000;
+  return Number.isFinite(fetched) && fetched <= now + 60000 && now - fetched <= readingFreshFor;
 }
 
 export function hasUsageReading(report: AccountUsage) {
