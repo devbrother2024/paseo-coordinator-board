@@ -13,6 +13,8 @@ import { decorateDecision, DecisionSender } from "../server/decisions";
 import { discoverSessions } from "../server/discovery";
 import { NoteStore } from "../server/notes";
 import { PreferenceStore } from "../server/preferences";
+import { applyDoneNotes } from "../server/session-decisions";
+import { closeQuestionByPerson } from "../server/open-questions";
 
 async function fixture() {
   const root = mkdtempSync(join(tmpdir(), "decision-card-test-"));
@@ -50,7 +52,10 @@ async function fixture() {
     const result = (await discoverSessions(sdk)).find(r => r.id === "worker");
     const scope = prefs.read();
     await reader.decorate(sdk, [result], scope);
-    decorateDecision(result, notes.visible(new Set(["worker"])).worker, scope);
+    // As a snapshot does: a done note that already closed a question no longer hides the next one.
+    const visibleNotes = notes.visible(new Set(["worker"]));
+    applyDoneNotes([result], visibleNotes, scope);
+    decorateDecision(result, visibleNotes.worker, scope);
     return result;
   }
   const initial = await row();
@@ -323,6 +328,22 @@ test("a reply to a question kept after another session's message never joins the
   expect(f.sent[0].text).not.toBe(f.input.text);
   expect(f.sent[0].text).toContain("자막을 한 줄로 할까요?");
   expect(f.sent[0].text.endsWith(f.input.text)).toBe(true);
+});
+
+test("a done note that closed the newer question does not block replies to the older card it uncovers", async () => {
+  const f = await fixture();
+  f.timelines.worker.unshift({ type: "assistant_message", text: "Which region should I use? Please choose one." });
+  f.actors.worker.updatedAt = "2";
+  const newer = await f.row();
+  expect(newer.decision?.question).toBe("자막을 한 줄로 할까요?");
+  // The person marks the newer card done; a snapshot closes that question with the note's revision.
+  expect(f.notes.update({ sessionId: "worker", kind: "done", text: "처리함", expectedRevision: 0, evidenceId: newer.evidenceId }).ok).toBe(true);
+  f.prefs.change(scope => closeQuestionByPerson(scope, "worker", newer.keptQuestion!.key, Date.now(), 1));
+  f.actors.worker.updatedAt = "3";
+  const older = await f.row();
+  expect(older.decision?.question).toContain("Which region");
+  await f.send({ version: older.decision!.version, requestKey: "send-older-card-1" });
+  expect(f.sent).toHaveLength(1);
 });
 
 test("a reply's receipt names the conversation question it answers", async () => {

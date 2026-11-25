@@ -1,4 +1,4 @@
-import { decorateDecision, restoreClarifiedDecision } from "./session-decisions";
+import { applyDoneNotes, decorateDecision, restoreClarifiedDecision } from "./session-decisions";
 import { questionContext } from "./open-questions";
 import { join } from "node:path";
 import { SessionPhotoStore } from "./session-photos";
@@ -164,6 +164,8 @@ export class DecisionSender {
       questionContext(current, row.id)), { evidenceId: evidence.id });
     // After classification, so a question still waiting for the person outranks a status report after it.
     if (verifiedBoardFact(row, evidence, current, note)) throw Error(changed);
+    // As the snapshot does: a done note that already closed a question no longer hides the card it uncovered.
+    if (note) applyDoneNotes([row], { [row.id]: note }, current);
     decorateDecision(row, note, current, evidence);
     const found = row.decision;
     restoreClarifiedDecision(row, note, current, evidence);
