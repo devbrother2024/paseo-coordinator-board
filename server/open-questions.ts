@@ -1,5 +1,5 @@
 import type { SessionRow } from "../shared/contract";
-import { blockPicks, type BlockQuestion, type QuestionBlock } from "../shared/question-block";
+import { blockQuestionLabel, type BlockQuestion, type QuestionBlock } from "../shared/question-block";
 import { questionChoices, type Choice, type LabelDefinition } from "../shared/question-choices";
 import { raisedQuestionSchema, type ClosedReason, type Preferences, type RaisedQuestion } from "./preferences";
 import { turnQuestion } from "./turn-question";
@@ -91,6 +91,18 @@ function answersBlockPart(part: string, item: BlockQuestion, index: number, coun
   return answersOption(rest, item) || (!!filled && answersOption(filled, item));
 }
 
+// The question a line answers in full in the form the board's options fill, or null. Free text after the options
+// ("Q1 · question: A · text, but check first") is not a full answer.
+function filledLine(line: string, block: QuestionBlock) {
+  for (const [index, item] of block.questions.entries()) {
+    const prefix = blockQuestionLabel(item) + ": ";
+    if (!line.startsWith(prefix)) continue;
+    const picked = line.slice(prefix.length).split(", ");
+    return picked.every(text => item.options.some(option => option.key + " · " + option.text === text)) ? index : null;
+  }
+  return null;
+}
+
 /** Whether what the person wrote is an answer the card offered: an option's label or text, or the recommended reply. */
 export function answersChoices(text: string, question: { block?: QuestionBlock; choices?: readonly Choice[] }) {
   const written = text.trim();
@@ -98,16 +110,19 @@ export function answersChoices(text: string, question: { block?: QuestionBlock; 
   const block = question.block;
   if (block) {
     if (block.recommendedReply && norm(written) === norm(block.recommendedReply)) return true;
-    // Every question of the block has to be answered. An answer to some of them leaves the card open.
-    const all = (answered: ReadonlySet<number>) => block.questions.every((_, index) => answered.has(index));
-    if (all(new Set(Object.keys(blockPicks(written, block)).map(Number)))) return true;
+    // Every question of the block has to be answered, and every line has to be an answer: a line the board's options fill
+    // ("Q1 · question: A · text, B · text") or short answers ("Q1 A, Q2 B"). Anything else written leaves the card open.
     const answered = new Set<number>();
-    for (const part of parts(written)) {
-      const index = block.questions.findIndex((item, at) => answersBlockPart(part, item, at, block.questions.length));
-      if (index < 0) return false;
-      answered.add(index);
+    for (const line of written.split("\n").map(row => row.trim()).filter(Boolean)) {
+      const filled = filledLine(line, block);
+      if (filled !== null) { answered.add(filled); continue; }
+      for (const part of parts(line)) {
+        const index = block.questions.findIndex((item, at) => answersBlockPart(part, item, at, block.questions.length));
+        if (index < 0) return false;
+        answered.add(index);
+      }
     }
-    return all(answered);
+    return block.questions.every((_, index) => answered.has(index));
   }
   const choices = question.choices ?? [];
   const pieces = parts(written);

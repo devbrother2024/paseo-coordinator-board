@@ -10,7 +10,7 @@ import { changedDecisionMessage as changed, type DecisionInput } from "../shared
 import type { SessionRow } from "../shared/contract";
 import { canChangeQueue, type QueueAction } from "../shared/busy-delivery";
 import type { WorkImage } from "../shared/work-images";
-import { classify, ConversationReader } from "./conversation";
+import { classify, ConversationReader, scanOf } from "./conversation";
 import { isCurrentMembership, managedSessions } from "./session-links";
 import { canReceiveBoardInput } from "./discovery";
 import { discoverBoardSessions } from "./board-sessions";
@@ -160,14 +160,21 @@ export class DecisionSender {
     const prior = current.queuedDecisions[messageId];
     if (queuedId && (!prior || prior.stopped || prior.parallel === "held" || prior.serverId !== (destination.serverId ?? null))) throw Error(waiting);
     const judgment = current.judgments[row.id];
-    if (verifiedBoardFact(row, evidence, current, note)) throw Error(changed);
     Object.assign(row, classify(evidence, row, judgment?.projectId === row.projectId ? judgment : undefined, row.id === current.coordinator,
       questionContext(current, row.id)), { evidenceId: evidence.id });
+    // After classification, so a question still waiting for the person outranks a status report after it.
+    if (verifiedBoardFact(row, evidence, current, note)) throw Error(changed);
     decorateDecision(row, note, current, evidence);
     restoreClarifiedDecision(row, note, current, evidence);
     if (!row.decision || row.decision.source === "permission" || row.decision.version !== input.version) throw Error(changed);
     const agent = latest.find(target => target.id === destination.id)!.agent!;
-    const waitForTurn = activeReply && !canReceiveBoardInput(agent,!row.decision.deliverWhenIdle);
+    // A bare reply joins the session's current turn only while the card's question is its latest message and nothing came
+    // in after it. Otherwise the turn may be about something else: the reply waits for the turn to end and then goes
+    // with the card information that binds it to the question.
+    const asked = row.decision.source === "conversation" ? scanOf(row)?.open.at(-1) : undefined;
+    const lastEvent = evidence.events?.at(-1);
+    const bare = !asked || (!!asked.turn && lastEvent?.role === "assistant" && lastEvent.seq === asked.turn.seq && !evidence.laterInput);
+    const waitForTurn = activeReply && (!bare || !canReceiveBoardInput(agent,!row.decision.deliverWhenIdle));
     const decision = row.decision;
     if (inspectOnly && !waitForTurn) throw Error(waiting);
     if (waitForTurn) {
@@ -183,7 +190,7 @@ export class DecisionSender {
       }
       return {...receipt,queued:true};
     }
-    const text = activeReply || queuedId ? input.text : sessionReplyMessage(row,input);
+    const text = (activeReply || queuedId) && bare ? input.text : sessionReplyMessage(row,input);
     if (input.images?.length) this.sessionPhotos.save(input.recipientId, messageId, input.images);
     this.store.change(current => {
       if (prior) delete current.queuedDecisions[messageId];

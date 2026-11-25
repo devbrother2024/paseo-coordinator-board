@@ -133,7 +133,9 @@ export function wantsOlder(page: Pick<Page, "entries" | "hasOlder" | "startCurso
     if (item.type === "user_message") return false;
     if (item.type !== "assistant_message" || !item.text.trim()) continue;
     const split = splitQuestionBlock(item.text.trim());
-    if (split.block || questionIn(split.text) || settlingLines(item.text)) return false;
+    // Read as a coordinator digest would be: a quoted question row in a digest table is not a question here, so it does
+    // not stop the read before the coordinator's own question. For other sessions this only reads further.
+    if (split.block || questionIn(split.text, true) || settlingLines(item.text)) return false;
     if (++assistants >= OLDER_REACH.assistants) return false;
   }
   const oldest = page.entries.find(entry => entry.timestamp)?.timestamp;

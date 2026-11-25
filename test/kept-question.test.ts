@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyConversationEvidence, applyRecordedQuestions, classify, ConversationReader, excerpt, questionDetails, recordedSessionRows, scanOf, wantsOlder } from "../server/conversation";
 import { displayLane } from "../shared/decision-count";
+import { verifiedBoardFact } from "../server/board-facts";
 import { snapshotHoldSessions } from "../shared/merge-hold";
 import { decorateDecision } from "../server/session-decisions";
 import { PreferenceStore } from "../server/preferences";
@@ -339,4 +340,23 @@ test("sessions the board can no longer find stay as ended cards, within the sele
   const card = rows[0];
   decorateDecision(card, undefined, scope, undefined);
   expect(card.decision).toMatchObject({ source: "conversation", question: "Shall I publish it now?" });
+});
+
+test("review: a coordinator's digest row does not stop reading further back before its own question", () => {
+  const digest: Step = ["assistant", "| Editing session | question + suggested reply | **Question**: Shall I publish the draft? |", 0.5];
+  expect(wantsOlder(page([digest, reply], { hasOlder: true, startCursor: { epoch: "e1", seq: 100 } }), NOW)).toBe(true);
+});
+
+test("review: an option line followed by a question of the person's own is not an answer", () => {
+  const written = "Q1 · Where should the cache live?: A · Memory\nIs this the right choice?";
+  expect(judge(evidence(blockAsk, ["user", written, 0.5], reply))).toMatchObject({ lane: "human", keptQuestion: { maybeAnswered: true } });
+  expect(judge(evidence(blockAsk, ["user", "Q1 · Where should the cache live?: A · Memory, but check the disk first", 0.5], reply)).lane).toBe("human");
+  expect(judge(evidence(blockAsk, ["user", "Q1 · Where should the cache live?: A · Memory", 0.5], reply)).lane).toBe("idle");
+});
+
+test("review: a status report after the question does not turn the kept question into a board fact", () => {
+  const scope = blank();
+  const shown = snapshot(scope, evidence(ask, ["assistant", "Status update only. No decision is requested.", 0.5]));
+  expect(shown).toMatchObject({ lane: "human", decision: { source: "conversation", question: "Shall I publish it now?" } });
+  expect(verifiedBoardFact(shown, evidence(ask, ["assistant", "Status update only. No decision is requested.", 0.5]), scope)).toBeNull();
 });

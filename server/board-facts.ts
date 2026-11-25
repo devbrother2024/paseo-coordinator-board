@@ -22,6 +22,8 @@ const queries: Record<BoardFact["kind"], RegExp> = {
   status: /^(?:(?:이|현재) 세션의 (?:현재 |실행 )?상태(?:가|는)? (?:무엇인가요|어떤가요|어떻게 되나요)|what is (?:this session['’]s (?:current )?status|the (?:current )?status of this session))\s*[?？]?$/i,
 };
 export function verifiedBoardFact(row: SessionRow, evidence: Evidence, scope: Preferences, note?: Note) {
+  // A question still waiting for the person outranks a status report after it.
+  if (row.keptQuestion) return null;
   if (evidence.lastInputIds?.some(id => scope.clarifications?.[id])) return null;
   if (evidence.laterInput || row.status !== "idle" || row.nativePending || row.detail.includes("오류") || row.id === scope.coordinator ||
       !isCurrentMembership(row, scope) || (note && note.kind !== "clear")) return null;

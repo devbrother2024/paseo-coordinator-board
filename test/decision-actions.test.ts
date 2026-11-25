@@ -308,6 +308,33 @@ test("an unchanged open conversation card steers a running worker, while a new t
   }
 });
 
+test("a reply to a question kept after another session's message never joins the new turn bare", async () => {
+  const f = await fixture();
+  // Another session starts a new turn on the worker after its question. The card stays the same.
+  f.timelines.worker.push({type:"tool_call", callId:"paseo-agent-message:m1", name:"message", status:"completed",
+    agentMessage:{event:"message", sender:{id:"other"}, text:"Please review the release notes."}});
+  Object.assign(f.actors.worker, {status:"running", provider:"claude", activeTurn:{id:"turn"}});
+  expect(await f.send()).toMatchObject({queued:true});
+  expect(f.sent).toBeEmpty();
+  // Once the turn ends the reply goes with the card information that binds it to the question.
+  f.actors.worker.status = "idle"; f.actors.worker.activeTurn = null;
+  await new DecisionSender(f.prefs, f.notes, new ConversationReader()).resume(f.sdk);
+  expect(f.sent).toHaveLength(1);
+  expect(f.sent[0].text).not.toBe(f.input.text);
+  expect(f.sent[0].text).toContain("자막을 한 줄로 할까요?");
+  expect(f.sent[0].text.endsWith(f.input.text)).toBe(true);
+});
+
+test("a kept question still takes its answer while a status report is the latest message", async () => {
+  const f = await fixture();
+  f.timelines.worker.push({type:"assistant_message", text:"Status update only. No decision is requested."});
+  const card = await f.row();
+  expect(card.decision?.question).toBe("자막을 한 줄로 할까요?");
+  f.input.version = card.decision!.version;
+  await f.send();
+  expect(f.sent).toHaveLength(1);
+});
+
 test("a queued conversation answer rechecks the revision after restart", async () => {
   const f = await fixture();
   Object.assign(f.actors.worker, {status:"running", provider:"other", activeTurn:{id:"turn"}});
