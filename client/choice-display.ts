@@ -19,22 +19,32 @@ export function previewMarkdown(markdown: string, count = 4) {
   let fence: string | null = null;
   let units = 0;
   let i = 0;
+  // Past the limit, a heading at the end gets one extension: up to the first line of content under it.
+  let extended = false;
+  let extending = false;
   while (i < lines.length) {
-    const lastShown = kept.findLast(line => line.trim());
-    if (units >= count && !(fence === null && lastShown !== undefined && isHeading(lastShown))) break;
+    if (units >= count && !extending) {
+      const lastShown = kept.findLast(line => line.trim());
+      if (extended || fence !== null || lastShown === undefined || !isHeading(lastShown)) break;
+      extended = extending = true;
+    }
     const line = lines[i];
     if (fence === null && isTableStart(line, lines[i + 1])) {
       kept.push(line, lines[i + 1]);
       i += 2;
       units++;
       if (i < lines.length && lines[i].trim() && lines[i].includes("|")) { kept.push(lines[i]); i++; units++; }
+      extending = false;
       continue;
     }
     kept.push(line);
     i++;
     if (line.trim()) units++;
     const opener = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    const opening = !!opener && fence === null;
     if (opener) fence = fence ? null : opener;
+    // An opening fence is not content yet: keep going to the block's first line.
+    if (line.trim() && !opening) extending = false;
   }
   const more = kept.length < lines.length && lines.slice(kept.length).some(line => line.trim());
   return { preview: (fence ? [...kept, fence] : kept).join("\n").trimEnd(), more };

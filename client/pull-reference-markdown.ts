@@ -4,9 +4,13 @@ import { resolveRepositoryName, type RepositoryClue, type RepositoryIndex } from
 // Match bare references and leave GitHub's owner/repository#number shorthand alone.
 const reference = /(^|[^\w/#.-])(?:([\w.-]+\/[\w.-]+)[ \t]*)?#([1-9]\d*)(?![\w#])/g;
 // A name a session might write for a repository: alpha-web, AlphaWeb, owner/repository.
-const name = /[A-Za-z0-9](?:[\w.-]*[A-Za-z0-9])?(?:\/[A-Za-z0-9](?:[\w.-]*[A-Za-z0-9])?)?/g;
-// The word written right before a PR number: "alpha-web #12", "alpha-web PR #12".
-const adjacent = /([A-Za-z0-9](?:[\w.-]*[A-Za-z0-9])?)[ \t]+(?:PR[ \t]*)?$/i;
+const word = "[A-Za-z0-9](?:[\\w.-]*[A-Za-z0-9])?(?:\\/[A-Za-z0-9](?:[\\w.-]*[A-Za-z0-9])?)?";
+const names = new RegExp(word, "g");
+// Korean particles written right after a name: "alpha-web의 #12", "alpha-web에서 #12".
+const particle = "(?:에서|으로|의|은|는|이|가|을|를|에|와|과|도|로|만)?";
+// The name right before a number ("alpha-web #12", "alpha-web PR #12", "alpha-web의 #12") or in brackets right after it ("#12 (alpha-web)").
+const before = new RegExp("(" + word + ")" + particle + "[ \\t]+(?:PR[ \\t]*)?$", "i");
+const after = new RegExp("^[ \\t]*\\((" + word + ")\\)");
 const plainText = (text: string): Tokens.Text => ({ type: "text", raw: text, text });
 
 export type PullLinkContext = {
@@ -17,15 +21,15 @@ export type PullLinkContext = {
   row?: RepositoryClue | null;
 };
 
-/** Looks like a repository name rather than a plain word: has a dash, dot or underscore inside, or a capital after a small letter. */
-const looksLikeRepository = (word: string) => /[A-Za-z]/.test(word) && (/[a-z][A-Z]/.test(word) || /[A-Za-z0-9][-_.][A-Za-z0-9]/.test(word));
-
 // Words that join a sentence rather than name a repository: "fixed in #12", "see PR #12".
 const joining = new Set(["a", "an", "and", "as", "at", "by", "for", "from", "in", "is", "issue", "of", "on", "or", "pr", "pull", "see", "the", "to", "via", "was", "with"]);
+// Ordinary hyphenated words that are not repository names.
+const ordinary = new Set(["follow-up", "e-mail", "re-run", "sign-in", "log-in", "set-up", "opt-in", "add-on", "built-in", "check-in", "pre-commit", "pre-push", "read-only", "co-author", "non-blocking"]);
+const fileOrSite = /\.(md|mdx|json|jsonc|ts|tsx|js|jsx|mjs|cjs|py|sh|yml|yaml|toml|lock|txt|html|css|png|jpe?g|svg|com|org|net|io|dev|ai|app)$/i;
 
-// What the word right before a number says: a repository, a blocked name, or (unknown) a word that may still name one.
-type Adjacent = RepositoryClue | "unknown" | null;
-type Scan = { clues: { at: number; line: number; clue: RepositoryClue }[]; refs: { at: number; line: number; adjacent: Adjacent }[] };
+/** A slug such as zeta-api or zeta_api: a dash, underscore or dot inside, and not a common word, version, file or site name. */
+const looksLikeRepository = (text: string) => /[A-Za-z]/.test(text) && /[A-Za-z0-9][-_.][A-Za-z0-9]/.test(text)
+  && !ordinary.has(text.toLowerCase()) && !/^v?\d+(\.\d+)+$/i.test(text) && !fileOrSite.test(text);
 
 function matches(text: string) {
   return [...text.matchAll(reference)].flatMap(match => {
@@ -36,82 +40,81 @@ function matches(text: string) {
   });
 }
 
-function namesIn(text: string, known: RepositoryIndex | undefined) {
-  if (!known) return [];
-  return [...text.matchAll(name)].flatMap(match => {
-    if (text[match.index - 1] === "#" || /^\d+$/.test(match[0])) return [];
-    const clue = resolveRepositoryName(known, match[0]);
-    return clue ? [{ index: match.index, clue }] : [];
-  });
-}
-
 // One walk over the inline tokens in reading order, shared by the scan and the rewrite so their positions agree.
-function walk(tokens: Token[], visit: { text(text: string): void; code(text: string): void; br(): void }) {
+function walk(tokens: Token[], visit: { text(text: string): void; other(text: string): void }) {
   for (const token of tokens) {
-    if (token.type === "link" || token.type === "image") continue;
-    if (token.type === "br") visit.br();
-    else if (token.type === "codespan") visit.code(token.text);
+    if (token.type === "link" || token.type === "image") visit.other(" ");
+    else if (token.type === "br") visit.other("\n");
+    else if (token.type === "codespan") visit.other(token.text);
     else if ("tokens" in token && Array.isArray(token.tokens)) walk(token.tokens, visit);
     else if (token.type === "text" && typeof token.text === "string") visit.text(token.text);
+    else visit.other(" ");
   }
 }
 
-function scan(tokens: Token[], known: RepositoryIndex | undefined): Scan {
-  const result: Scan = { clues: [], refs: [] };
-  let at = 0;
-  let line = 0;
-  const lines = (text: string) => {
-    let offset = 0;
-    for (const part of text.split("\n")) {
-      for (const found of namesIn(part, known)) result.clues.push({ at: at + offset + found.index, line, clue: found.clue });
-      offset += part.length + 1;
-      line++;
-    }
-    line--;
-  };
+/** The inline text as one string with line breaks, and where each bare reference sits in it. */
+function flatten(tokens: Token[]) {
+  let flat = "";
+  const refs: { at: number; length: number }[] = [];
   walk(tokens, {
-    br: () => { line++; at++; },
-    code: text => { lines(text); at += text.length; },
+    other: text => { flat += text; },
     text: text => {
-      const refs = matches(text);
-      for (const ref of refs) {
-        const before = text.slice(0, ref.start);
-        const word = adjacent.exec(before.slice(before.lastIndexOf("\n") + 1))?.[1];
-        const clue: Adjacent = !word || joining.has(word.toLowerCase()) ? null
-          : resolveRepositoryName(known, word) ?? (looksLikeRepository(word) ? { blocked: true } : "unknown");
-        result.refs.push({ at: at + ref.start, line: line + (before.match(/\n/g)?.length ?? 0), adjacent: clue });
-      }
-      lines(text);
-      at += text.length;
+      for (const ref of matches(text)) refs.push({ at: flat.length + ref.start, length: ref.digits.length + 1 });
+      flat += text;
     },
   });
-  return result;
+  return { flat, refs };
 }
 
-const same = (a: RepositoryClue, b: RepositoryClue) => "repo" in a && "repo" in b && a.repo === b.repo;
+// The word right beside a number: a repository, a blocked name, a plain word that might still be a name, or nothing.
+type Beside = RepositoryClue | "word" | null;
 
-function resolve(ref: Scan["refs"][number], clues: Scan["clues"], context: PullLinkContext): string | null {
+function beside(text: string | undefined, known: RepositoryIndex | undefined): Beside {
+  if (!text || joining.has(text.toLowerCase())) return null;
+  return resolveRepositoryName(known, text) ?? (looksLikeRepository(text) ? { blocked: true } : "word");
+}
+
+/** Repository names anywhere in a line (project titles only count right beside a number), and whether it names one the board does not know. */
+function lineClues(line: string, known: RepositoryIndex | undefined) {
+  const repos = new Set<string>();
+  let blocked = false;
+  for (const match of line.matchAll(names)) {
+    if (line[match.index - 1] === "#" || /^\d+$/.test(match[0])) continue;
+    const clue = resolveRepositoryName(known, match[0], true);
+    if (clue) {
+      if ("repo" in clue) repos.add(clue.repo); else blocked = true;
+    } else if (!resolveRepositoryName(known, match[0]) && looksLikeRepository(match[0])) blocked = true;
+  }
+  return { repos, blocked };
+}
+
+function resolve(flat: string, ref: { at: number; length: number }, context: PullLinkContext): string | null {
+  const start = flat.lastIndexOf("\n", ref.at - 1) + 1;
+  const endAt = flat.indexOf("\n", ref.at);
+  const end = endAt < 0 ? flat.length : endAt;
   const chosen = (clue: RepositoryClue) => "repo" in clue ? clue.repo : null;
-  if (ref.adjacent && ref.adjacent !== "unknown") return chosen(ref.adjacent);
-  const onLine = clues.filter(clue => clue.line === ref.line);
-  // "delta #5, off #6": on a line that names repositories, an unknown name before the number is one more repository.
-  if (ref.adjacent === "unknown" && onLine.length) return null;
-  const before = onLine.filter(clue => clue.at < ref.at).at(-1);
-  if (before) return chosen(before.clue);
-  if (onLine.length) return onLine.every(clue => same(clue.clue, onLine[0].clue)) ? chosen(onLine[0].clue) : null;
+  // Only the text just before the number can hold the name beside it; a bounded slice keeps long lines cheap.
+  const left = beside(before.exec(flat.slice(Math.max(start, ref.at - 200), ref.at))?.[1], context.known);
+  if (left && left !== "word") return chosen(left);
+  const right = beside(after.exec(flat.slice(ref.at + ref.length, Math.min(end, ref.at + ref.length + 200)))?.[1], context.known);
+  if (right && right !== "word") return chosen(right);
+  const line = lineClues(flat.slice(start, end), context.known);
+  if (line.blocked || line.repos.size > 1) return null;
+  // "beta #2, delta #5": on a line that names repositories, an unknown word before the number is one more repository.
+  if (line.repos.size === 1) return left === "word" ? null : [...line.repos][0];
   if (context.row) return chosen(context.row);
   return context.repository ?? null;
 }
 
 /**
- * Turns bare `#N` into links. The repository comes from the same line when it names one the board knows
- * ("alpha-web #12", a table row's repository cell), otherwise from the card. An unknown or ambiguous name leaves it unlinked.
+ * Turns bare `#N` into links. The repository comes from the name right beside the number, or from the one repository
+ * the line names, or from the table row, and only then from the card. Unknown or ambiguous names leave it unlinked.
  */
 export function pullReferenceTokens(tokens: Token[], context: PullLinkContext = {}): Token[] {
   if (!context.repository && !context.known && !context.row) return tokens;
-  const found = scan(tokens, context.known);
-  if (!found.refs.length) return tokens;
-  const repos = found.refs.map(ref => resolve(ref, found.clues, context));
+  const { flat, refs } = flatten(tokens);
+  if (!refs.length) return tokens;
+  const repos = refs.map(ref => resolve(flat, ref, context));
   let next = 0;
   const rewrite = (list: Token[]): Token[] => list.flatMap(token => {
     if (token.type === "link" || token.type === "image" || token.type === "codespan") return [token];

@@ -302,6 +302,10 @@ test("앞 내용이 표에서 끝나면 표 머리와 본문 첫 줄을 함께 �
   const longer = ["첫째", "둘째", "셋째", "## 병합 결과", "", ...table];
   expect(previewMarkdown(longer.join("\n"))).toEqual({ preview: longer.slice(0, 8).join("\n"), more: true });
   expect(previewMarkdown("첫째\n둘째\n셋째\n## 다음\n설명 한 줄\n둘째 줄")).toEqual({ preview: "첫째\n둘째\n셋째\n## 다음\n설명 한 줄", more: true });
+  // 제목 예외는 한 번만: 제목 아래가 또 제목이면 거기서 끝난다.
+  expect(previewMarkdown("첫째\n둘째\n셋째\n## 다음\n### 그 아래\n설명")).toEqual({ preview: "첫째\n둘째\n셋째\n## 다음\n### 그 아래", more: true });
+  // 제목 아래가 코드 블록이면 빈 블록이 아니라 첫 줄까지 보인다.
+  expect(previewMarkdown("첫째\n둘째\n셋째\n## 명령\n\n```sh\nnpm ci\nnpm test\n```")).toEqual({ preview: "첫째\n둘째\n셋째\n## 명령\n\n```sh\nnpm ci\n```", more: true });
   const almost = ["첫째", "둘째", "## 병합 결과", ...table];
   expect(previewMarkdown(almost.join("\n"))).toEqual({ preview: almost.slice(0, 6).join("\n"), more: true });
   // 코드 블록 안의 파이프 줄은 표로 보지 않는다.

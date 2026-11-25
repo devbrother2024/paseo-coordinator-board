@@ -41,6 +41,8 @@ const known = repositoryIndex([
   { repo: "labs/gamma-api", names: ["GammaApi"] },
   { repo: "studio/shared" },
   { repo: "labs/shared" },
+  { repo: "studio/beta-api" },
+  { repo: "studio/site", names: ["web"] },
 ]);
 
 function tableReferences(markdown: string, repository?: string) {
@@ -98,6 +100,22 @@ test("a sentence links each PR number to the repository written before it", () =
   // 단서가 없으면 지금처럼 카드 저장소, 카드 저장소도 없으면 잇지 않는다.
   expect(link("Approve #42", "studio/card")).toEqual([{ repo: "studio/card", number: 42 }]);
   expect(link("Approve #42")).toEqual([]);
+  // 한 줄에 저장소 단서가 여럿이면 바로 앞(또는 바로 뒤 괄호) 이름이 없는 번호는 잇지 않는다.
+  expect(link("Merged #12 (alpha-web) and #13 (beta-api)", "studio/card")).toEqual([{ repo: "studio/alpha-web", number: 12 }, { repo: "studio/beta-api", number: 13 }]);
+  expect(link("#12 alpha-web 수정, #13 beta-api 수정", "studio/card")).toEqual([]);
+  // 줄에 모르는 저장소 이름이 있으면 카드 저장소로 가지 않는다. 바로 앞 이름은 조사를 떼고 본다.
+  expect(link("zeta-api 병합 완료 #26", "studio/card")).toEqual([]);
+  expect(link("#26 zeta-api 병합", "studio/card")).toEqual([]);
+  expect(link("zeta-api의 #26", "studio/card")).toEqual([]);
+  expect(link("GammaApi의 #166", "studio/card")).toEqual([{ repo: "labs/gamma-api", number: 166 }]);
+  expect(link("beta-api에서 #20", "studio/card")).toEqual([{ repo: "studio/beta-api", number: 20 }]);
+  // 프로젝트 이름은 번호 바로 앞에서만 단서다. 줄 다른 곳의 흔한 단어는 저장소로 보지 않는다.
+  expect(link("web 화면 고친 뒤 #30", "studio/card")).toEqual([{ repo: "studio/card", number: 30 }]);
+  expect(link("web #31", "studio/card")).toEqual([{ repo: "studio/site", number: 31 }]);
+  // 저장소 이름처럼 보이지 않는 일반어 앞 번호는 예전처럼 카드 저장소.
+  for (const text of ["GitHub PR #12", "follow-up #12", "v1.2 #12", "macOS #12", "README.md 수정 #12"]) {
+    expect(link(text, "studio/card")).toEqual([{ repo: "studio/card", number: 12 }]);
+  }
   // owner/repo#N 꼴은 건드리지 않는다.
   expect(link("other/thing#16 와 alpha-web #17")).toEqual([{ repo: "studio/alpha-web", number: 17 }]);
 });

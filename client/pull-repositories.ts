@@ -4,7 +4,12 @@ import { repositorySlug } from "../shared/prs";
  * GitHub repositories the board already knows, by the names a session might write for them.
  * Names are the repository part of owner/repository and the project titles mapped to it, compared case-insensitively.
  */
-export type RepositoryIndex = { readonly names: ReadonlyMap<string, readonly string[]>; readonly repos: ReadonlySet<string> };
+export type RepositoryIndex = {
+  readonly names: ReadonlyMap<string, readonly string[]>;
+  /** Only the repository part of owner/repository, without project titles. */
+  readonly repoNames: ReadonlyMap<string, readonly string[]>;
+  readonly repos: ReadonlySet<string>;
+};
 
 /** Which repository a PR number belongs to, or that it must not be linked (unknown or ambiguous name). */
 export type RepositoryClue = { repo: string } | { blocked: true };
@@ -15,31 +20,38 @@ const key = (name: string) => name.trim().toLowerCase();
 
 export function repositoryIndex(entries: Iterable<Entry>): RepositoryIndex {
   const names = new Map<string, Set<string>>();
+  const repoNames = new Map<string, Set<string>>();
   const repos = new Set<string>();
-  const add = (name: string | null | undefined, repo: string) => {
+  const put = (map: Map<string, Set<string>>, name: string | null | undefined, repo: string) => {
     if (!name?.trim()) return;
-    const set = names.get(key(name)) ?? new Set<string>();
+    const set = map.get(key(name)) ?? new Set<string>();
     set.add(repo);
-    names.set(key(name), set);
+    map.set(key(name), set);
   };
+  const add = (name: string | null | undefined, repo: string) => put(names, name, repo);
   for (const entry of entries) {
     const parsed = repositorySlug.safeParse(entry.repo);
     if (!parsed.success) continue;
     const repo = parsed.data;
     repos.add(repo);
     add(repo.split("/")[1], repo);
+    put(repoNames, repo.split("/")[1], repo);
     for (const name of entry.names ?? []) add(name, repo);
   }
-  return { names: new Map([...names].map(([name, set]) => [name, [...set].sort()])), repos };
+  const sorted = (map: Map<string, Set<string>>) => new Map([...map].map(([name, set]) => [name, [...set].sort()]));
+  return { names: sorted(names), repoNames: sorted(repoNames), repos };
 }
 
-/** The repository a name stands for: null when the board does not know the name. */
-export function resolveRepositoryName(index: RepositoryIndex | undefined, name: string): RepositoryClue | null {
+/**
+ * The repository a name stands for: null when the board does not know the name.
+ * `repositoryOnly` ignores project titles, for names found anywhere in a line rather than right before a number.
+ */
+export function resolveRepositoryName(index: RepositoryIndex | undefined, name: string, repositoryOnly = false): RepositoryClue | null {
   if (!index) return null;
   const wanted = key(name);
   if (!wanted) return null;
   if (wanted.includes("/")) return index.repos.has(wanted) ? { repo: wanted } : null;
-  const found = index.names.get(wanted);
+  const found = (repositoryOnly ? index.repoNames : index.names).get(wanted);
   if (!found?.length) return null;
   return found.length === 1 ? { repo: found[0] } : { blocked: true };
 }
