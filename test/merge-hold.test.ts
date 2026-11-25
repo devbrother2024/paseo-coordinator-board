@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { asksBeforeMerge, heldMergeRecord, mergeHolds, mergeHoldWords, mergeRecordLinks, snapshotHoldSessions } from "../shared/merge-hold";
+import { asksBeforeMerge, heldMergeRecord, linkedHosts, mergeHoldDetails, mergeHolds, mergeHoldWords, mergeRecordLinks, snapshotHoldSessions } from "../shared/merge-hold";
 import { decisionCount } from "../shared/decision-count";
 import { decidesNow, placeMergeCards, pullDecidesNow } from "../shared/merge-card-place";
 import type { PullRequestItem } from "../shared/prs";
@@ -67,26 +67,27 @@ test("a ledger card for another project does not lend its session to the PR", ()
 });
 
 test("a session running on the PR branch on another host holds the PR", () => {
-  expect(mergeHolds([pr()], { sessions: [], peers: { rows: [session(true, { id: "remote" })], unread: new Set() } }).get(key)).toBe("running");
+  expect(mergeHolds([pr()], { sessions: [], peers: { rows: [session(true, { id: "remote" })], read: new Set(["host-b"]) } }).get(key)).toBe("running");
 });
 
 test("an unread host warns only on PRs linked to a session on that host", () => {
-  const unread = new Set(["host-b"]);
-  expect(mergeHolds([pr()], { sessions: [], peers: { rows: [], unread }, links: [link({ hosts: ["host-b"] })] }).get(key)).toBe("unverified");
+  // host-c was read; host-b was not (still loading or failed).
+  const read = new Set(["host-c"]);
+  expect(mergeHolds([pr()], { sessions: [], peers: { rows: [], read }, links: [link({ hosts: ["host-b"] })] }).get(key)).toBe("unverified");
   // Linked to a session on another, readable host that is not running.
-  expect(mergeHolds([pr()], { sessions: [], peers: { rows: [], unread }, links: [link({ hosts: ["host-c"] })] }).has(key)).toBe(false);
+  expect(mergeHolds([pr()], { sessions: [], peers: { rows: [], read }, links: [link({ hosts: ["host-c"] })] }).has(key)).toBe(false);
   // Linked only to sessions on this host, or not linked at all.
-  expect(mergeHolds([pr()], { sessions: [session(false, { id: "ledger-work" })], peers: { rows: [], unread }, links: [link()] }).has(key)).toBe(false);
-  expect(mergeHolds([pr()], { sessions: [], peers: { rows: [], unread } }).has(key)).toBe(false);
+  expect(mergeHolds([pr()], { sessions: [session(false, { id: "ledger-work" })], peers: { rows: [], read }, links: [link()] }).has(key)).toBe(false);
+  expect(mergeHolds([pr()], { sessions: [], peers: { rows: [], read } }).has(key)).toBe(false);
   // A session known to run on the branch still wins.
-  expect(mergeHolds([pr()], { sessions: [session(true)], peers: { rows: [], unread }, links: [link({ hosts: ["host-b"] })] }).get(key)).toBe("running");
+  expect(mergeHolds([pr()], { sessions: [session(true)], peers: { rows: [], read }, links: [link({ hosts: ["host-b"] })] }).get(key)).toBe("running");
 });
 
 test("an owner the coordinator named on an unread host warns on its PR", () => {
   const remoteOwner = pr({ judgment: { verdict: "ready", reason: "Done", at: "2026-11-24T01:00:00.000Z", ownerSessionId: "owner", ownerSessionHost: "host-b" } });
-  expect(mergeHolds([remoteOwner], { sessions: [], peers: { rows: [], unread: new Set(["host-b"]) } }).get(key)).toBe("unverified");
-  expect(mergeHolds([remoteOwner], { sessions: [], peers: { rows: [], unread: new Set() } }).has(key)).toBe(false);
-  expect(mergeHolds([remoteOwner], { sessions: [], peers: { rows: [session(true, { id: "owner", workspacePull: nextUnit })], unread: new Set() } }).get(key)).toBe("elsewhere");
+  expect(mergeHolds([remoteOwner], { sessions: [], peers: { rows: [], read: new Set() } }).get(key)).toBe("unverified");
+  expect(mergeHolds([remoteOwner], { sessions: [], peers: { rows: [], read: new Set(["host-b"]) } }).has(key)).toBe(false);
+  expect(mergeHolds([remoteOwner], { sessions: [], peers: { rows: [session(true, { id: "owner", workspacePull: nextUnit })], read: new Set(["host-b"]) } }).get(key)).toBe("elsewhere");
 });
 
 test("only PRs that would be merge cards are considered", () => {
@@ -96,6 +97,36 @@ test("only PRs that would be merge cards are considered", () => {
 
 test("the same rule applies when merge cards follow GitHub status only", () => {
   expect(mergeHolds([pr({ gate: "github" })], { sessions: [session(true)] }).get(key)).toBe("running");
+});
+
+test("a session on an offline or hidden host warns on its PR, because the board never reads that host", () => {
+  // The board read host-b only. host-off is offline, so it is not among the hosts the board polls at all.
+  const read = new Set(["host-b"]);
+  const remoteOwner = pr({ judgment: { verdict: "ready", reason: "Done", at: "2026-11-24T01:00:00.000Z", ownerSessionId: "owner", ownerSessionHost: "host-off" } });
+  expect(mergeHolds([remoteOwner], { sessions: [], peers: { rows: [], read } }).get(key)).toBe("unverified");
+  expect(mergeHolds([pr()], { sessions: [], peers: { rows: [], read }, links: [link({ hosts: ["host-off"] })] }).get(key)).toBe("unverified");
+  // Without host data (the decision count), nothing is claimed about other hosts.
+  expect(mergeHolds([remoteOwner], { sessions: [] }).has(key)).toBe(false);
+});
+
+test("a ledger card keeps pointing at a host the board cannot reach now", () => {
+  const here = { hostId: "here", hostLabel: "Desk" };
+  expect(linkedHosts({ kind: "remote", hosts: [{ serverId: "host-b" }, { serverId: "host-c" }] }, undefined, here)).toEqual(["host-b", "host-c"]);
+  expect(linkedHosts({ kind: "unavailable" }, "host-off", here)).toEqual(["host-off"]);
+  expect(linkedHosts({ kind: "unavailable" }, "here", here)).toBeUndefined();
+  expect(linkedHosts({ kind: "unavailable" }, "desk", here)).toBeUndefined();
+  expect(linkedHosts({ kind: "unavailable" }, null, here)).toBeUndefined();
+  expect(linkedHosts({ kind: "local" }, "host-off", here)).toBeUndefined();
+});
+
+test("the elsewhere exemption covers only the session seen on another branch", () => {
+  // The local ledger session works on the next unit elsewhere; the coordinator's remote owner was not seen at all.
+  const both = pr({ judgment: { verdict: "ready", reason: "Done", at: "2026-11-24T01:00:00.000Z", ownerSessionId: "remote-owner", ownerSessionHost: "host-b" } });
+  const detail = mergeHoldDetails([both], { sessions: [session(true, { id: "ledger-work", workspacePull: nextUnit })],
+    peers: { rows: [], read: new Set(["host-b"]) }, links: [link()] }).get(key);
+  expect(detail?.hold).toBe("elsewhere");
+  expect([...detail!.elsewhere]).toEqual(["ledger-work"]);
+  expect(detail!.elsewhere.has("remote-owner")).toBe(false);
 });
 
 test("only an unknown branch or an unread host asks once more before the merge preview", () => {

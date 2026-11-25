@@ -16,8 +16,9 @@ type HoldPull = Pick<PullRequestItem, "repo" | "number" | "projectIds" | "lane" 
 export type HoldInput = {
   // Sessions in the board snapshot: this host's and those assigned to another host.
   sessions: readonly HoldSession[];
-  // Running sessions read from other hosts, and the hosts not read yet or that failed.
-  peers?: { rows: readonly HoldSession[]; unread: ReadonlySet<string> };
+  // Running sessions read from other hosts, and the hosts the board read in full. A linked session on any
+  // other host (offline, hidden, still loading or failed) cannot be checked.
+  peers?: { rows: readonly HoldSession[]; read: ReadonlySet<string> };
   links?: readonly HoldLink[];
 };
 
@@ -45,6 +46,14 @@ export function mergeRecordLinks<T extends LinkRecord>(records: readonly T[], re
   });
 }
 
+// The other hosts a ledger card's session may be on. A card naming a host the board cannot reach now
+// (offline or hidden) still points there, so the PR warns instead of passing as checked.
+export function linkedHosts(target: { kind: string; hosts?: readonly { serverId: string }[] } | undefined,
+  hint: string | null | undefined, here: { hostId?: string; hostLabel: string }): string[] | undefined {
+  if (target?.kind === "remote") return target.hosts?.map(host => host.serverId);
+  return target?.kind === "unavailable" && hint && hint !== here.hostId && hint.toLowerCase() !== here.hostLabel.toLowerCase() ? [hint] : undefined;
+}
+
 // Where a running session works compared with the PR's head branch.
 function branchOf(pr: HoldPull, workspace: WorkspacePull | undefined): "same" | "other" | "unknown" {
   if (!workspace) return "unknown";
@@ -55,15 +64,24 @@ function branchOf(pr: HoldPull, workspace: WorkspacePull | undefined): "same" | 
 
 const rank: Record<MergeHold, number> = { running: 3, "branch-unknown": 2, unverified: 2, elsewhere: 1 };
 
+// A PR's merge card state, and the linked sessions known to be running on another branch. Only those sessions
+// are exempt from the running confirmation; any other session still answers for itself.
+export type HoldDetail = { hold: MergeHold; elsewhere: ReadonlySet<string> };
+
 // What each PR that would be a merge card shows. The setting that limits merge cards to coordinator-checked PRs
 // does not matter here: a PR whose branch is still being changed is not ready to merge either way.
 export function mergeHolds(prs: readonly HoldPull[], input: HoldInput): Map<string, MergeHold> {
-  const holds = new Map<string, MergeHold>();
+  return new Map([...mergeHoldDetails(prs, input)].map(([key, detail]) => [key, detail.hold]));
+}
+
+export function mergeHoldDetails(prs: readonly HoldPull[], input: HoldInput): Map<string, HoldDetail> {
+  const holds = new Map<string, HoldDetail>();
   const peerRows = input.peers?.rows ?? [];
   const find = (id: string) => input.sessions.find(s => s.id === id) ?? peerRows.find(s => s.id === id);
   for (const pr of prs) {
     if (pr.lane !== "review") continue;
     let hold: MergeHold | undefined;
+    const elsewhere = new Set<string>();
     const raise = (next: MergeHold) => { if (!hold || rank[next] > rank[hold]) hold = next; };
     // Sessions whose workspace is this PR's branch.
     for (const s of [...input.sessions, ...peerRows]) {
@@ -80,10 +98,11 @@ export function mergeHolds(prs: readonly HoldPull[], input: HoldInput): Map<stri
       const found = find(id);
       if (found?.running) {
         const branch = branchOf(pr, found.workspacePull);
+        if (branch === "other") elsewhere.add(id);
         raise(branch === "same" ? "running" : branch === "other" ? "elsewhere" : "branch-unknown");
-      } else if (!found && hosts?.some(host => input.peers?.unread.has(host))) raise("unverified");
+      } else if (!found && input.peers && hosts?.some(host => !input.peers!.read.has(host))) raise("unverified");
     }
-    if (hold) holds.set(pullKey(pr.repo, pr.number), hold);
+    if (hold) holds.set(pullKey(pr.repo, pr.number), { hold, elsewhere });
   }
   return holds;
 }

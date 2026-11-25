@@ -142,8 +142,8 @@ export function WaitingMergeRow({repo, number, title, why, theme}: {repo:string;
   </View>;
 }
 
-export function PullRequestCard({ pr, projectId, theme, decision = false, showDivider = true, securityGate = false, openCoordinator, workSessions, remoteSession, onResult, clarification, priorityLabel, hold }: {
-  pr: PullRequest; projectId: string; theme: Theme; workSessions: WorkSessionLink[]; remoteSession?: RemotePullSession; hold?: MergeHold; decision?: boolean; showDivider?: boolean; securityGate?: boolean; openCoordinator?: () => void; onResult: (notice: MergeNotice) => void; clarification?: ReactNode; priorityLabel?: string;
+export function PullRequestCard({ pr, projectId, theme, decision = false, showDivider = true, securityGate = false, openCoordinator, workSessions, remoteSession, onResult, clarification, priorityLabel, hold, remoteElsewhere = false }: {
+  pr: PullRequest; projectId: string; theme: Theme; workSessions: WorkSessionLink[]; remoteSession?: RemotePullSession; hold?: MergeHold; remoteElsewhere?: boolean; decision?: boolean; showDivider?: boolean; securityGate?: boolean; openCoordinator?: () => void; onResult: (notice: MergeNotice) => void; clarification?: ReactNode; priorityLabel?: string;
 }) {
   const { t } = useBoardLanguage();
   const c = theme.colors;
@@ -172,13 +172,12 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   const status = securityGate && pr.reason === "ready" ? t("열린 PR · 보안 게이트 통과 여부 확인 필요", "Open · Security gate unverified")
     : held ? t(held[0], held[1]) : t(words[0], words[1]);
   // A session on the PR branch keeps the card out of My decisions. A session busy on another branch only adds a line;
-  // one whose branch or host the board could not read asks once more.
-  const elsewhere = hold === "elsewhere";
-  const note = ready && hold && hold !== "running" ? mergeHoldWords[hold] : null;
+  // one whose branch or host the board could not read asks once more. The remote session this card looks up is exempt
+  // only when the board saw that very session working on another branch (remoteElsewhere).
   const lookup = useRemotePullSession(remoteSession);
   const remote = lookup?.shown;
   const gate = mergeGate(asksBeforeMerge(hold) || (!hold && needsRunningConfirmation(workSessions)),
-    lookup ? { pending: lookup.pending, running: !elsewhere && !!remote?.running } : undefined);
+    lookup ? { pending: lookup.pending, running: !remoteElsewhere && !!remote?.running } : undefined);
   const working = ready && gate === "confirm";
   const sessionNote = pullSessionNote(workSessions.length, remoteSession ? { checking: remote === undefined, found: !!remote } : undefined);
   const remoteLabel = remote && [t("작업 세션", "Work session"), remote.host.label, ...(remote.running ? [t("진행 중", "Running")] : [])].join(" · ");
@@ -239,7 +238,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
     if (locked.current || !ready || !preview?.token || !method || !preview.methods.includes(method)) return;
     locked.current = true; setBusy("merge"); setReopened(null);
     // A remote work session may have started running since the preview opened. Wait for its newest answer.
-    if (lookup && confirmAfterLookup(await lookup.latest(), acknowledgedRunning.current || elsewhere) === "ask") {
+    if (lookup && confirmAfterLookup(await lookup.latest(), acknowledgedRunning.current || remoteElsewhere) === "ask") {
       locked.current = false; setBusy(null); setPreview(null); setMethod(null); setRunningPrompt(true);
       return;
     }
@@ -272,8 +271,11 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
     {decision && pr.gate === "judged" && pr.judgment && <Text selectable style={{color: c.foregroundMuted, fontSize: 13}}>
       {t("코디네이터 확인", "Coordinator check")} · {pr.judgment.reason}
     </Text>}
-    {(note || working) && <Text accessibilityLiveRegion="polite" style={{color: working ? c.statusWarning : c.foregroundMuted, fontSize: 13}}>
-      {note ? t(note[0], note[1]) : t("작업 세션이 아직 진행 중입니다.", "A work session is still running.")}
+    {ready && hold === "elsewhere" && <Text accessibilityLiveRegion="polite" style={{color: c.foregroundMuted, fontSize: 13}}>
+      {t(mergeHoldWords.elsewhere[0], mergeHoldWords.elsewhere[1])}
+    </Text>}
+    {working && <Text accessibilityLiveRegion="polite" style={{color: c.statusWarning, fontSize: 13}}>
+      {hold && asksBeforeMerge(hold) ? t(mergeHoldWords[hold][0], mergeHoldWords[hold][1]) : t("작업 세션이 아직 진행 중입니다.", "A work session is still running.")}
     </Text>}
     {runningPrompt && working && !preview && <View style={{gap: 7, padding: 10, borderWidth: 1, borderRadius: 7, borderColor: c.statusWarning, backgroundColor: c.surface0}}>
       <Text style={{color: c.foreground}}>{asksBeforeMerge(hold)
