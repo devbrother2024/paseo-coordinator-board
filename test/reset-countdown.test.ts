@@ -26,14 +26,14 @@ test("under a day shows hours and minutes", () => {
   expect(resetCountdown(at(2 * hour), now, "en")).toBe("2h left");
 });
 
-test("under an hour shows minutes, under a minute shows soon", () => {
+test("under an hour shows minutes, under a minute shows resets soon", () => {
   expect(resetCountdown(at(hour), now, "ko")).toBe("1시간 남음");
   expect(resetCountdown(at(hour - 1), now, "ko")).toBe("59분 남음");
   expect(resetCountdown(at(59 * minute), now, "en")).toBe("59m left");
   expect(resetCountdown(at(minute), now, "ko")).toBe("1분 남음");
   expect(resetCountdown(at(minute), now, "en")).toBe("1m left");
-  expect(resetCountdown(at(minute - 1), now, "ko")).toBe("곧");
-  expect(resetCountdown(at(1), now, "en")).toBe("soon");
+  expect(resetCountdown(at(minute - 1), now, "ko")).toBe("곧 초기화");
+  expect(resetCountdown(at(1), now, "en")).toBe("resets soon");
 });
 
 test("a passed, current, missing or unreadable reset time shows nothing", () => {

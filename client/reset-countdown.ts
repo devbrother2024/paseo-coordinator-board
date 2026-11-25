@@ -11,7 +11,7 @@ export function resetCountdown(reset: string | null | undefined, now: number, la
   const left = remaining(reset, now);
   if (left === null) return null;
   const ko = language === "ko";
-  if (left < minute) return ko ? "곧" : "soon";
+  if (left < minute) return ko ? "곧 초기화" : "resets soon";
   const [size, unit, part, partUnit] = left >= day ? [day, ko ? "일" : "d", hour, ko ? "시간" : "h"] as const
     : left >= hour ? [hour, ko ? "시간" : "h", minute, ko ? "분" : "m"] as const
       : [minute, ko ? "분" : "m", 0, ""] as const;
