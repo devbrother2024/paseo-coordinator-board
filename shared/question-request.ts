@@ -21,7 +21,7 @@ const sentenceEnd = /(?<!\be\.g\.|\bi\.e\.|\bvs\.)(?<=[.!?。！？][*_)\]」』
 /**
  * A line asks for a decision when one of its sentences, outside any quotes, makes the request.
  * A negation ("결정할 것은 없습니다") or an offer ("필요하면 알려 주세요") cancels only the sentence it is in, so a request in the next sentence still counts.
- * Known limit: a request that only the sentences before or after it can negate ("No decision is needed. If this changes, please choose a region.") is judged one sentence at a time. A missed card is caught by the board's check for sessions that stopped without a card.
+ * Known limit: a request that only the sentences before or after it can negate ("No decision is needed. If this changes, please choose a region.") is judged one sentence at a time.
  */
 export function asksForDecision(line: string) {
   return unquoted(line).split(sentenceEnd).some(sentence => !noQuestion.test(sentence) && !optionalOffer.test(sentence) && request.test(sentence));
