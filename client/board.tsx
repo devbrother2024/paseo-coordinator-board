@@ -2,7 +2,8 @@ import type { BoardReadiness } from "../shared/readiness";
 import { historySessionLinks, type HistoryLinks } from "./history-sessions";
 import { ReplyHistory } from "./reply-history";
 import { followupKind, hostWideVisible } from "./reply-followup";
-import { createRemoteWorkSessionLookup, trackedSessionOwner, trackedWorkSession } from "./tracked-session-targets";
+import { createRemoteWorkSessionStates, trackedSessionOwner, trackedWorkSession, workSessionPresence } from "./tracked-session-targets";
+import { ledgerPullSession } from "./pull-work-session";
 import type { TrackedSessionLinks } from "./tracked-session-chips";
 import { TrackedDecisionCard } from "./tracked-decisions";
 import { closedRevision } from "./tracked-reply-draft";
@@ -95,7 +96,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const [settings, setSettings] = useState(false);
   const {groups: peers, hosts: peerHosts, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
   const peerKey = JSON.stringify(peerHosts.map(host => host.serverId));
-  const lookupWorkSession = useMemo(() => createRemoteWorkSessionLookup(getPaseoClient), [hostId, updatedAt, peerKey]);
+  // One read per remote session and refresh, shared by ledger card chips and PR rows.
+  const workSessionStates = useMemo(() => createRemoteWorkSessionStates(getPaseoClient), [hostId, updatedAt, peerKey]);
+  const lookupWorkSession = useMemo(() => workSessionPresence(workSessionStates), [workSessionStates]);
   const historyRepos = useMemo(() => new Map(pullRequests?.projects.flatMap(p =>
     p.repo && p.mode !== "off" ? [[p.projectId,p.repo] as const] : [])), [pullRequests?.projects]);
   const historyScope = useMemo(() => remoteScope(activeProjects,pullRequests?.projects ?? []), [activeProjects,pullRequests?.projects]);
@@ -258,23 +261,33 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   }
   function renderPull(pr:PullRequestItem, projectId:string, decision=false, securityGate=false, embedded=false, rowKey?: string, scope: (string | null)[] = pr.projectIds, priority?: string) {
     const workSessions:WorkSessionLink[] = [];
+    const localLink = (s:NonNullable<typeof snapshot>["sessions"][number]) => {
+      const state = s.status === "closed" ? t("대화 종료","Closed") : s.lane === "running" ? t("진행 중","Running") : s.status === "idle" ? t("대기","Idle") : t("상태 확인 필요","Check status");
+      workSessions.push({id:s.id,key:JSON.stringify([s.serverId ?? hostId,s.id]),label:[s.title,s.assignment?.label ?? hostLabel,state].join(" · "),open:()=>actions.onOpen!(s.id),running:s.lane === "running"});
+    };
     for (const s of snapshot?.sessions ?? []) {
       if (!inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !actions.onOpen || !matchesWorkspace(pr,s.workspacePull)) continue;
-      const state = s.status === "closed" ? t("대화 종료","Closed") : s.lane === "running" ? t("진행 중","Running") : s.status === "idle" ? t("대기","Idle") : t("상태 확인 필요","Check status");
-      workSessions.push({key:JSON.stringify([s.serverId ?? hostId,s.id]),label:[s.title,s.assignment?.label ?? hostLabel,state].join(" · "),open:()=>actions.onOpen!(s.id),running:s.lane === "running"});
+      localLink(s);
     }
     if (onOpenHostSession) for (const {host,rows} of peers) for (const s of rows) {
       if (assigned.has(JSON.stringify([host.serverId, s.sessionId])) || !inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !matchesWorkspace(pr,s.workspacePull)) continue;
-      workSessions.push({key:JSON.stringify([host.serverId,s.sessionId]),label:[s.title || t("작업 세션","Work session"),host.label,t("진행 중","Running")].join(" · "),open:()=>onOpenHostSession(host.serverId,s.sessionId),running:true});
+      workSessions.push({id:s.sessionId,key:JSON.stringify([host.serverId,s.sessionId]),label:[s.title || t("작업 세션","Work session"),host.label,t("진행 중","Running")].join(" · "),open:()=>onOpenHostSession(host.serverId,s.sessionId),running:true});
     }
     // The coordinator can name the work session that owns the PR when no workspace matches it.
     const owner = pr.judgment?.ownerSessionId && snapshot?.sessions.find(s => s.id === pr.judgment?.ownerSessionId);
     if (owner && actions.onOpen && !workSessions.some(link => link.key === JSON.stringify([owner.serverId ?? hostId,owner.id]))) {
       const running = ownerRunning(pr, [owner]);
-      workSessions.push({key:JSON.stringify([owner.serverId ?? hostId,owner.id]),label:[owner.title,owner.assignment?.label ?? hostLabel,running ? t("진행 중","Running") : t("작업 세션","Work session")].join(" · "),
+      workSessions.push({id:owner.id,key:JSON.stringify([owner.serverId ?? hostId,owner.id]),label:[owner.title,owner.assignment?.label ?? hostLabel,running ? t("진행 중","Running") : t("작업 세션","Work session")].join(" · "),
         open:()=>actions.onOpen!(owner.id),running});
     }
-    return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions}
+    // A ledger card for this PR can name its work session, also one on another host.
+    const linkedIds = new Set(workSessions.map(link => link.id));
+    const fromLedger = snapshot ? ledgerPullSession(pr, snapshot.trackedDecisions?.items ?? [],
+      {hostId, hostLabel, sessions: snapshot.sessions, hosts: peerHosts, folders}, linkedIds) : undefined;
+    const ledgerLocal = fromLedger?.kind === "local" && actions.onOpen ? snapshot?.sessions.find(s => s.id === fromLedger.id) : undefined;
+    if (ledgerLocal) localLink(ledgerLocal);
+    const remoteSession = fromLedger?.kind === "remote" && onOpenHostSession ? {...fromLedger, states: workSessionStates, open: onOpenHostSession} : undefined;
+    return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions} remoteSession={remoteSession}
       clarification={decision && !embedded && questionFor({kind:"pull",projectId,repo:pr.repo,number:pr.number,updatedAt:pr.updatedAt},pr.repo + " #" + pr.number)}
       decision={decision} showDivider={!decision || embedded} securityGate={securityGate} openCoordinator={openCoordinator} onResult={notice => {
         const { status } = notice;

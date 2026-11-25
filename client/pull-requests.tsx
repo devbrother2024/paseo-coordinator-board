@@ -8,6 +8,8 @@ import { GitHubPullLink } from "./github-pull-link";
 import { mergeNotificationLabel } from "./merge-notification";
 import { useBoardLanguage, type Translate } from "./language";
 import { githubStatusWords, needsRunningConfirmation, pullStatusWords } from "../shared/pull-judgments";
+import { findRemoteWorkSessionState, type RemoteWorkSession, type WorkSessionHost, type WorkSessionStates } from "./tracked-session-targets";
+import { pullSessionNote } from "./pull-work-session";
 
 type PullRequest = PullRequestView["items"][number];
 
@@ -53,7 +55,24 @@ export function MergeFeedback({ notice, theme }: { notice: MergeNotice; theme: T
   </Text>;
 }
 
-export type WorkSessionLink = { key: string; label: string; open: () => void; running: boolean };
+export type WorkSessionLink = { id: string; key: string; label: string; open: () => void; running: boolean };
+export type RemotePullSession = RemoteWorkSession & { states: WorkSessionStates; open: (host: string, id: string) => void };
+type RemoteState = { host: WorkSessionHost; running: boolean } | null;
+
+// A work session on another host is shown only after a real lookup finds it there.
+// Each board refresh brings a new lookup. The last answer for the same session stays until it returns.
+function useRemotePullSession(source: RemotePullSession | undefined) {
+  const [found, setFound] = useState<{ key: string; state: RemoteState }>();
+  const key = source && JSON.stringify([source.id, source.hosts.map(host => host.serverId)]);
+  useEffect(() => {
+    if (!source || !key) return;
+    let active = true;
+    void findRemoteWorkSessionState(source, source.states).then(state => { if (active) setFound({ key, state: state ?? null }); });
+    return () => { active = false; };
+  }, [key, source?.states]);
+  if (!source) return null;
+  return found && found.key === key ? found.state : undefined;
+}
 
 type Lifecycle = ReturnType<typeof readPullLifecycle.output.parse>["state"];
 const referenceStates = { OPEN: ["열림", "Open"], DRAFT: ["초안", "Draft"], MERGED: ["병합됨", "Merged"], CLOSED: ["닫힘", "Closed"] } as const;
@@ -91,8 +110,8 @@ export function TrackedPullStatus({repo, number, projectId, theme, securityGate 
   </View>;
 }
 
-export function PullRequestCard({ pr, projectId, theme, decision = false, showDivider = true, securityGate = false, openCoordinator, workSessions, onResult, clarification, priorityLabel }: {
-  pr: PullRequest; projectId: string; theme: Theme; workSessions: WorkSessionLink[]; decision?: boolean; showDivider?: boolean; securityGate?: boolean; openCoordinator?: () => void; onResult: (notice: MergeNotice) => void; clarification?: ReactNode; priorityLabel?: string;
+export function PullRequestCard({ pr, projectId, theme, decision = false, showDivider = true, securityGate = false, openCoordinator, workSessions, remoteSession, onResult, clarification, priorityLabel }: {
+  pr: PullRequest; projectId: string; theme: Theme; workSessions: WorkSessionLink[]; remoteSession?: RemotePullSession; decision?: boolean; showDivider?: boolean; securityGate?: boolean; openCoordinator?: () => void; onResult: (notice: MergeNotice) => void; clarification?: ReactNode; priorityLabel?: string;
 }) {
   const { t } = useBoardLanguage();
   const c = theme.colors;
@@ -111,7 +130,10 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   useDecisionInteraction(!!busy || runningPrompt || (ready && !!preview));
   const words = pullStatusWords(pr);
   const status = securityGate && pr.reason === "ready" ? t("열린 PR · 보안 게이트 통과 여부 확인 필요", "Open · Security gate unverified") : t(words[0], words[1]);
-  const working = ready && needsRunningConfirmation(workSessions);
+  const remote = useRemotePullSession(remoteSession);
+  const working = ready && (needsRunningConfirmation(workSessions) || !!remote?.running);
+  const sessionNote = pullSessionNote(workSessions.length, remoteSession ? { checking: remote === undefined, found: !!remote } : undefined);
+  const remoteLabel = remote && [t("작업 세션", "Work session"), remote.host.label, ...(remote.running ? [t("진행 중", "Running")] : [])].join(" · ");
   const args = { projectId, repo: pr.repo, number: pr.number };
 
   async function inspect(confirmedRunning = false) {
@@ -148,7 +170,11 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
       <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>· {[status, priorityLabel].filter(Boolean).join(" · ")}</Text>
       {workSessions.map(link => <SessionChip key={link.key} label={link.label} theme={theme}
         accessibilityLabel={target + " · " + link.label} onPress={link.open} />)}
-      {!workSessions.length && <Text style={{color:c.foregroundMuted,fontSize:12}}>{t("작업 세션 미확인", "No verified work session")}</Text>}
+      {remoteSession && remote && remoteLabel && <SessionChip label={remoteLabel} theme={theme}
+        accessibilityLabel={t(`${target} · ${remote.host.label}의 작업 세션 열기`, `${target} · Open work session on ${remote.host.label}`)}
+        onPress={() => remoteSession.open(remote.host.serverId, remoteSession.id)} />}
+      {sessionNote === "checking" && <Text style={{color:c.foregroundMuted,fontSize:12}}>{t("작업 세션 확인 중…", "Checking work session…")}</Text>}
+      {sessionNote === "unverified" && <Text style={{color:c.foregroundMuted,fontSize:12}}>{t("작업 세션 미확인", "No verified work session")}</Text>}
       {decision && openCoordinator && <SessionChip theme={theme} label={t("코디네이터 세션", "Coordinator session")} accessibilityLabel={named(t("코디네이터 세션 열기", "Open coordinator session")).accessibilityLabel} onPress={openCoordinator} />}
     </View>
     <Text selectable style={{color: c.foreground, fontSize: 15, fontWeight: "600"}}>{preview?.title || pr.title}</Text>
