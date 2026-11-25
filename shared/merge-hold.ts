@@ -71,7 +71,8 @@ export function mergeHolds(prs: readonly HoldPull[], input: HoldInput): Map<stri
     }
     // Sessions named for this PR, wherever they work now.
     const named: { id: string; hosts?: readonly string[] }[] = [];
-    if (pr.judgment?.ownerSessionId) named.push({ id: pr.judgment.ownerSessionId });
+    const owner = pr.judgment;
+    if (owner?.ownerSessionId) named.push({ id: owner.ownerSessionId, ...(owner.ownerSessionHost ? { hosts: [owner.ownerSessionHost] } : {}) });
     for (const link of input.links ?? []) {
       if (link.repo === pr.repo && link.number === pr.number && (link.projectId === null || pr.projectIds.includes(link.projectId))) named.push(link);
     }

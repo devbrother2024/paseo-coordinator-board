@@ -6,6 +6,7 @@ import { matchesWorkspace } from "../shared/workspace-pull";
 import { managedRowsForCoordinator } from "./coordinator";
 import type { PreferenceStore, Preferences } from "./preferences";
 import type { ProjectPullRequests } from "./prs";
+import { remoteOwnerDeps, verifyRemoteOwner, type OwnerHint, type RemoteOwnerDeps } from "./remote-owner";
 
 type Reader = Pick<ProjectPullRequests, "read">;
 
@@ -32,14 +33,16 @@ const input = z.strictObject({
 
 const fail = (ko: string, en: string) => new Error(ko + " / " + en);
 
-export function judgePullTool(prefs: PreferenceStore, prs: Reader, invalidate: () => void, now = () => new Date()) {
+type OwnerSources = { hints: (selected: Set<string>, sessionId: string) => OwnerHint[]; deps?: (paseo: Parameters<typeof remoteOwnerDeps>[0], scope: Preferences) => RemoteOwnerDeps };
+
+export function judgePullTool(prefs: PreferenceStore, prs: Reader, invalidate: () => void, now = () => new Date(), owners?: OwnerSources) {
   return defineAgentTool({
     name: "judge_board_pull",
     description: "Without input, list open PRs in managed projects with their head commit, GitHub status, your current verdict and matching work sessions. "
       + "To record a verdict, give repo, number, headSha (the exact 40-character head commit you checked), verdict and a one-line reason. "
       + "Use ready only when the work is finished, review comments are addressed and checks pass on that head. Use needs-changes when something must be fixed, "
       + "in-progress while a work session is still changing the PR, and blocked when it waits on something outside the PR. "
-      + "Optionally name the ownerSessionId of the work session. The board shows a merge card only for a ready verdict on the current head; "
+      + "Optionally name the ownerSessionId of the work session. A session on another host is accepted when a ledger card or board assignment names its host and that host shows it in the PR's repository. The board shows a merge card only for a ready verdict on the current head; "
       + "a new commit expires the verdict. This records a board judgment only. It never merges, approves or sends messages.",
     input,
     async execute(args, { paseo, agent }) {
@@ -64,9 +67,8 @@ export function judgePullTool(prefs: PreferenceStore, prs: Reader, invalidate: (
       if (!repo || !number || !headSha || !verdict || !reason) {
         throw fail("repo, number, headSha, verdict, reason을 모두 보내세요.", "Send repo, number, headSha, verdict and reason together.");
       }
-      if (ownerSessionId && !rows.some(row => row.id === ownerSessionId)) {
-        throw fail("ownerSessionId가 관리 세션이 아닙니다.", "ownerSessionId is not a managed session.");
-      }
+      const remoteOwner = !!ownerSessionId && !rows.some(row => row.id === ownerSessionId);
+      if (remoteOwner && !owners) throw fail("ownerSessionId가 관리 세션이 아닙니다.", "ownerSessionId is not a managed session.");
       const find = (items: PullRequestItem[]) => items.find(pr => pr.repo === repo && pr.number === number);
       let pull = find((await prs.read(paseo)).items);
       // The cached list can lag a fresh push. Check GitHub again before rejecting the head.
@@ -76,11 +78,22 @@ export function judgePullTool(prefs: PreferenceStore, prs: Reader, invalidate: (
         throw fail(`PR 머리 커밋이 ${pull.headSha ?? "확인 불가"}입니다. 그 커밋을 다시 확인하세요.`,
           `The PR head is ${pull.headSha ?? "unavailable"}. Review that commit again.`);
       }
+      // A session on another host owns the PR only when that host shows it in the PR's repository.
+      let ownerSessionHost: string | null = null;
+      if (remoteOwner && owners && ownerSessionId) {
+        const scope = prefs.read();
+        ownerSessionHost = await verifyRemoteOwner(ownerSessionId, pull, owners.hints(new Set(scope.projects), ownerSessionId),
+          scope.dispatchReceipts, (owners.deps ?? remoteOwnerDeps)(paseo, scope));
+        if (!ownerSessionHost) {
+          throw fail("ownerSessionId가 관리 세션이 아니고, 다른 기기 세션을 확인하지 못했습니다.",
+            "ownerSessionId is not a managed session, and the board could not confirm it as a session on another host.");
+        }
+      }
       prefs.change(scope => {
         if (scope.coordinator !== agent.id) throw fail("코디네이터 지정이 바뀌었습니다.", "The coordinator changed.");
         scope.pullJudgments[pullJudgmentKey(repo, number)] = {
           repo, number, headSha, verdict, reason: reason.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim() || "-",
-          ...(ownerSessionId ? { ownerSessionId } : {}), at: now().toISOString(), coordinator: agent.id,
+          ...(ownerSessionId ? { ownerSessionId } : {}), ...(ownerSessionHost ? { ownerSessionHost } : {}), at: now().toISOString(), coordinator: agent.id,
         };
         scope.pullJudgments = prunePullJudgments(scope.pullJudgments);
       });

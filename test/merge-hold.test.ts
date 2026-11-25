@@ -81,6 +81,13 @@ test("an unread host warns only on PRs linked to a session on that host", () => 
   expect(mergeHolds([pr()], { sessions: [session(true)], peers: { rows: [], unread }, links: [link({ hosts: ["host-b"] })] }).get(key)).toBe("running");
 });
 
+test("an owner the coordinator named on an unread host warns on its PR", () => {
+  const remoteOwner = pr({ judgment: { verdict: "ready", reason: "Done", at: "2026-11-24T01:00:00.000Z", ownerSessionId: "owner", ownerSessionHost: "host-b" } });
+  expect(mergeHolds([remoteOwner], { sessions: [], peers: { rows: [], unread: new Set(["host-b"]) } }).get(key)).toBe("unverified");
+  expect(mergeHolds([remoteOwner], { sessions: [], peers: { rows: [], unread: new Set() } }).has(key)).toBe(false);
+  expect(mergeHolds([remoteOwner], { sessions: [], peers: { rows: [session(true, { id: "owner", workspacePull: nextUnit })], unread: new Set() } }).get(key)).toBe("elsewhere");
+});
+
 test("only PRs that would be merge cards are considered", () => {
   expect(mergeHolds([pr({ lane: "progress", gate: "awaiting" })], { sessions: [session(true)] }).size).toBe(0);
   expect(mergeHolds([pr({ lane: "progress", reason: "checks-failed", gate: undefined })], { sessions: [session(true)] }).size).toBe(0);

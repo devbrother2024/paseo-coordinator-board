@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { PreferenceStore } from "../server/preferences";
 import { judgedMergeCardOptions, judgePullTool, registerMergeJudgmentSettings } from "../server/pull-judgments";
 import { mergeJudgmentSettings, setMergeJudgment, type PullRequestItem } from "../shared/prs";
+import { ownerHostCandidates, type OwnerHint } from "../server/remote-owner";
 
 const scratch: string[] = [];
 afterEach(() => { for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -37,10 +38,15 @@ function fixture() {
     state.reads.push(!!options.refresh);
     return { items: options.refresh ? state.fresh : state.cached, projects: [] };
   } };
-  const tool = judgePullTool(prefs, reader as never, () => { state.invalidations++; }, () => new Date("2026-11-24T02:00:00Z"));
+  const remote = { hints: [] as OwnerHint[], reads: [] as string[], repos: new Map<string, string[] | null>(),
+    hosts: [{ id: "local-host", label: "This desk", local: true, resolved: true }, { id: "peer-a", label: "Review desk", local: false, resolved: true }] };
+  const tool = judgePullTool(prefs, reader as never, () => { state.invalidations++; }, () => new Date("2026-11-24T02:00:00Z"), {
+    hints: () => remote.hints,
+    deps: () => ({ hosts: async () => remote.hosts, read: async (host, id) => { remote.reads.push(host + "/" + id); return remote.repos.get(host + "/" + id) ?? null; } }),
+  });
   const run = async (input: Record<string, unknown> = {}, caller = "coord") =>
     (await tool.execute(tool.input.parse(input), { paseo: sdk, agent: { id: caller } } as never)).text;
-  return { dir, prefs, state, run };
+  return { dir, prefs, state, run, remote };
 }
 const verdict = { repo: "example/book", number: 9, headSha: head, verdict: "needs-changes", reason: "Address the‮ review\ncomments" };
 
@@ -103,4 +109,39 @@ test("the setting defaults on, reports the coordinator, and turning it off inval
   expect(f.prefs.read().judgedMergeCards).toBe(false);
   expect(judgedMergeCardOptions(f.prefs.read()).enabled).toBe(false);
   expect(invalidated).toBe(1);
+});
+
+test("a work session on another host can own the PR once that host shows it in the PR's repository", async () => {
+  const f = fixture();
+  const owned = { ...verdict, verdict: "ready", reason: "Checks pass", ownerSessionId: "far-worker" };
+  // No ledger card or assignment names a host: rejected with the reason.
+  await expect(f.run(owned)).rejects.toThrow("다른 기기 세션을 확인하지 못했습니다");
+  expect(f.remote.reads).toEqual([]);
+  // A ledger card names the host, but the session is not there.
+  f.remote.hints = [{ sessionHost: "review DESK", projectId: "book", mergeTarget: { repo: "example/book", number: 9 } }];
+  await expect(f.run(owned)).rejects.toThrow("could not confirm it as a session on another host");
+  // The host has it, but in another repository.
+  f.remote.repos.set("peer-a/far-worker", ["example/other"]);
+  await expect(f.run(owned)).rejects.toThrow("다른 기기 세션");
+  f.remote.repos.set("peer-a/far-worker", ["example/book"]);
+  expect(await f.run(owned)).toContain("merge card");
+  expect(f.prefs.read().pullJudgments["example/book#9"]).toMatchObject({ ownerSessionId: "far-worker", ownerSessionHost: "peer-a" });
+});
+
+test("remote owner candidates come only from cards for this PR or project and from remote assignments", () => {
+  const pull = { repo: "example/book", number: 9, projectIds: ["book"] };
+  const hosts = [{ id: "local-host", label: "This desk", local: true, resolved: true }, { id: "peer-a", label: "Review desk", local: false, resolved: true },
+    { id: "peer-b", label: "Review desk", local: false, resolved: true }, { id: "pending", label: "Pending", local: false, resolved: false }];
+  const hint = (extra: Partial<OwnerHint>): OwnerHint => ({ sessionHost: "peer-a", projectId: "book", ...extra });
+  expect(ownerHostCandidates("s", pull, [hint({})], {}, hosts)).toEqual(["peer-a"]);
+  // A name two hosts share, this host, an unresolved host, another PR or another project gives nothing.
+  for (const extra of [{ sessionHost: "review desk" }, { sessionHost: "This desk" }, { sessionHost: "pending" },
+    { mergeTarget: { repo: "example/book", number: 10 } }, { projectId: "elsewhere" }]) {
+    expect(ownerHostCandidates("s", pull, [hint(extra)], {}, hosts)).toEqual([]);
+  }
+  const receipt = (remote: boolean, projectId = "book") => ({ s: { fingerprint: "f".repeat(64), projectId, sourceProjectId: projectId, workspaceId: "w",
+    location: { serverId: "peer-b", label: "Review desk", reason: "manual", running: null }, remote } }) as never;
+  expect(ownerHostCandidates("s", pull, [], receipt(true), hosts)).toEqual(["peer-b"]);
+  expect(ownerHostCandidates("s", pull, [], receipt(false), hosts)).toEqual([]);
+  expect(ownerHostCandidates("s", pull, [], receipt(true, "elsewhere"), hosts)).toEqual([]);
 });
