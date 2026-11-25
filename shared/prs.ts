@@ -37,6 +37,8 @@ const pull = z.object({
   // queued: it waits for the recipient to rest, and changeQueue describes the wait.
   changeRequest:z.enum(["sent","pending","queued"]).optional(),
   changeQueue:queueView.optional(),
+  // The head the waiting request was written about. It differs from headSha once the PR has moved on.
+  changeQueueHead:commitSha.optional(),
   judgment:z.object({ verdict:pullVerdict, reason:z.string(), at:z.string(), ownerSessionId:z.string().optional(), ownerSessionHost:z.string().optional() }).optional(),
 });
 export const pullRequestViewSchema = z.object({

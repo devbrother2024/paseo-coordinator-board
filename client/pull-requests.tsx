@@ -399,8 +399,8 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
       {t("수정 요청을 받을 작업 세션이나 코디네이터가 없습니다.", "No work session or coordinator can take a change request.")}
     </Text>)}
     {changeError && <Text accessibilityLiveRegion="polite" selectable style={{color: c.statusWarning}}>{t(changeError[0], changeError[1])}</Text>}
-    {pr.gate === "change-requested" && pr.changeQueue && !!pr.headSha && !!projectId && onRefresh &&
-      <QueuedAnswer queue={pr.changeQueue} card={{kind: "pull", projectId, repo: pr.repo, number: pr.number, headSha: pr.headSha}} theme={theme} onRefresh={onRefresh} />}
+    {pr.changeQueue && !!pr.changeQueueHead && !!projectId && onRefresh &&
+      <QueuedAnswer queue={pr.changeQueue} card={{kind: "pull", projectId, repo: pr.repo, number: pr.number, headSha: pr.changeQueueHead}} theme={theme} onRefresh={onRefresh} />}
     {pr.gate === "change-requested" && !pr.changeQueue && !!pr.headSha && !!projectId && onRefresh && <View style={{...wrap, alignItems: "center"}}>
       <Text style={{color: c.foregroundMuted, fontSize: 13, flexShrink: 1}}>
         {pr.changeRequest === "pending"

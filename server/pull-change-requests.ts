@@ -95,11 +95,13 @@ const inTurn = (agent: Agent) => agent.status === "running" && !!agent.activeTur
 const gone = (agent: Agent | null | undefined, id: string) =>
   !agent || agent.id !== id || !!agent.internal || !!agent.archivedAt || agent.status === "closed" || agent.status === "error";
 
-// The wait of a queued change request, as the PR row shows it.
-export function changeQueueView(request: PullChangeRequest): QueueView | undefined {
+// The wait of a queued change request, as the PR row shows it. One written about a head the PR has moved past will
+// not be sent, so it shows as stopped: the person can still read it and cancel it.
+export function changeQueueView(request: PullChangeRequest, headSha?: string): QueueView | undefined {
   if (request.status !== "queued" || !request.queue || request.withdrawnAt) return undefined;
   return { messageId: request.messageId, recipientId: request.recipientId, answer: request.text || undefined, at: request.at,
-    imageCount: request.queue.photos.length, stopped: request.queue.stopped, ...(request.queue.parallel ? { parallel: request.queue.parallel } : {}) };
+    imageCount: request.queue.photos.length, stopped: request.queue.stopped || (!!headSha && headSha !== request.headSha),
+    ...(request.queue.parallel ? { parallel: request.queue.parallel } : {}) };
 }
 
 export class PullChangeRequests {
@@ -140,7 +142,10 @@ export class PullChangeRequests {
     const saved = own(scope.pullChangeRequests, key);
     // A request the person took back by reopening the card is over. Whatever comes next is a new request with a new
     // message, even under the same key and words.
-    const prior = saved?.withdrawnAt ? undefined : saved;
+    // So is a request still waiting that was written about a head the PR has moved past: it is never sent, and the
+    // request about the new head takes its place.
+    const stale = saved?.status === "queued" && saved.headSha !== input.headSha;
+    const prior = saved?.withdrawnAt || stale ? undefined : saved;
     const uuid = messageUuid(saved?.withdrawnAt ? input.requestKey + "\n" + saved.withdrawnAt : input.requestKey);
     const fresh = photos.length ? boardPhotoMessageId(uuid) : uuid;
     // The recorded request keeps its own message ID, so its retries find it even when it was sent after a reopening.
@@ -187,6 +192,7 @@ export class PullChangeRequests {
           throw Error("changed");
         }
         if (ready && input.images?.length) this.sessionPhotos.save(recipient.id, messageId, input.images);
+        if (stale && latest) removeLocalPhotos(this.queuePhotos, latest.messageId, latest.queue?.photos.length ?? 0);
         current.pullChangeRequests[key] = record;
         current.pullChangeRequests = prunePullChangeRequests(current.pullChangeRequests);
       });
@@ -321,7 +327,8 @@ export class PullChangeRequests {
     });
     if (!done) return undefined;
     if (input.action === "cancel") removeLocalPhotos(this.queuePhotos, request.messageId, queue.photos.length);
-    return { title: request.title, recipientId: request.recipientId, answer: request.text, images };
+    // The coordinator is told which PR by repository and number. The PR's title is text others can edit on GitHub.
+    return { title: request.repo + " #" + request.number, recipientId: request.recipientId, answer: request.text, images };
   }
 
   // Looks for an earlier attempt in the conversation of the session it was sent to.

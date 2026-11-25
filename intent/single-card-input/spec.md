@@ -61,7 +61,7 @@ RPC `board.request-pull-changes`:
 - 서버 검사(순서대로): 프로젝트가 관리 대상인가. PR이 지금 병합 카드인가(GitHub 준비됨, 병합 카드 줄). 머리 커밋이 입력과 같은가. 받는 곳이 판정과 같은가. 받는 세션이 살아 있는가(`archivedAt`, `internal` 아님). 통과하지 못하면 `changed`이고 아무것도 보내지 않는다.
 - 일하는 중인 받는 세션: 카드 답장과 같은 판정(`canReceiveBoardInput`에 진행 중 턴 허용)을 쓴다. Claude와 Codex는 진행 중인 턴에 바로 받는다. 그 밖의 실행기가 턴 중이면 요청을 기록에 `queued`로 두고(`queue`: 멈춤, 병렬 보류, 사진 참조) 사진은 호스트에 보관하며 `queued`를 돌려준다. 권한 요청을 기다리거나 오류 상태면 `busy`이고 아무것도 남기지 않는다.
 - 기다리는 요청: 받는 세션의 턴 종료·권한 처리 훅과 다음 스냅숏에서 다시 본다. PR이 같은 머리로 열려 있고 GitHub 준비 상태이며 받는 곳이 그대로일 때만 보낸다. 어긋나면 멈춤으로 바꾸고 보내지 않는다. 보낼 때의 글은 수정 요청 머리와 사람 글 그대로다(카드 답장의 진행 중 전송은 세션이 스스로 물은 질문이라 글만 보내지만, 수정 요청은 어느 PR에 대한 것인지가 필요하다).
-- 기다리는 요청의 관리(`board.manage-queued-answer`, 카드 종류 `pull`): 취소는 기록을 지워 병합 카드가 돌아오게 한다. 병렬 세션 요청과 재개는 카드 답장과 같은 조건(`canChangeQueue`)과 같은 전송(출처를 붙인 코디네이터 요청)을 쓴다. 받는 곳이 코디네이터 자신이면 병렬 요청을 내지 않는다. 기다리는 동안에도 병합 카드는 내려가 있고 보드의 병합은 거절된다.
+- 기다리는 요청의 관리(`board.manage-queued-answer`, 카드 종류 `pull`): 취소는 기록을 지워 병합 카드가 돌아오게 한다. 병렬 세션 요청과 재개는 카드 답장과 같은 조건(`canChangeQueue`)과 같은 전송(출처를 붙인 코디네이터 요청)을 쓴다. 받는 곳이 코디네이터 자신이면 병렬 요청을 내지 않는다. 병렬 요청에 실리는 카드 이름은 `repo #number`이고 PR 제목은 넣지 않는다. 기다리는 중에 PR 머리가 바뀌면 그 요청은 보내지 않는다: PR 줄에 멈춘 상태로 남아(`changeQueueHead`가 쓴 머리를 알린다) 읽고 취소할 수 있고, 새 머리에 대한 수정 요청을 보내면 그 자리를 대신한다. 기다리는 동안에도 병합 카드는 내려가 있고 보드의 병합은 거절된다.
 - 전송: 카드 정보 머리와 사람이 쓴 글. 출처 없이 보낸다(사람이 쓰고 누른 글). 머리의 `action`은 `change-request`, `mayBe`는 2.2와 같고, PR은 `repo`, `number`, `url`, `headSha`로만 가리킨다. PR 제목은 넣지 않는다: GitHub에서 PR을 고칠 수 있는 사람이 정하는 글이라, 출처 없는 메시지에 실리면 받는 세션이 사람의 말로 읽을 수 있다. 머리말은 프로젝트 이름과 `repo #number`다.
 - 저장(호스트 설정 `pullChangeRequests`, 선택 필드, PR마다 최신 하나, 최대 200개): `repo`, `number`, `projectId`, `headSha`, `title`, `text`, `recipientId`, `coordinator`, `messageId`, `messageHash`, `fingerprint`, `at`, `status`(`queued` → `pending` → `sent`), `queue?`, `requestKey?`, `imageCount?`, `withdrawnAt?`.
 - 재시도: 같은 `requestKey`로 다시 부르면 다시 보내지 않는다. 기록이 `sent`면 `sent`, `pending`이면 받는 세션 대화에서 그 메시지를 찾아 있으면 `sent`, 없으면 `unconfirmed`. 다른 요청의 `pending`은 10분 동안 새 전송을 막는다(`unconfirmed`). 거둔 기록(`withdrawnAt`)은 끝난 요청이다. 그 뒤의 요청은 열쇠와 글이 같아도 새 메시지로 보낸다. 기록에 그 요청의 열쇠(`requestKey`)를 남겨, 다시 연 뒤에 보낸 요청을 다시 불러도 같은 요청으로 확인한다. 화면은 전송에 성공하면 열쇠를 버린다.
@@ -149,6 +149,7 @@ RPC `board.request-pull-changes`:
 | R30 | Claude·Codex는 진행 중인 턴에 바로 받고, 그 밖의 실행기는 기다렸다가 쉬면 한 번만 받는다. 기다리는 동안 병합 카드는 내려가 있다 | `test/pull-change-requests.test.ts` "a session in its turn takes the request at once when its provider can, and otherwise the request waits" |
 | R31 | 기다리는 요청은 PR의 머리·준비 상태·받는 곳이 달라지면 멈추고 보내지 않는다. 권한 대기로 바뀌면 계속 기다린다 | 같은 파일 "a waiting request stops when the PR or its recipient is no longer what the person wrote for" |
 | R32 | 기다리는 요청은 취소(병합 카드 복귀), 병렬 세션 보류, 재개를 할 수 있다 | 같은 파일 "a waiting request can be cancelled, held for a parallel session and resumed" |
+| R33 | 기다리는 중에 PR 머리가 바뀐 요청은 멈춘 상태로 PR 줄에 남아 취소할 수 있고, 새 머리에 대한 요청이 그 자리를 대신한다 | `test/pull-change-requests.test.ts` "a request left waiting when the PR moved on can still be seen, cancelled or replaced" |
 | R21 | 화면: 카드 입력 하나, 보낸 뒤 접힘과 다시 열림, 병합 카드 수정 요청, 질문 블록 카드 | 지어낸 데이터의 웹 미리보기(한·영, 넓은 화면·390px), 캡처는 `docs/pr-assets/single-card-input/` |
 
 ## 5. 버린 설계

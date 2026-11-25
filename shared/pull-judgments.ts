@@ -28,7 +28,7 @@ type Options = {
 // Decide which GitHub-ready PRs become merge cards. Everything else stays in project progress.
 export function applyPullJudgments<T extends PullRequestItem>(items: readonly T[], options: Options): T[] {
   return items.map(item => {
-    const { gate: _gate, judgment: _judgment, changeRequest: _changeRequest, changeQueue: _changeQueue, ...pr } = item;
+    const { gate: _gate, judgment: _judgment, changeRequest: _changeRequest, changeQueue: _changeQueue, changeQueueHead: _changeQueueHead, ...pr } = item;
     const key = pullJudgmentKey(pr.repo, pr.number);
     const saved = Object.hasOwn(options.judgments, key) ? options.judgments[key] : undefined;
     const current = saved && pr.headSha && saved.headSha === pr.headSha ? saved : undefined;

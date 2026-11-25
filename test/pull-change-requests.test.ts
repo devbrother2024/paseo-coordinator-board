@@ -396,7 +396,7 @@ test("a waiting request can be cancelled, held for a parallel session and resume
   expect(await b.f.requests.stillWaiting(b.f.sdk as never, { card: b.card, messageId: b.messageId })).toBe(true);
   expect(b.f.requests.control({ card: b.card, messageId: b.messageId, action: "resume" }, "opencode", 10)).toBeUndefined();
   expect(b.f.requests.control({ card: b.card, messageId: b.messageId, action: "parallel" }, "opencode", 10))
-    .toEqual({ title: "Add cache", recipientId: "worker-1", answer: "Please keep the old flag working.\n\nWhy was it removed?", images: [] });
+    .toEqual({ title: "org/example #7", recipientId: "worker-1", answer: "Please keep the old flag working.\n\nWhy was it removed?", images: [] });
   expect(b.f.store.read().pullChangeRequests[key].queue?.parallel).toBe("held");
   // While it is held, the original session resting does not send it.
   Object.assign(b.f.pull, { lane: "progress", gate: "change-requested" });
@@ -411,4 +411,34 @@ test("a waiting request can be cancelled, held for a parallel session and resume
   await b.f.requests.resume(b.f.sdk as never);
   expect(b.f.sent).toHaveLength(1);
   expect(b.f.store.read().pullChangeRequests[key].status).toBe("sent");
+});
+
+test("a request left waiting when the PR moved on can still be seen, cancelled or replaced", async () => {
+  const f = fixture();
+  Object.assign(f.agents["worker-1"]!, { status: "running", activeTurn: "turn-1", provider: "opencode" });
+  expect(await f.send()).toEqual({ status: "queued", recipientId: "worker-1" });
+  const waiting = f.store.read().pullChangeRequests[key];
+  // A new commit arrives. The request was written about the earlier head, so it no longer holds the new one.
+  f.pull.headSha = newer;
+  expect(mergeHeldByChangeRequest(f.store.read(), "org/example", 7, newer)).toBe(false);
+  // It is still shown, as stopped and with the head it was written for, so the person can cancel it.
+  expect(changeQueueView(waiting, newer)).toMatchObject({ messageId: waiting.messageId, stopped: true });
+  expect(changeQueueView(waiting, head)).toMatchObject({ stopped: false });
+  // Cancelling names the head it was written for.
+  const card = { kind: "pull" as const, projectId: "alpha", repo: "org/example", number: 7, headSha: head };
+  const again = fixture();
+  Object.assign(again.agents["worker-1"]!, { status: "running", activeTurn: "turn-1", provider: "opencode" });
+  await again.send();
+  again.pull.headSha = newer;
+  expect(again.requests.control({ card, messageId: again.store.read().pullChangeRequests[key].messageId, action: "cancel" }, "opencode", 10)).toBeDefined();
+  expect(again.store.read().pullChangeRequests).toEqual({});
+  // A new request about the new head replaces it instead of being refused for good. The old one is never sent.
+  Object.assign(f.agents["worker-1"]!, { status: "idle", activeTurn: null });
+  expect(await f.send({ headSha: newer, requestKey: "change-key-0002", text: "Now the flag is back, but the test is missing." }))
+    .toEqual({ status: "sent", recipientId: "worker-1" });
+  expect(f.sent).toHaveLength(1);
+  expect(f.sent[0].text.endsWith("\n\nNow the flag is back, but the test is missing.")).toBe(true);
+  expect(f.store.read().pullChangeRequests[key]).toMatchObject({ headSha: newer, status: "sent" });
+  await f.requests.resume(f.sdk as never);
+  expect(f.sent).toHaveLength(1);
 });
