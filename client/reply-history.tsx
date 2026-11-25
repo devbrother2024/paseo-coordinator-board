@@ -63,7 +63,12 @@ export function ReplyCard({entry, theme, links, open, openRemote}:Props) {
   const origin = entry.origin;
   const long = [entry.answer,entry.response].some(text => text && (text.length > 160 || text.split("\n").length > 3));
   const merge = entry.pullMerge;
-  const status = merge
+  const settled = entry.pullSettled;
+  const pullRef = merge ?? settled;
+  const ledgerWaiting = settled && t("원장 정리 대기", "Waiting for the ledger to clear it");
+  const status = !merge && settled
+    ? (settled.state === "MERGED" ? t("병합 완료", "Merged") : t("병합 없이 닫힘", "Closed without merging"))
+    : merge
     ? (merge.status === "merged" ? t("보드에서 병합함", "Merged from board") : t("이미 병합됨", "Already merged"))
     : {
     sent:t("전송됨","Sent"), pending:t("전송 확인 중","Delivery unconfirmed"),
@@ -77,11 +82,13 @@ export function ReplyCard({entry, theme, links, open, openRemote}:Props) {
   const sessions = links(entry);
   const notFound = recipientNotFound(entry, sessions);
   return <View style={{gap:5,padding:9,borderRadius:7,backgroundColor:colors.surface0,borderWidth:1,borderColor:colors.border}}>
-    {merge ? <>
+    {merge || settled ? <>
       <Text selectable style={{color:colors.foreground,fontWeight:"600"}}>{entry.title}</Text>
-      <HistoryMarkdown theme={theme} source={`[${merge.repo} #${merge.number}](${pullUrl(merge.repo,merge.number)})`} />
+      <HistoryMarkdown theme={theme} source={`[${pullRef!.repo} #${pullRef!.number}](${pullUrl(pullRef!.repo,pullRef!.number)})`} />
     </> : <HistoryMarkdown theme={theme} source={entry.title} heading />}
-    <Text selectable style={{color:colors.foregroundMuted,fontSize:12}}>{[status, mergeNotificationLabel(merge?.notification, t), date, merge?.mergeSha?.slice(0, 12)].filter(Boolean).join(" · ")}</Text>
+    <Text selectable style={{color:colors.foregroundMuted,fontSize:12}}>{[status, ledgerWaiting, mergeNotificationLabel(merge?.notification, t),
+      // Without the board's own merge record, the time is when the board confirmed the merge or close.
+      settled && !merge ? t("보드 확인 ", "Board confirmed ") + date : date, merge?.mergeSha?.slice(0, 12)].filter(Boolean).join(" · ")}</Text>
     {!!sessions.length && <View style={{flexDirection:"row",flexWrap:"wrap",gap:5}}>{sessions.map(session =>
       <SessionReference key={JSON.stringify([session.role,session.host,session.id])} session={session} state={session.state && states[session.state]} notFound={notFound && session.role !== "source"}
         open={open} openRemote={openRemote} theme={theme} />)}</View>}

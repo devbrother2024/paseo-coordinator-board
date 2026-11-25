@@ -173,14 +173,15 @@ function readiness(repo: Repo, methods: MergeMethod[]): MergeReason {
   if (p.isDraft) return "draft";
   if (p.mergeable === "CONFLICTING" || p.mergeStateStatus === "DIRTY") return "conflict";
   if (p.reviewDecision === "CHANGES_REQUESTED") return "changes-requested";
-  if (p.reviewDecision === "REVIEW_REQUIRED") return "blocked";
+  if (p.reviewDecision === "REVIEW_REQUIRED") return "review-required";
   if (p.statusCheckRollup) {
     const { state } = p.statusCheckRollup;
     if (state === "FAILURE" || state === "ERROR") return "checks-failed";
     if (state === "PENDING" || state === "EXPECTED") return "checks-pending";
     if (state !== "SUCCESS") return "unknown";
   }
-  if (p.mergeStateStatus !== "CLEAN") return p.mergeStateStatus === "UNKNOWN" ? "unknown" : "blocked";
+  if (p.mergeStateStatus === "UNKNOWN" || p.mergeable === "UNKNOWN") return "computing";
+  if (p.mergeStateStatus !== "CLEAN") return "blocked";
   if (p.mergeable !== "MERGEABLE" || (p.reviewDecision !== null && p.reviewDecision !== "APPROVED"))
     return "unknown";
   if (
@@ -404,8 +405,9 @@ export class PullMerges {
       return outcome("changed", "changed");
     if (live.status === "merged") return outcome("already-merged", "merged", pull.mergeCommit?.oid);
     if (live.status !== "ready") return outcome("blocked", live.reason);
-    if (fingerprint(state, live) !== v.fingerprint || !live.methods.includes(request.method))
-      return outcome("changed", "changed");
+    if (!live.methods.includes(request.method)) return outcome("changed", "changed");
+    // Same head, but the base tip or another detail moved (often another merge). The board reads a new preview.
+    if (fingerprint(state, live) !== v.fingerprint) return outcome("changed", "outdated");
     // An ambiguous mutation never gets re-sent by retrying the same confirmation button.
     if (v.submitted) return outcome("unconfirmed", "unconfirmed");
     // The confirmed checkout was resolved before this fresh GitHub read. Do not wait
