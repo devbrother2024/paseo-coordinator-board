@@ -6,8 +6,9 @@ const reference = /(^|[^\w/#.-])(?:([\w.-]+\/[\w.-]+)[ \t]*)?#([1-9]\d*)(?![\w#]
 // A name a session might write for a repository: alpha-web, AlphaWeb, owner/repository.
 const word = "[A-Za-z0-9](?:[\\w.-]*[A-Za-z0-9])?(?:\\/[A-Za-z0-9](?:[\\w.-]*[A-Za-z0-9])?)?";
 const names = new RegExp(word, "g");
-// Korean particles written right after a name: "alpha-web의 #12", "Alpha에서는 #12", longest first.
-const particle = "(?:에서는|에서|으로는|으로|이랑|하고|까지|부터|에는|랑|의|은|는|이|가|을|를|에|와|과|도|로|만)?";
+// Korean particles after a name: "alpha-web의 #12", "Alpha에서는 #12", longest first.
+// Agents often put a space before it ("alpha-web 의 #12"), so a space between the name and the particle is allowed.
+const particle = "(?:[ \\t]*(?:에서는|에서|으로는|으로|이랑|하고|까지|부터|에는|랑|의|은|는|이|가|을|를|에|와|과|도|로|만))?";
 // The name right before a number ("alpha-web #12", "alpha-web PR #12", "alpha-web의 #12") or in brackets right after it ("#12 (alpha-web)").
 const before = new RegExp("(" + word + ")" + particle + "[ \\t]+(?:PR[ \\t]*)?$", "i");
 const after = new RegExp("^[ \\t]*\\((" + word + ")\\)");
@@ -27,7 +28,7 @@ export type PullLinkContext = {
  */
 const ordinary = new Set([
   "a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "into", "is", "of", "on", "or", "per", "so", "than", "the", "then", "to", "via", "vs", "was", "with",
-  "also", "after", "before", "plus", "see", "cf", "ref", "refs", "related", "pr", "prs", "pull", "request", "requests", "issue", "issues", "ticket", "number", "no",
+  "also", "after", "before", "plus", "see", "cf", "ref", "refs", "implements", "supersedes", "continues", "part", "related", "pr", "prs", "pull", "request", "requests", "issue", "issues", "ticket", "number", "no",
   "approve", "approved", "merge", "merged", "review", "reviewed", "fix", "fixes", "fixed", "close", "closes", "closed", "resolve", "resolves", "resolved",
   "revert", "reverts", "reverted", "land", "landed", "ship", "shipped", "open", "opened", "draft", "done", "wip", "update", "updated", "bump", "bumped",
   "add", "added", "remove", "removed", "check", "checked", "test", "tested", "deploy", "deployed", "release", "released", "follow", "todo",

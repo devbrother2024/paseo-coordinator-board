@@ -113,6 +113,9 @@ test("a sentence links each PR number to the repository written before it", () =
   expect(link("zeta-api의 #26", "studio/card")).toEqual([]);
   expect(link("GammaApi의 #166", "studio/card")).toEqual([{ repo: "labs/gamma-api", number: 166 }]);
   expect(link("beta-api에서 #20", "studio/card")).toEqual([{ repo: "studio/beta-api", number: 20 }]);
+  // 이름과 조사 사이를 띄어 써도 바로 앞 이름이다.
+  expect(link("zetaapp 의 #12", "studio/card")).toEqual([]);
+  expect(link("beta-api 에서 #21", "studio/card")).toEqual([{ repo: "studio/beta-api", number: 21 }]);
   // 프로젝트 이름은 번호 바로 앞에서만 단서다. 줄 다른 곳의 흔한 단어는 저장소로 보지 않는다.
   // 줄에 프로젝트 이름이 있으면 링크 대상으로 쓰지 않더라도 카드 저장소로 가지 않는다.
   expect(link("web 화면 고친 뒤 #30", "studio/card")).toEqual([]);
@@ -125,7 +128,8 @@ test("a sentence links each PR number to the repository written before it", () =
   // 저장소 이름처럼 보이지 않는 일반어 앞 번호는 예전처럼 카드 저장소.
   for (const text of ["GitHub PR #12", "follow-up #12", "v1.2 #12", "macOS #12", "README.md 수정 #12", "iOS #12", "JavaScript #12", "TypeScript #12",
     "PowerShell #12", "YouTube #12", "iPhone #12", "feat/x 브랜치 #12", "e.g. 예시 #12", "i.e. 같은 #12", "UTF-8 고침 #12", "GPT-5 비교 #12",
-    "0.5.24-beta 배포 #12", "macos-latest 실패 #12", "Approve #12", "fixes #12", "checks-failed 상태 #12"]) {
+    "0.5.24-beta 배포 #12", "macos-latest 실패 #12", "Approve #12", "fixes #12", "checks-failed 상태 #12",
+    "Implements #12", "Supersedes #12", "Continues #12", "Part of #12", "Closes #12", "Refs #12", "See #12"]) {
     expect(link(text, "studio/card")).toEqual([{ repo: "studio/card", number: 12 }]);
   }
   // owner/repo#N 꼴은 건드리지 않는다.
