@@ -1,7 +1,7 @@
 import { shellCommands, type ShellCommand, type ShellWord } from "./shell-permission-command";
 import { gitSubcommandIndex, hasLongOption, readCommandOperands } from "./permission-read-options";
 import { readPathRisks, resolveReadPath } from "./permission-read-paths";
-import { curlFileOutput, sedArguments, sedScriptRisk } from "./permission-command-effects";
+import { curlEffects, githubCredentialRead, sedArguments, sedScriptRisk, wgetEffects } from "./permission-command-effects";
 
 const risks = ["read", "outside-read", "sensitive-read", "write", "network", "execute", "destructive", "unknown"] as const;
 export type PermissionRisk = typeof risks[number];
@@ -187,19 +187,19 @@ function classify(command: ShellCommand, folders: FolderCandidates, workspace?: 
   } else {
     risk = commandRisk(name, args);
   }
-  if (name === "curl" && risk === "network") {
-    const output = curlFileOutput(args);
-    if (output.writes) effects.push("write");
-    detail = concise(output.files.map(file => displayPath(file, cwd)).join(", "));
-  }
+  const transfer = risk === "network" && (name === "curl" || name === "wget")
+    ? (name === "curl" ? curlEffects : wgetEffects)(args) : undefined;
+  if (transfer?.writes) effects.push("write");
+  if (transfer?.sensitive || name === "gh" && risk === "network" && githubCredentialRead(args)) effects.push("sensitive-read");
+  if (transfer) detail = concise([...new Set([...transfer.files, ...transfer.inputs])].map(file => displayPath(file, cwd)).join(", "));
   const reads = [...folders.paths].map(folder => sed ? { cwd: folder, files: [...sed.scriptFiles, ...sed.files] }
     : risk === "read" ? readTargets(name, args, folder) : null);
   const prints = name === "echo" || name === "printf";
   if (command.expandsInputParameters || prints && words.some(word => word.parameterExpansion)) effects.push("sensitive-read");
   if (risk === "read" && (reads.some(read => !read) || !prints && words.some(word => word.dynamic) || command.inputs.some(word => word.dynamic))) risk = "unknown";
-  const inputFiles = command.inputs.filter(word => !word.dynamic);
+  const inputFiles = [...command.inputs.filter(word => !word.dynamic).map(word => word.value), ...(transfer?.inputs ?? [])];
   const paths = [...reads.flatMap(read => read?.files.map(value => ({ value, cwd: read.cwd })) ?? []),
-    ...[...folders.paths].flatMap(folder => inputFiles.map(word => ({ value: word.value, cwd: folder })))]
+    ...[...folders.paths].flatMap(folder => inputFiles.map(value => ({ value, cwd: folder })))]
     .filter(path => path.value && path.value !== "-");
   const warnings = paths.map(path => ({ ...path, risks: readPathRisks(path.value, path.cwd, workspace) })).filter(path => path.risks.length);
   effects.push(...warnings.flatMap(path => path.risks));

@@ -85,18 +85,37 @@ export function sedScriptRisk(script: string): "read" | "write" | "execute" | "u
 }
 
 const curlValueOptions = new Set(["--url", "--url-query", "--header", "--user", "--data", "--data-raw", "--data-binary",
-  "--data-urlencode", "--form", "--form-string", "--request", "--config", "--proxy",
+  "--data-urlencode", "--form", "--form-string", "--request", "--config", "--proxy", "--upload-file",
   "--cacert", "--cert", "--key", "--cookie", "--user-agent", "--referer", "--max-time", "--connect-timeout", "--retry",
   "--write-out", "--resolve", "--connect-to", "--interface", "--request-target", "--proto", "--proto-redir"]);
 
-export function curlFileOutput(args: string[]) {
+const curlInputOptions: Record<string, string> = {
+  T: "--upload-file", K: "--config", b: "--cookie", d: "--data", F: "--form", H: "--header", E: "--cert",
+};
+
+function curlInputFile(option: string, value: string | undefined) {
+  if (!value || value === "-" || option === "--upload-file" && value === ".") return undefined;
+  if (["--upload-file", "--config", "--key", "--cacert", "--proxy-cacert", "--netrc-file"].includes(option)) return value;
+  if (option === "--cert") return /^(?:[a-z]:)?[^:]+/i.exec(value)?.[0];
+  if (option === "--cookie") return value.includes("=") ? undefined : value;
+  if (option === "--data-urlencode") return /^[^=@]*@(.+)$/.exec(value)?.[1];
+  if (option === "--form") return /^[^=]+=[@<]([^;]+)/.exec(value)?.[1];
+  if (["--data", "--data-ascii", "--data-binary", "--data-xml", "--header", "--json"].includes(option) && value.startsWith("@")) {
+    return value.slice(1);
+  }
+  return undefined;
+}
+
+export function curlEffects(args: string[]) {
   let writes = false;
+  let sensitive = false;
   let remoteName = false;
   let directory: string | undefined;
   let destinations: string[] = [];
   let cookieJar: string | undefined;
   let headerDump: string | undefined;
   const files: string[] = [];
+  const inputs: string[] = [];
   const setDestination = (option: string, file: string | undefined) => {
     if (!file) return;
     if (option === "-c" || option === "--cookie-jar") cookieJar = file;
@@ -122,28 +141,100 @@ export function curlFileOutput(args: string[]) {
       const equals = arg.indexOf("=");
       const name = equals < 0 ? arg : arg.slice(0, equals);
       if (name === "--remote-name" || name === "--remote-name-all") remoteName = true;
+      if (["--netrc", "--netrc-optional", "--netrc-file"].includes(name)) sensitive = true;
       if (name === "--output" || name === "--cookie-jar" || name === "--dump-header") {
         const value = equals < 0 ? args[++index] : arg.slice(equals + 1);
         setDestination(name, value);
       } else if (name === "--output-dir") {
         directory = equals < 0 ? args[++index] : arg.slice(equals + 1);
-      } else if (equals < 0 && curlValueOptions.has(name)) index++;
+      } else if (curlValueOptions.has(name) || ["--proxy-cacert", "--netrc-file", "--data-ascii", "--data-xml", "--json"].includes(name)) {
+        const file = curlInputFile(name, equals < 0 ? args[++index] : arg.slice(equals + 1));
+        if (file) inputs.push(file);
+      }
     } else if (arg.startsWith("-")) {
       for (let offset = 1; offset < arg.length; offset++) {
         const option = arg[offset];
         if (option === "O") remoteName = true;
+        if (option === "n") sensitive = true;
         if (option === "o" || option === "c" || option === "D") {
           const value = arg.slice(offset + 1) || args[++index];
           setDestination("-" + option, value);
           break;
         }
         if ("AbCdeEFHKmPQrTuxXUYywz".includes(option)) {
-          if (offset + 1 === arg.length) index++;
+          const value = arg.slice(offset + 1) || args[++index];
+          const file = curlInputFile(curlInputOptions[option], value);
+          if (file) inputs.push(file);
           break;
         }
       }
     }
   }
   finishTransfer();
-  return { writes, files };
+  return { writes, files, inputs, sensitive };
+}
+
+const wgetShortValues: Record<string, string> = {
+  O: "--output-document", o: "--output-file", a: "--append-output", P: "--directory-prefix", i: "--input-file",
+  A: "--accept", D: "--domains", e: "--execute", I: "--include-directories", l: "--level", Q: "--quota", R: "--reject",
+  t: "--tries", T: "--timeout", U: "--user-agent", w: "--wait", X: "--exclude-directories",
+};
+const wgetInputs = new Set(["--input-file", "--post-file", "--body-file", "--load-cookies", "--config", "--ca-certificate",
+  "--ca-directory", "--certificate", "--private-key", "--pinnedpubkey"]);
+const wgetOutputs = new Set(["--output-file", "--append-output", "--save-cookies"]);
+const wgetOtherValues = new Set([...Object.values(wgetShortValues), "--header", "--referer", "--post-data", "--body-data",
+  "--user", "--password", "--http-user", "--http-password", "--ftp-user", "--ftp-password", "--method", "--bind-address"]);
+
+export function wgetEffects(args: string[]) {
+  let document: string | undefined;
+  let directory: string | undefined;
+  let spider = false;
+  const files: string[] = [];
+  const inputs: string[] = [];
+  const record = (option: string, value: string | undefined) => {
+    if (!value) return;
+    if (option === "--output-document") document = value;
+    else if (option === "--directory-prefix") directory = value;
+    else if (wgetOutputs.has(option) && (value !== "-" || option === "--save-cookies")) files.push(value);
+    else if (value !== "-" && wgetInputs.has(option) && !(option === "--pinnedpubkey" && value.startsWith("sha256//"))) inputs.push(value);
+  };
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--") break;
+    if (arg.startsWith("--")) {
+      const equals = arg.indexOf("=");
+      const flag = equals < 0 ? arg : arg.slice(0, equals);
+      const option = flag.startsWith("--output-d") && "--output-document".startsWith(flag) ? "--output-document"
+        : flag.startsWith("--output-f") && "--output-file".startsWith(flag) ? "--output-file" : flag;
+      if (option === "--spider") spider = equals < 0 || /^(?:1|on|true|yes)$/i.test(arg.slice(equals + 1));
+      if (option === "--no-spider") spider = false;
+      if (wgetInputs.has(option) || wgetOutputs.has(option) || wgetOtherValues.has(option)) {
+        record(option, equals < 0 ? args[++index] : arg.slice(equals + 1));
+      }
+    } else if (arg.startsWith("-")) {
+      for (let offset = 1; offset < arg.length; offset++) {
+        const flag = arg[offset];
+        if (!Object.hasOwn(wgetShortValues, flag)) continue;
+        record(wgetShortValues[flag], arg.slice(offset + 1) || args[++index]);
+        break;
+      }
+    }
+  }
+  if (document && document !== "-") files.unshift(document);
+  if (!document && !spider && directory) files.unshift(directory);
+  return { writes: files.length > 0 || !document && !spider, files, inputs, sensitive: false };
+}
+
+export function githubCredentialRead(args: string[]) {
+  if (args[0] !== "auth") return false;
+  if (args[1] === "token") return true;
+  if (args[1] !== "status") return false;
+  for (let index = 2; index < args.length; index++) {
+    const flag = args[index];
+    if (flag === "--") break;
+    if (flag === "--hostname" || flag === "-h") { index++; continue; }
+    if (["--show-token", "--show-token=true", "-t=true"].includes(flag)) return true;
+    if (/^-[at]*t[at]*(?:h[^=]*)?$/.test(flag)) return true;
+  }
+  return false;
 }

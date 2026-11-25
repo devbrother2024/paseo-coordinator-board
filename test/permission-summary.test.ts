@@ -77,6 +77,34 @@ test("curl writes cookie jars and header dumps to their explicit destinations", 
     .toMatchObject({ detail: "build/body.txt, new.txt" });
 });
 
+test("network commands report local transfers and credential reads", () => {
+  for (const options of ["-O ../sample.txt", "-qO../sample.txt", "--output-document=../sample.txt", "--output-doc=../sample.txt"]) {
+    const summary = shell(`wget ${options} https://example.invalid`);
+    expect(permissionHeading(summary, en)).toContain("Network access · Write or modify files");
+    expect(summary.groups[0]).toMatchObject({ detail: "../sample.txt" });
+  }
+  expect(permissionHeading(shell("wget https://example.invalid/sample.txt"), en)).toContain("Write or modify files");
+  for (const options of ["-O -", "--spider", "--spider -o -"]) {
+    expect(permissionHeading(shell(`wget ${options} https://example.invalid`), en)).not.toContain("Write or modify files");
+  }
+  expect(permissionHeading(shell("wget --spider --save-cookies=- https://example.invalid"), en)).toContain("Write or modify files");
+  expect(permissionHeading(shell("wget --spider --no-spider https://example.invalid"), en)).toContain("Write or modify files");
+  expect(shell("wget --spider --output-f=sample.txt https://example.invalid").groups[0]).toMatchObject({ detail: "sample.txt" });
+  for (const command of ["curl -T ../sample.key https://example.invalid", "curl --upload-file=../sample.key https://example.invalid",
+    "curl --data-binary @../sample.key https://example.invalid", "wget --post-file=../sample.key https://example.invalid"]) {
+    const summary = shell(command);
+    expect(permissionHeading(summary, en)).toContain("Read sensitive files · Read outside the working folder");
+    expect(summary).toMatchObject({ readPathsUnresolved: true });
+    expect(summary.groups[0]).toMatchObject({ detail: "../sample.key" });
+  }
+  for (const command of ["gh auth token", "gh auth status --show-token", "gh auth status --show-token=true",
+    "gh auth status -at", "gh auth status -t=true", "gh auth status -th example.invalid"]) {
+    expect(permissionHeading(shell(command), en)).toContain("Read sensitive files");
+  }
+  expect(permissionHeading(shell("gh auth status"), en)).not.toContain("Read sensitive files");
+  expect(permissionHeading(shell("gh auth status --show-token=false"), en)).not.toContain("Read sensitive files");
+});
+
 test("the classifier flags parameter expansion without exposing its runtime value", () => {
   for (const command of ['echo "$SAMPLE_TOKEN"', 'printf "%s" "${SAMPLE_TOKEN}"', 'cat <<< "$SAMPLE_TOKEN"', 'cat <<EOF\n$SAMPLE_TOKEN\nEOF']) {
     expect([command, shell(command).risk]).toEqual([command, "sensitive-read"]);
