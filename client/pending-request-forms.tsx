@@ -1,5 +1,5 @@
 import { getPaseoClient, useSettings } from "@getpaseo/plugin/client";
-import { TextInput } from "@getpaseo/plugin/client/ui";
+import { AutoGrowInput } from "./auto-grow-input";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { answeredRequests, wasSent, withSent } from "../shared/answered-requests";
@@ -186,7 +186,7 @@ function QuestionForm({ request, questions, theme, sessionTitle, locked, busy, o
           </Pressable>;
         })}
       </View>
-      {showsTextInput(question) && <TextInput {...focus} value={draft.other[index]} editable={!locked} maxLength={4000}
+      {showsTextInput(question) && <AutoGrowInput {...focus} value={draft.other[index]} editable={!locked} maxLength={4000}
         // A masked answer is typed on one hidden line. Other answers may run to several lines.
         multiline={!question.masked} secureTextEntry={question.masked} autoCapitalize={question.masked ? "none" : undefined} autoCorrect={question.masked ? false : undefined}
         onChangeText={value => setDraft(current => writeOther(questions, current, index, value))}

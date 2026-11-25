@@ -1,7 +1,8 @@
 import { useRpc } from "@getpaseo/plugin/client";
-import { SendButton, SendTextInput } from "./send-input";
+import { AutoGrowInput } from "./auto-grow-input";
+import { SendButton } from "./send-input";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Text, useWindowDimensions, View } from "react-native";
+import { Text, View } from "react-native";
 import {
   operationState,
   requestWork,
@@ -21,6 +22,7 @@ import { FactReplyControls } from "./fact-reply-controls";
 import { MergeJudgmentControls } from "./merge-judgment-controls";
 import { CoordinatorPinControls } from "./coordinator-pin";
 import { CoordinatorReplace } from "./coordinator-replace";
+import { RetiredCoordinator } from "./retired-coordinator";
 import { RouteEditor, routeName, wrap, type RoutingSave } from "./route-editor";
 import { useBoardLanguage } from "./language";
 import { explainEmptyRoute } from "./route-options";
@@ -57,8 +59,6 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   const [sendAttempts, setSendAttempts] = useState(0);
   const [platform, setPlatform] = useState<TaskPlatform>();
   const [host, setHost] = useState<string>();
-  const [editorExpanded, setEditorExpanded] = useState(false);
-  const { height: windowHeight } = useWindowDimensions();
   const photoDraft = usePhotoDraft();
   const hasRequest = Boolean(text.trim() || photoDraft.photos.length);
   const sendRequest = { disabled: busy || !configured || !hasRequest || photoDraft.blocked, onPress: () => void postWork() };
@@ -178,7 +178,6 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
       setText("");
       setPlatform(undefined);
       setHost(undefined);
-      setEditorExpanded(false);
       photoDraft.clear();
     }
   }
@@ -250,7 +249,10 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
       extraAction={replacing => <Button theme={theme} label={t("다이제스트 요청", "Request digest")}
         disabled={busy || replacing || photoDraft.reading}
         onPress={() => { if (!photoDraft.readPending.current) void digest.request(); }} />}
-      footer={<DigestFeedback theme={theme} feedback={digest.feedback} />} />}
+      footer={<>
+        <RetiredCoordinator theme={theme} coordinator={coordinator} open={openCoordinator} />
+        <DigestFeedback theme={theme} feedback={digest.feedback} />
+      </>} />}
   </View>;
 
   return <View style={section}>
@@ -259,16 +261,11 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
       {coordinator && openCoordinator && <SessionChip theme={theme} label={t("코디네이터 세션", "Coordinator session")} accessibilityLabel={t("코디네이터 세션 열기", "Open coordinator session")} onPress={() => openCoordinator(coordinator)} />}
     </View>
     {coordinator ? <>
-      <View style={{ ...wrap, alignItems: "center", justifyContent: "space-between" }}>
-        <Text style={{ color, fontWeight: "600" }}>{t("코디네이터에게 맡길 일", "Request for the coordinator")}</Text>
-        <Button theme={theme} expanded={editorExpanded}
-          label={editorExpanded ? t("입력창 접기", "Collapse editor") : t("입력창 펼치기", "Expand editor")}
-          onPress={() => setEditorExpanded(expanded => !expanded)} />
-      </View>
+      <Text style={{ color, fontWeight: "600" }}>{t("코디네이터에게 맡길 일", "Request for the coordinator")}</Text>
       <PhotoComposer theme={theme} disabled={busy} draft={photoDraft} text={text} showHint
         openSession={openCoordinator ? () => openCoordinator(coordinator) : undefined}>
-        <SendTextInput send={sendRequest} accessibilityLabel={t("코디네이터에게 맡길 일", "Request for the coordinator")} placeholder={t("예: 초안 작성과 자료 검증을 나눠 맡겨 주세요", "Example: Assign the first draft and source checks separately.")} value={text}
-          placeholderTextColor={muted} style={{ minHeight: 64, height: editorExpanded ? Math.min(480, Math.max(160, Math.round(windowHeight * 0.48))) : undefined,
+        <AutoGrowInput send={sendRequest} accessibilityLabel={t("코디네이터에게 맡길 일", "Request for the coordinator")} placeholder={t("예: 초안 작성과 자료 검증을 나눠 맡겨 주세요", "Example: Assign the first draft and source checks separately.")} value={text}
+          placeholderTextColor={muted} style={{ minHeight: 64,
             padding: 10, textAlignVertical: "top", color,
             backgroundColor: theme.colors.surface0, borderColor: inputFocused ? theme.colors.accent : muted, borderWidth: 2, borderRadius: 7 }}
           onFocus={() => setInputFocused(true)} onBlur={() => setInputFocused(false)}

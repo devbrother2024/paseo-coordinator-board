@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  advancesOnChoice, answerSummary, clampStep, firstOpenStep, foldsAsk, foldsCard, isHumanCheck, nextOpenStep, recommendAllPicks,
+  advancesOnChoice, answerSummary, clampStep, firstOpenStep, foldsAsk, isHumanCheck, nextOpenStep, openingStep, recommendAllPicks,
   applyPicks, chooseAnswer, emptyAnswers, photoPlacement, recordHeaderParts, skipQuestion, startWriting, stepAfterAnswer, stepText, typeAnswer,
   trackedChipSide, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps,
 } from "../client/card-steps";
@@ -23,9 +23,25 @@ test("only a card with two or more questions moves one question at a time", () =
   expect(usesSteps([])).toBe(false);
   expect(usesSteps([ten[0]])).toBe(false);
   expect(usesSteps(ten.slice(0, 2))).toBe(true);
-  expect(foldsCard(record({ questions: ten }))).toBe(true);
-  expect(foldsCard(record({ questions: [ten[0]] }))).toBe(false);
-  expect(foldsCard(record())).toBe(false);
+});
+
+test("a card with several questions opens on its first unanswered question, with no Answer step before it", () => {
+  const three = ten.slice(0, 3);
+  expect(openingStep(three, [])).toBe(0);
+  expect(openingStep(three, [false, false, false])).toBe(0);
+  expect(openingStep(three, [true, false, false])).toBe(1);
+  expect(openingStep(three, [true, true, false])).toBe(2);
+  expect(openingStep(three, [true, true, true])).toBe("summary");
+  // One question keeps the whole form on the card, and a card without questions has no steps.
+  expect(openingStep([ten[0]], [false])).toBeNull();
+  expect(openingStep([ten[0]], [true])).toBeNull();
+  expect(openingStep([], [])).toBeNull();
+});
+
+test("a card that cannot take a reply shows all its questions at once, without steps", () => {
+  expect(usesSteps(ten.slice(0, 3), false)).toBe(false);
+  expect(usesSteps(ten.slice(0, 3), true)).toBe(true);
+  expect(openingStep(ten.slice(0, 3), [], false)).toBeNull();
 });
 
 test("the next question skips answered ones and wraps before the summary", () => {

@@ -20,7 +20,7 @@ import {
 } from "./tracked-reply-draft";
 import {
   advancesOnChoice, answerSummary, applyPicks, chooseAnswer, emptyAnswers, photoPlacement, skipQuestion, startWriting, stepAfterAnswer, typeAnswer,
-  type AnswerDrafts, clampStep, firstOpenStep, foldsAsk, foldsCard, nextOpenStep, recommendAllPicks, trackedChipSide,
+  type AnswerDrafts, clampStep, foldsAsk, nextOpenStep, openingStep, recommendAllPicks, trackedChipSide,
   recordHeaderParts, stepText, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps, type Step,
 } from "./card-steps";
 import { ledgerChoiceGaps } from "../shared/choice-gaps";
@@ -126,8 +126,8 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const { selected, typed, skipped, writing } = answers;
   const [editedReply, setEditedReply] = useState<string | null>(null);
   const [more, setMore] = useState<Record<number, boolean>>({});
-  const [opened, setOpened] = useState(false);
-  const [rawStep, setStep] = useState<Step>(0);
+  // A card with several questions opens on its first question. There is no Answer button to press first.
+  const [rawStep, setStep] = useState<Step>(() => openingStep(item.questions, [], canReply) ?? 0);
   // Counts the person's moves between questions, so focus follows even when the question number stays the same.
   const [moves, setMoves] = useState(0);
   const questionHead = useRef<View>(null);
@@ -207,10 +207,9 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const offer = trackedReplyOffer(route, redirected, hasAnswerDraft || hasQuestionDraft);
   const offersFallback = offer.fallback;
   const unreachable = !offer.form;
-  const stepped = usesSteps(item.questions);
+  const stepped = usesSteps(item.questions, canReply);
   const step = clampStep(rawStep, item.questions.length);
   const stepping = stepped && step !== "summary";
-  const folded = foldsCard(item) && !opened && !hasAnswerDraft && !hasQuestionDraft;
   const inputFocus = useDecisionInteraction(canReply && !queue && !isClosed && !needsRefresh &&
     (hasDraft || editedReply !== null || Object.values(typed).some(value => value !== undefined) ||
       attachments.blocked || busy || Object.values(skipped).some(Boolean)));
@@ -226,7 +225,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
 
   useEffect(() => { if (moves) focusNode(questionHead.current); }, [moves]);
 
-  function go(next: Step) { setStep(next); setOpened(true); setMoves(count => count + 1); }
+  function go(next: Step) { setStep(next); setMoves(count => count + 1); }
   function moveAfter(index: number, action: "choose" | "skip" | "unskip") {
     const next = stepAfterAnswer(stepped, item.questions[index], answered, index, action);
     if (next !== null) go(next);
@@ -247,7 +246,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   }
   function clearDraft() {
     attachments.clear(); setEditedReply(null); setAnswers(emptyAnswers); setMore({}); setLeadRemoved(false);
-    setStep(0); setOpened(false);
+    setStep(openingStep(item.questions, [], canReply) ?? 0);
   }
   async function refreshRecord() {
     if (pending.current || !outcome) return;
@@ -470,19 +469,13 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
       <View style={wrap}><Button theme={theme} {...named(t("전송 대기 취소","Cancel queued reply"))} disabled={busy} onPress={()=>void cancelWaiting()} /></View>
     </View>}
     {showForm && canReply && recordActions && unreachable && <Text style={{color:c.foregroundMuted,fontSize:12}}>{routeText()}</Text>}
-    {showForm && folded && !unreachable && <View style={{ ...wrap, alignItems: "center" }}>
-      <Text style={{ color: c.foregroundMuted, fontSize: 13 }}>{t(`질문 ${total}개`, `${total} questions`)}</Text>
-      {canReply && <Button theme={theme} {...named(t("답하기", "Answer"))} selected disabled={busy} onPress={() => go(firstOpenStep(answered))} />}
-      {canReply && allPicks && <Button theme={theme} {...named(t("추천대로 모두 고르기", "Choose all recommendations"))} disabled={busy}
-        onPress={() => chooseRecommended(allPicks, true)} />}
-    </View>}
-    {showForm && !folded && !unreachable && <View style={{ gap: 8 }}>
+    {showForm && !unreachable && <View style={{ gap: 8 }}>
       {isMerge && !!item.questions.length && <Text accessibilityRole="header" style={{color:c.foreground, borderTopWidth:1, borderTopColor:c.border, paddingTop:10, fontSize:16, fontWeight:"600"}}>{followupTitle}</Text>}
-      {stepped && canReply && <View style={{ ...wrap, alignItems: "center" }}>
-        {progressDots(step)}
-        {allPicks && <Button theme={theme} disabled={busy} {...named(t("추천대로 모두 고르기", "Choose all recommendations"))} onPress={() => chooseRecommended(allPicks, true)} />}
+      {stepped && canReply && allPicks && <View style={wrap}>
+        <Button theme={theme} disabled={busy} {...named(t("추천대로 모두 고르기", "Choose all recommendations"))} onPress={() => chooseRecommended(allPicks, true)} />
       </View>}
-      {!stepped && Object.keys(picks).length > 0 && <View style={wrap}><Button theme={theme} disabled={busy} {...named(t("추천 선택지 고르기", "Choose recommended options"))}
+      {stepped && canReply && progressDots(step)}
+      {!stepped && canReply && Object.keys(picks).length > 0 && <View style={wrap}><Button theme={theme} disabled={busy} {...named(t("추천 선택지 고르기", "Choose recommended options"))}
         onPress={() => chooseRecommended(picks, false)} /></View>}
       {stepped ? step !== "summary" && renderQuestion(step) : item.questions.map((_, index) => renderQuestion(index))}
       {stepped && step === "summary" && <View style={{ gap: 4 }}>

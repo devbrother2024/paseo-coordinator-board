@@ -11,7 +11,7 @@ import { mentionsSecurityGate, trackedCoverage, trackedReplyRoute, usesSourceCoo
 import { projectFolderMap } from "../shared/project-folders";
 import { MergeFeedback, PullRequestCard, PullRequestSettings, WaitingMergeRow, type MergeNotice, type WorkSessionLink } from "./pull-requests";
 import { ownKanbanEntry, placeMergeCards, pullDecidesNow } from "../shared/merge-card-place";
-import { foldReceipts, pullRowKey, receiptsToFold, recordActionKey, RECEIPT_FOLD_MS, sessionRowKey, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
+import { foldReceipts, holdsActivityClosed, needsHostWideFilter, pullRowKey, receiptEntry, receiptInScope, receiptsToFold, recordActionKey, RECEIPT_FOLD_MS, sessionRowKey, settleReceipt, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
 import { rankDecisionRows, priorityLabel } from "./decision-priority";
 import { DecisionEditingRow, keepEditingPositions, useDecisionEditing } from "./decision-editing";
 import { InlineDecisionReceipt } from "./inline-receipt";
@@ -160,6 +160,14 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     const timer = setTimeout(() => setInlineReceipts(previous => foldReceipts(previous, fold)), RECEIPT_FOLD_MS);
     return () => clearTimeout(timer);
   }, [inlineReceipts]);
+  // Each refresh checks the folded cards of sent replies against reply history.
+  useEffect(() => {
+    const entries = snapshot?.replyHistory ?? [];
+    setInlineReceipts(previous => {
+      const next = previous.map(receipt => settleReceipt(receipt, receiptEntry(receipt, entries), Date.now()));
+      return next.some((receipt, index) => receipt !== previous[index]) ? next : previous;
+    });
+  }, [updatedAt, snapshot?.replyHistory]);
   const now = Date.now();
   // Only replies still waiting on a session's result appear in the project kanban.
   const followups = history.flatMap(entry => {
@@ -170,7 +178,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     projectIds.add(entry.projectId);
     if (entry.projectId && !displayed.has(entry.projectId)) displayed.set(entry.projectId,{id:entry.projectId,title:names.get(entry.projectId) ?? entry.projectId,cards:[]});
   }
-  if (inlineReceipts.some(receipt => !receipt.hidden && receipt.projectIds.includes(null))) projectIds.add(null);
+  if (needsHostWideFilter(inlineReceipts)) projectIds.add(null);
   for (const id of projectIds) {
     const list=decisionsFor(projectId=>projectId===id);
     byProject.set(id,list.records.length+list.sessions.length+list.prs.length);
@@ -243,13 +251,13 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const { positions, onEditing } = useDecisionEditing(rankedKeys);
   const shownKeys = keepEditingPositions(rankedKeys, positions).slice(0, digestLimit);
   const remaining = ranked.length - shownKeys.length;
-  const scopedReceipts = inlineReceipts.filter(receipt => receipt.projectIds.some(id => byProject.has(id) && inFilter(id)));
-  const showHistory = historyOpen ?? (filteredTotal === 0 && !scopedReceipts.some(receipt => !receipt.hidden));
+  const scopedReceipts = inlineReceipts.filter(receipt => receiptInScope(receipt, id => byProject.has(id), inFilter));
+  const showHistory = historyOpen ?? (filteredTotal === 0 && !holdsActivityClosed(scopedReceipts));
   const orderedKeys = withReceiptPositions(shownKeys, scopedReceipts);
   function remember(action: CompletedAction) {
     // The callback captures the order at the time the person pressed the button.
     setInlineReceipts(previous => previous.some(entry => entry.actionKey === action.actionKey && entry.rowKey === action.rowKey)
-      ? previous : [...previous, { ...action, order: orderedKeys }]);
+      ? previous : [...previous, { ...action, order: orderedKeys, ...(action.status === "sent" ? { sentAt: Date.now() } : {}) }]);
   }
   function questionFor(card: ClarificationCard | null, title: string, prior?: TrackedDecision["qa"], onDraftChange?: (active:boolean) => void, ownerId?: string | null, notice?: ChoiceNotice | null, part: "all" | "ask" | "history" = "all") {
     if (!snapshot) return null;
@@ -274,7 +282,8 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           onSent={result => {
             if (rowKey && result.action === "reply") remember({
               rowKey, actionKey: sessionRowKey(card), projectIds: [result.projectId], status: "sent", recipientId: result.recipientId,
-              title: decisionSummary(card, t).headline, detail: result.answer || result.recipient || undefined,
+              title: decisionSummary(card, t).headline, detail: result.answer || undefined,
+              ...(card.session.decision?.version ? { match: { projectId: result.projectId, cardId: card.session.id, revision: card.session.decision.version } } : {}),
             });
             setReceipts(prior => [result, ...prior.filter(r => !(r.projectId === result.projectId && r.sessionId === result.sessionId))].slice(0, 20));
             onRefresh();
@@ -366,11 +375,14 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             onResolved={outcome=>{
               const {status,reason,mode,answer,recipientId}=outcome;
               if (rowKey && mode && (status === "sent" || status === "closed" || status === "already-closed")) {
-                remember({ rowKey, actionKey: recordActionKey({key: item.key, fingerprint: closedRevision(outcome) ?? item.fingerprint}), projectIds: [item.projectId],
+                const revision = closedRevision(outcome) ?? item.fingerprint;
+                remember({ rowKey, actionKey: recordActionKey({key: item.key, fingerprint: revision}), projectIds: [item.projectId],
                   // The board only sends now. A record closed without a recipient shows as already handled.
                   status: status === "closed" ? "already-closed" : status,
                   recipientId: status === "sent" ? recipientId : undefined,
-                  title: item.title, detail: answer || item.projectTitle || projectName(item.projectId) });
+                  // A sent reply's folded card opens to the reply itself, so it carries only what was sent.
+                  title: item.title, detail: status === "sent" ? answer || undefined : answer || item.projectTitle || projectName(item.projectId),
+                  ...(status === "sent" ? { match: { projectId: item.projectId, cardId: item.id, revision } } : {}) });
               }
               if (rowKey && mode && answer && (reason === "removed" || reason === "conflict")) {
                 remember({ rowKey, actionKey: unsentActionKey(item), projectIds: [item.projectId], status: "unsent", title: item.title, detail: answer });
@@ -501,7 +513,8 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           !readyPrs.some(pr => pr.repo + " #" + pr.number === mergeNotice.target)) && <MergeFeedback notice={mergeNotice} theme={theme} />}
         {orderedKeys.map(key => <View key={key} role="article" style={{ gap: 8, padding: layout.compact ? 12 : 16, backgroundColor: c.surface1, borderWidth: 1, borderColor: c.border, borderRadius: 10 }}>
           {scopedReceipts.filter(receipt => receipt.rowKey === key && !receipt.hidden).map(receipt =>
-            <InlineDecisionReceipt key={receipt.actionKey} receipt={receipt} theme={theme} onOpen={actions.onOpen} onDismiss={() =>
+            <InlineDecisionReceipt key={receipt.actionKey} receipt={receipt} theme={theme} onOpen={actions.onOpen} entry={receiptEntry(receipt, history)}
+              recipient={receipt.recipientId ? snapshot.sessions.find(row => row.id === receipt.recipientId)?.title ?? receiptEntry(receipt, history)?.recipientTitle : undefined} onDismiss={() =>
               setInlineReceipts(prior => prior.map(entry => entry === receipt ? { ...entry, hidden: true } : entry))} />)}
           {activeRows.get(key)}
         </View>)}

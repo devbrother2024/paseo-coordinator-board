@@ -1,6 +1,7 @@
 import { useDecisionInteraction } from "./decision-editing";
 import { useRpc } from "@getpaseo/plugin/client";
-import { SendButton, SendTextInput } from "./send-input";
+import { AutoGrowInput } from "./auto-grow-input";
+import { SendButton } from "./send-input";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { askClarification, clarificationKey, type ClarificationCard, type ClarificationEntry } from "../shared/clarifications";
@@ -106,7 +107,7 @@ export function Clarification({card,title,theme,recipientId,recipientTitle,entri
         <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>{t("질문 받을 세션", "Question recipient")} · {recipientTitle || recipientId}</Text>
         {changed && <Button theme={theme} label={t("바뀐 질문과 수신자 확인", "Confirm updated question and recipient")}
           onPress={() => { setDraftTarget(target); setError(false); }} />}
-        <PhotoComposer theme={theme} disabled={busy || changed} draft={photos}><SendTextInput send={sendQuestion} multiline maxLength={4000} editable={!busy}
+        <PhotoComposer theme={theme} disabled={busy || changed} draft={photos}><AutoGrowInput send={sendQuestion} multiline maxLength={4000} editable={!busy}
           accessibilityLabel={label("질문 내용", "Question text")} value={text} onChangeText={setText}
           placeholder={t("결정하기 전에 궁금한 점을 적어 주세요", "What would you like to ask before deciding?")} placeholderTextColor={c.foregroundMuted}
           style={{minHeight:48,color:c.foreground,backgroundColor:c.surface0,padding:8,borderWidth:1,borderColor:c.border,borderRadius:7}} /></PhotoComposer>

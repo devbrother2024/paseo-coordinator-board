@@ -55,6 +55,20 @@ export const setupCoordinator = defineRpc({
   output: z.object({ sessionId: z.string(), workspaceId: z.string().nullable(), reused: z.boolean(), pinFailed: z.boolean().optional(),
     defaultSaved: z.boolean().optional() }),
 });
+// The coordinator a board replacement retired. The board never archives it on its own; Settings offers a button.
+export const retiredCoordinatorState = defineRpc({
+  name: "board.retired-coordinator",
+  input: z.strictObject({}),
+  output: z.object({
+    retired: z.object({ id: z.string(), archivable: z.boolean(), reason: z.enum(["running", "waiting"]).optional() }).nullable(),
+  }),
+});
+export const archiveRetiredCoordinator = defineRpc({
+  name: "board.archive-retired-coordinator",
+  input: z.strictObject({ sessionId: z.string().min(1).max(256) }),
+  output: z.object({ ok: z.boolean() }),
+});
+export type RetiredCoordinator = NonNullable<z.output<typeof retiredCoordinatorState.output>["retired"]>;
 export const coordinatorPinSettings = defineRpc({
   name: "board.coordinator-pin-settings",
   input: z.strictObject({}),

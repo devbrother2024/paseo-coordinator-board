@@ -1,5 +1,6 @@
 import { useBoardLanguage } from "./language";
-import { Modal, TextInput } from "@getpaseo/plugin/client/ui";
+import { Modal } from "@getpaseo/plugin/client/ui";
+import { AutoGrowInput } from "./auto-grow-input";
 import { useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { Button, type Theme } from "./controls";
@@ -72,7 +73,7 @@ export function NoteEditor({ session, note, theme, onClose, onSave, onSetReporti
         </View>
         {note?.origin === "agent" && note.kind !== "clear" &&
           <Text style={{ color: c.foregroundMuted }}>{t("세션이 남긴 보고입니다. 원문에서 결과를 확인하고 기록을 저장하세요.", "The session submitted this report. Verify the result in the original conversation before saving.")}</Text>}
-        <TextInput accessibilityLabel={noteLabel(kind, t)} multiline maxLength={2000} editable={!busy} value={text} onChangeText={setText}
+        <AutoGrowInput accessibilityLabel={noteLabel(kind, t)} multiline maxLength={2000} editable={!busy} value={text} onChangeText={setText}
           placeholder={{ question: t("어떤 결정을 내려야 하나요?", "What decision is needed?"), review: t("무엇을 확인하면 될까요?", "What needs review?"), done: t("완료를 확인한 결과나 링크를 적어 주세요.", "Add a result or link that confirms completion.") }[kind]}
           placeholderTextColor={c.foregroundMuted}
           style={{ minHeight: 100, textAlignVertical: "top", padding: 12, color: c.foreground, borderRadius: 7, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface0 }} />
