@@ -1,0 +1,45 @@
+import { TextInput } from "@getpaseo/plugin/client/ui";
+import { useCallback, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
+import { Platform, StyleSheet, useWindowDimensions } from "react-native";
+import { fitInputHeight, maxInputHeight, measureTextareaContent, verticalChrome } from "./auto-grow";
+import { SendTextInput, type SendAction } from "./send-input";
+
+const web = Platform.OS === "web";
+const DEFAULT_MIN_HEIGHT = 56;
+
+type Props = ComponentProps<typeof TextInput> & { send?: SendAction };
+
+// A multi-line input that is as tall as its text, from the style's minHeight up to a share of the window, then scrolls inside.
+// A single-line input (multiline off) is passed through untouched.
+export function AutoGrowInput({ send, style, multiline, value, onLayout, onContentSizeChange, ...props }: Props) {
+  const { height: windowHeight } = useWindowDimensions();
+  const input = useRef<unknown>(null);
+  const [content, setContent] = useState<number>();
+  const [width, setWidth] = useState<number>();
+  const flat = StyleSheet.flatten(style) ?? {};
+  const min = typeof flat.minHeight === "number" ? flat.minHeight : DEFAULT_MIN_HEIGHT;
+
+  const measure = useCallback(() => {
+    if (!web) return;
+    const next = measureTextareaContent(input.current);
+    if (next !== undefined) setContent(next);
+  }, []);
+  // The text, the width (line breaks move with it) and the window all change what fits.
+  useLayoutEffect(measure, [measure, value, width, multiline]);
+
+  const fit = content === undefined ? undefined : fitInputHeight({ content: content + verticalChrome(flat, !web), min, max: maxInputHeight(windowHeight, min) });
+  const grown = !multiline ? style : [style, { minHeight: min, height: fit?.height },
+    web ? { resize: "none", overflowY: fit?.scrolls ? "auto" : "hidden" } as object : null];
+  const fields = {
+    ...props, value, multiline, style: grown, ref: input as never,
+    onLayout: (event: Parameters<NonNullable<Props["onLayout"]>>[0]) => {
+      setWidth(event.nativeEvent.layout.width);
+      onLayout?.(event);
+    },
+    onContentSizeChange: (event: Parameters<NonNullable<Props["onContentSizeChange"]>>[0]) => {
+      if (!web) setContent(event.nativeEvent.contentSize.height);
+      onContentSizeChange?.(event);
+    },
+  };
+  return send ? <SendTextInput send={send} {...fields} /> : <TextInput {...fields} />;
+}
