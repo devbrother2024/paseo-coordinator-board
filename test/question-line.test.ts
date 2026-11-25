@@ -3,6 +3,8 @@ import { classify, conversationQuestionDetails, excerpt } from "../server/conver
 import { decorateDecision } from "../server/session-decisions";
 import { questionFolds, questionParts } from "../client/decision-summary";
 import { asksForDecision, unquoted } from "../shared/question-request";
+import { lexBoardMarkdown } from "../client/board-markdown";
+import type { Tokens } from "../client/vendor/marked/marked";
 
 const row = { id: "worker", status: "idle", projectId: "p", projectTitle: "Studio", workspaceTitle: "w", model: null, title: "Edit", lane: "idle", detail: "Waiting", activityAt: "1" } as const;
 const page = (texts: string[]) => ({ epoch: "a", error: null, entries: texts.map((text, i) => ({ item: { type: "assistant_message", text }, seqEnd: i })) });
@@ -204,4 +206,43 @@ test("a negation or an offer only cancels the sentence it is in", () => {
   // A version number or size is not a sentence end.
   expect(asksForDecision("v1.2 용량은 3.5GB입니다. 결정할 것은 없습니다.")).toBe(false);
   expect(asksForDecision("용량은 3.5GB입니다. 이대로 확인해 주세요.")).toBe(true);
+});
+
+test("a request phrase inside inline code is not a request", () => {
+  for (const line of [
+    "예시 입력 `... please choose a region ...`은 잘립니다.",
+    "한계 예시: ``골라 주세요`` 같은 문구는 요청이 아닙니다.",
+    "문구 `이대로 할까요?`는 그대로 둡니다.",
+    "The sample `Shall I merge it?` is only an example.",
+  ]) expect([line, asksForDecision(line)]).toEqual([line, false]);
+  expect(classify(evidence(["- 남은 한계", "  1. 긴 입력은 잘립니다 (예: `foo ... please choose bar`, 상한 10개)", "  2. 빈 목록은 `none` 으로 표시됩니다"].join("\n")), row).lane).toBe("idle");
+});
+
+test("a request outside the inline code still counts, and an unpaired backtick masks nothing", () => {
+  expect(asksForDecision("예시 `please choose`는 잘립니다. 지울지 알려 주세요.")).toBe(true);
+  expect(asksForDecision("`A안`으로 할까요?")).toBe(true);
+  expect(asksForDecision("한 줄에 ` 하나만 있고 이대로 할까요?")).toBe(true);
+  expect(asksForDecision("`a` 와 ` 이대로 확인해 주세요.")).toBe(true);
+  expect(asksForDecision("``a`b`` 다음 이대로 확인해 주세요.")).toBe(true);
+});
+
+test("inline code masking keeps the length of the line", () => {
+  const line = "예시 `please choose` 와 ``a`b`` 는 코드, `짝 없음";
+  expect(unquoted(line)).toHaveLength(line.length);
+  expect(unquoted(line)).toBe("예시 " + "_".repeat(15) + " 와 _______ 는 코드, `짝 없음");
+});
+
+test("a numbered list item keeps its number and the list stays whole in the card", () => {
+  const markdown = ["  1. 긴 입력은 잘립니다 (예: `foo bar`, 상한 10개) 이대로 둘지 알려 주세요.", "  2. 빈 목록은 `none` 으로 표시됩니다", "  3. 나머지는 평문입니다"].join("\n");
+  const parts = questionParts(markdown);
+  expect(parts.lead).toBe("");
+  expect(parts.title).toBe("1. 긴 입력은 잘립니다 (예: `foo bar`, 상한 10개) 이대로 둘지 알려 주세요.");
+  expect(parts.body).toBe("  2. 빈 목록은 `none` 으로 표시됩니다\n  3. 나머지는 평문입니다");
+  // No part is an empty list item.
+  for (const part of [parts.lead, parts.title, parts.body].filter(Boolean)) {
+    for (const token of lexBoardMarkdown(part)) if (token.type === "list") for (const item of (token as Tokens.List).items) expect(item.text.trim()).not.toBe("");
+  }
+  expect(questionParts("- 입력이 길면 잘립니다. 어떻게 할지 알려 주세요.\n- 둘째").lead).toBe("");
+  // A sentence split still applies to a line that is not a list item.
+  expect(questionParts("편집본을 올렸습니다. 이대로 공개해도 될까요?").title).toBe("이대로 공개해도 될까요?");
 });

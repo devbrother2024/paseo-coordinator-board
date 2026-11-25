@@ -48,6 +48,8 @@ export function questionParts(markdown: string) {
   const [first = "", ...rest] = markdown.split("\n");
   const after = rest.join("\n").replace(/^\s*\n/, "").trimEnd();
   const whole = { lead: "", title: first.trim(), body: after };
+  // The dot after a list number ("1. ") is not a sentence end. Cutting there leaves the number alone as an empty item and splits the list.
+  if (/^\s*(?:[-*+]|\d+[.)])\s/.test(first)) return whole;
   // Sentence ends found outside quotes, so a quoted question never splits the line.
   const cuts = [0, ...[...unquoted(first).matchAll(/[.!?。？！]+["'”’)\]]*\s+/g)].map(match => match.index + match[0].length), first.length];
   const sentences = cuts.slice(1).map((end, index) => first.slice(cuts[index], end)).filter(sentence => sentence.trim());

@@ -9,9 +9,10 @@ const optionalOffer = /(?:궁금|필요|원하).{0,12}(?:시면|시다면|면).{
 const noQuestion = /(?:확인해\s*주실\s*것|결정해\s*주실\s*것|확인\s*요청)(?:은|이|이란)?\s*(?:없|없습니다|없음)|결정(?:할|이\s*필요한)?\s*것\s*(?:은|이)?\s*[:：]?\s*\**\s*없|\b(?:no decisions? (?:is |are )?(?:needed|required)|(?:nothing|none|nobody|no\s+one|no\s+\w+|not)\b.{0,20}\bneeds? your decision|decision needed\s*:\s*\**\s*(?:none|no|n\/a)\b)/i;
 // A single quote opens only where a word does not continue into it, so "I've" and "it's" are not quotes.
 // A double quote right after a digit is an inch mark (24"), not an opening quote.
-const quoted = /“[^”\n]*”|(?<!\d)"[^"\n]*"|「[^」\n]*」|『[^』\n]*』|‘[^’\n]*’|(?<![\p{L}\p{N}])'[^'\n]+'(?![A-Za-z0-9])/gu;
+// Inline code (`…` or ``…``) is quoted text too: a request phrase written as an example is not a request. A backtick with no partner on the line masks nothing.
+const quoted = /(`+)(?!`)[^\n]*?(?<!`)\1(?!`)|“[^”\n]*”|(?<!\d)"[^"\n]*"|「[^」\n]*」|『[^』\n]*』|‘[^’\n]*’|(?<![\p{L}\p{N}])'[^'\n]+'(?![A-Za-z0-9])/gu;
 
-/** The line with quoted text blanked out, at the same length so positions still match the original. */
+/** The line with quoted text and inline code blanked out, at the same length so positions still match the original. */
 export function unquoted(line: string) {
   return line.replace(quoted, match => "_".repeat(match.length));
 }
