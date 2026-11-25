@@ -1,7 +1,7 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { coordinatorStartPrompt, readBootstrapExtra, retiredCoordinator, retiredState, type OpenCards } from "./coordinator-bootstrap";
+import { coordinatorOwnerKey, coordinatorStartPrompt, readBootstrapExtra, retiredCoordinator, retiredState, type OpenCards } from "./coordinator-bootstrap";
 import { operatingDirectory } from "./operating-folders";
 import { type Preferences, PreferenceStore, setCoordinator } from "./preferences";
 
@@ -13,7 +13,7 @@ type Start = {
   verifyRoute?: (scope: Preferences) => void;
 };
 
-const ownerKey = "coordinator-board/operating-session";
+const ownerKey = coordinatorOwnerKey;
 const countTimeoutMs = 10_000;
 const changed = "옛 코디네이터 정보가 바뀌었습니다. 설정을 새로 고쳐 주세요. / The previous coordinator changed. Refresh Settings.";
 const stale = "코디네이터 설정이 바뀌었습니다. 보드를 새로 고쳐 주세요.";

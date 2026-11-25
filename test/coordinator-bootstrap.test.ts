@@ -2,10 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { attachCoordinatorTools } from "../server/coordinator";
+import { attachCoordinatorTools, notDesignatedYet } from "../server/coordinator";
 import { ConversationReader } from "../server/conversation";
 import {
-  bootstrapFileName, cleanBootstrapText, coordinatorStartPrompt, maxBootstrapChars, readBootstrapExtra, retiredCoordinator, retiredState,
+  bootstrapFileName, cleanBootstrapText, coordinatorOwnerKey, coordinatorStartPrompt, maxBootstrapChars, readBootstrapExtra, retiredCoordinator, retiredState,
 } from "../server/coordinator-bootstrap";
 import { CoordinatorLifecycle } from "../server/lifecycle";
 import { PreferenceStore, setCoordinator } from "../server/preferences";
@@ -53,8 +53,8 @@ test("host instructions go last, also on a first coordinator, and a cut file say
 });
 
 test("host instructions lose control and direction characters and are capped", () => {
-  expect(cleanBootstrapText("﻿  line one\r\nline\u0007 two‮⁦\r  ")).toEqual({ text: "line one\nline two", truncated: false });
-  expect(cleanBootstrapText(" \n\t‏ ")).toBeNull();
+  expect(cleanBootstrapText("\ufeff  line one\r\nline\u0007 two\u202e\u2066\r  ")).toEqual({ text: "line one\nline two", truncated: false });
+  expect(cleanBootstrapText(" \n\t\u200f ")).toBeNull();
   const long = cleanBootstrapText("가".repeat(maxBootstrapChars + 10))!;
   expect(long).toEqual({ text: "가".repeat(maxBootstrapChars), truncated: true });
   // A character outside the basic plane is never split in half.
@@ -87,17 +87,23 @@ test("only the coordinator a board replacement retired is offered, while the cre
   expect(retiredCoordinator({ coordinator: "new" })).toBeNull();
 });
 
+const mine = { metadata: { [coordinatorOwnerKey]: true } };
 test("a running or waiting retired coordinator cannot be archived, and a gone or archived one is not shown", () => {
-  expect(retiredState("old", { id: "old", status: "idle", pendingPermissions: [] })).toEqual({ id: "old", archivable: true });
-  expect(retiredState("old", { id: "old", status: "closed" })).toEqual({ id: "old", archivable: true });
-  expect(retiredState("old", { id: "old", status: "running" })).toEqual({ id: "old", archivable: false, reason: "running" });
-  expect(retiredState("old", { id: "old", status: "initializing" })).toEqual({ id: "old", archivable: false, reason: "running" });
-  expect(retiredState("old", { id: "old", status: "idle", activeTurn: { id: "turn" } })).toEqual({ id: "old", archivable: false, reason: "running" });
-  expect(retiredState("old", { id: "old", status: "idle", pendingPermissions: [{ id: "p" }] })).toEqual({ id: "old", archivable: false, reason: "waiting" });
-  expect(retiredState("old", { id: "old", status: "idle", archivedAt: "2026-01-01T00:00:00Z" })).toBeNull();
+  expect(retiredState("old", { ...mine, id: "old", status: "idle", attentionReason: "permission" })).toEqual({ id: "old", archivable: false, reason: "waiting" });
+  expect(retiredState("old", { ...mine, id: "old", status: "idle", attentionReason: "finished" })).toEqual({ id: "old", archivable: true });
+  // A session the person picked by hand is not the board's to archive.
+  expect(retiredState("old", { id: "old", status: "idle" })).toBeNull();
+  expect(retiredState("old", { id: "old", status: "idle", metadata: { [coordinatorOwnerKey]: "yes" } })).toBeNull();
+  expect(retiredState("old", { ...mine, id: "old", status: "idle", pendingPermissions: [] })).toEqual({ id: "old", archivable: true });
+  expect(retiredState("old", { ...mine, id: "old", status: "closed" })).toEqual({ id: "old", archivable: true });
+  expect(retiredState("old", { ...mine, id: "old", status: "running" })).toEqual({ id: "old", archivable: false, reason: "running" });
+  expect(retiredState("old", { ...mine, id: "old", status: "initializing" })).toEqual({ id: "old", archivable: false, reason: "running" });
+  expect(retiredState("old", { ...mine, id: "old", status: "idle", activeTurn: { id: "turn" } })).toEqual({ id: "old", archivable: false, reason: "running" });
+  expect(retiredState("old", { ...mine, id: "old", status: "idle", pendingPermissions: [{ id: "p" }] })).toEqual({ id: "old", archivable: false, reason: "waiting" });
+  expect(retiredState("old", { ...mine, id: "old", status: "idle", archivedAt: "2026-01-01T00:00:00Z" })).toBeNull();
   expect(retiredState("old", null)).toBeNull();
-  expect(retiredState("old", { id: "other", status: "idle" })).toBeNull();
-  expect(retiredState(null, { id: "old", status: "idle" })).toBeNull();
+  expect(retiredState("old", { ...mine, id: "other", status: "idle" })).toBeNull();
+  expect(retiredState(null, { ...mine, id: "old", status: "idle" })).toBeNull();
 });
 
 function lifecycleSetup(openCards?: () => Promise<{ decisions: number; ledger: number }>) {
@@ -107,6 +113,7 @@ function lifecycleSetup(openCards?: () => Promise<{ decisions: number; ledger: n
   const prefs = new PreferenceStore(path);
   const lifecycle = new CoordinatorLifecycle(prefs, join(dir, "operate"), openCards && (async () => openCards()));
   const agents = new Map<string, any>(), creations: any[] = [], archived: string[] = [], sent: string[] = [];
+  const effects = { afterCreate: async (_id: string) => {} };
   const pages = (entries: unknown[]) => ({ entries, pageInfo: { hasMore: false, nextCursor: null } });
   const ws = {
     id: "operating-workspace", current: () => ({ id: "operating-workspace", title: "ops", pinnedAt: "pinned" }),
@@ -115,6 +122,7 @@ function lifecycleSetup(openCards?: () => Promise<{ decisions: number; ledger: n
     agents: { create: async (input: any) => {
       creations.push(input);
       agents.set(input.agentId, { id: input.agentId, workspaceId: ws.id, metadata: input.metadata, pendingPermissions: [], status: "idle" });
+      await effects.afterCreate(input.agentId);
     } },
   };
   const sdk: any = {
@@ -128,7 +136,7 @@ function lifecycleSetup(openCards?: () => Promise<{ decisions: number; ledger: n
       }),
     },
   };
-  return { dir, prefs, lifecycle, agents, creations, archived, sent, sdk };
+  return { dir, prefs, lifecycle, agents, creations, archived, sent, sdk, effects };
 }
 const start = { expectedCoordinator: null, replace: false, config: { provider: "codex/fixture-model", thinkingOptionId: "high" } };
 
@@ -173,7 +181,7 @@ test("a first coordinator starts empty unless the host left start instructions",
 async function replaced() {
   const f = lifecycleSetup(async () => ({ decisions: 0, ledger: 0 }));
   // Outside the managed projects, like a coordinator in its operations folder.
-  f.agents.set("old-coordinator", { id: "old-coordinator", workspaceId: "elsewhere", status: "idle", pendingPermissions: [] });
+  f.agents.set("old-coordinator", { id: "old-coordinator", workspaceId: "elsewhere", status: "idle", pendingPermissions: [], ...mine });
   f.prefs.change(s => setCoordinator(s, "old-coordinator"));
   const result = await f.lifecycle.ensure(f.sdk, { ...start, expectedCoordinator: "old-coordinator", replace: true });
   return { ...f, current: result.sessionId };
@@ -221,4 +229,32 @@ test("the new coordinator can read the coordinator it replaced; nobody else can 
   // Once the person picks another coordinator, the earlier handover no longer opens the record.
   f.prefs.change(s => setCoordinator(s, "old-coordinator"));
   await expect(read("old-coordinator", "old-coordinator")).rejects.toThrow();
+});
+
+test("a coordinator the person picked by hand is not offered for archiving after a replacement", async () => {
+  const f = await replaced();
+  delete f.agents.get("old-coordinator").metadata;
+  expect(await f.lifecycle.retired(f.sdk)).toBeNull();
+  await expect(f.lifecycle.archiveRetired(f.sdk, "old-coordinator")).rejects.toThrow(/바뀌었습니다/);
+  expect(f.archived).toEqual([]);
+});
+
+test("a board tool called from the first prompt before the switch says it is not designated yet, then works", async () => {
+  const f = lifecycleSetup(async () => ({ decisions: 0, ledger: 0 }));
+  f.agents.set("old-coordinator", { id: "old-coordinator", workspaceId: "elsewhere", status: "idle", pendingPermissions: [], ...mine });
+  f.prefs.change(s => setCoordinator(s, "old-coordinator"));
+  let hook: any;
+  attachCoordinatorTools({ addHook: (_: unknown, h: any) => { hook = h; return () => {}; } } as any, f.prefs, new ConversationReader());
+  const list = async (caller: string) => (await (await hook({ request: { purpose: "interactive", agentId: caller, tools: [] } })).tools[0])
+    .execute({}, { paseo: f.sdk, agent: { id: caller } });
+  const oldTool = (await hook({ request: { purpose: "interactive", agentId: "old-coordinator", tools: [] } })).tools[0];
+  let early: unknown;
+  f.effects.afterCreate = async id => { early = await list(id).then(() => null, error => error); };
+  const result = await f.lifecycle.ensure(f.sdk, { ...start, expectedCoordinator: "old-coordinator", replace: true, language: "en" });
+  expect((early as Error).message).toBe(notDesignatedYet);
+  expect(notDesignatedYet).toMatch(/지정하기 전.*not designated/);
+  expect(f.creations[0].prompt).toContain("Call it again shortly.");
+  expect(JSON.parse((await list(result.sessionId)).text)).toEqual([]);
+  // A session that is no longer the coordinator keeps the earlier answer.
+  await expect(oldTool.execute({}, { paseo: f.sdk, agent: { id: "old-coordinator" } })).rejects.toThrow("해제");
 });

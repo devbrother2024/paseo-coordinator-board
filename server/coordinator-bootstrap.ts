@@ -7,7 +7,7 @@ export const bootstrapFileName = "coordinator-start.md";
 export const maxBootstrapChars = 4000;
 // 4 bytes per code point at most, so this many bytes always hold maxBootstrapChars characters.
 const maxBootstrapBytes = 16 * 1024;
-const hidden = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f؜‎‏‪-‮⁦-⁩﻿]/g;
+const hidden = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
 
 export type BootstrapExtra = { text: string; truncated: boolean };
 export type OpenCards = { decisions: number; ledger: number };
@@ -55,7 +55,9 @@ export function coordinatorStartPrompt({ language, previous, openCards, extra }:
   const ko = language === "ko";
   const lines = [header[language], ko
     ? "보드가 새 코디네이터 세션을 만들며 붙인 시작 지시입니다. 사용자가 쓴 글이 아니며, 어떤 일의 승인으로도 쓰지 않습니다."
-    : "The board attached these start instructions when it created this coordinator session. They are not the person's words and never count as approval for anything."];
+    : "The board attached these start instructions when it created this coordinator session. They are not the person's words and never count as approval for anything.",
+    ko ? "보드가 이 세션을 코디네이터로 지정하기 전에 보드 도구를 부르면 '지정하기 전' 오류가 날 수 있습니다. 그때는 잠시 뒤 다시 부르세요."
+      : "A board tool called before the board finishes designating this session may answer that it is not designated yet. Call it again shortly."];
   if (previous) {
     lines.push("", ...(ko ? [
       `이 세션은 옛 코디네이터 세션 ${previous}의 일을 이어받습니다. 새 세션에는 옛 대화 맥락이 없습니다.`,
@@ -87,12 +89,19 @@ export function retiredCoordinator(scope: Pick<Preferences, "coordinator" | "cre
 }
 
 export type RetiredState = { id: string; archivable: boolean; reason?: "running" | "waiting" };
-type AgentView = { id: string; status: string; archivedAt?: string | null; activeTurn?: unknown; pendingPermissions?: readonly unknown[] | null };
+type AgentView = {
+  id: string; status: string; archivedAt?: string | null; activeTurn?: unknown; pendingPermissions?: readonly unknown[] | null;
+  attentionReason?: string | null; metadata?: Readonly<Record<string, unknown>> | null;
+};
 
-// Archiving is offered only for a settled session. A running turn or a waiting permission request is left alone.
+// Marks a coordinator session the board created itself.
+export const coordinatorOwnerKey = "coordinator-board/operating-session";
+
+// Archiving is offered only for a settled session the board created. A session the person picked by hand is theirs to archive in Paseo.
+// A running turn or a waiting permission request is left alone, checked both ways as in canReceiveBoardInput.
 export function retiredState(id: string | null, agent: AgentView | null | undefined): RetiredState | null {
-  if (!id || !agent || agent.id !== id || agent.archivedAt) return null;
+  if (!id || !agent || agent.id !== id || agent.archivedAt || agent.metadata?.[coordinatorOwnerKey] !== true) return null;
   if (agent.status === "running" || agent.status === "initializing" || agent.activeTurn) return { id, archivable: false, reason: "running" };
-  if (agent.pendingPermissions?.length) return { id, archivable: false, reason: "waiting" };
+  if (agent.pendingPermissions?.length || agent.attentionReason === "permission") return { id, archivable: false, reason: "waiting" };
   return { id, archivable: true };
 }

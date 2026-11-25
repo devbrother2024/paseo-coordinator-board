@@ -42,8 +42,8 @@ Intent: [intent.md](intent.md)
 
 - RPC `board.retired-coordinator`(입력 없음) → `{ retired: { id, archivable, reason?: "running" | "waiting" } | null }`.
 - RPC `board.archive-retired-coordinator`(`{ sessionId }`) → `{ ok }`. 교체와 같은 순서 큐에서 돈다.
-- 보이는 조건: `retiredCoordinator(scope)`가 있고, 그 세션이 있고 보관되지 않았다.
-- 보관 가능 조건(`retiredState`): 상태가 `running`·`initializing`이 아니고 진행 중인 턴이 없으며(아니면 `running`), 대기 중인 권한 요청이 없다(아니면 `waiting`).
+- 보이는 조건: `retiredCoordinator(scope)`가 있고, 그 세션이 있고 보관되지 않았으며, 보드가 만든 코디네이터(메타데이터 `coordinator-board/operating-session`)다. 사람이 손으로 지정했던 세션은 Paseo에서 사람이 정리한다.
+- 보관 가능 조건(`retiredState`): 상태가 `running`·`initializing`이 아니고 진행 중인 턴이 없으며(아니면 `running`), 대기 중인 권한 요청이 없고 `attentionReason`도 `permission`이 아니다(아니면 `waiting`, `canReceiveBoardInput`과 같은 이중 확인).
 - 보관 전에 같은 조건을 다시 읽는다. ID가 맞지 않거나 상태가 바뀌었으면 두 언어 오류로 거절한다.
 
 ### 화면
@@ -55,6 +55,7 @@ Intent: [intent.md](intent.md)
 
 - 카드 수 읽기 실패·지연: 줄을 뺀다.
 - 추가 지시 파일 문제: 무시한다.
+- 새 세션은 첫 프롬프트로 곧바로 도구를 부를 수 있지만, 담당자 전환은 생성 확인 뒤에 일어난다. 그 사이 `pendingCoordinator`인 세션의 도구 호출은 "아직 지정 전, 잠시 뒤 다시 부르라"는 두 언어 오류를 받고(읽기 범위는 넓히지 않음), 시작 지시에도 재시도 안내 한 줄이 있다.
 - 생성 요청이 끊겨도 재시도는 같은 ID와 키로 같은 세션을 찾는다(기존 동작). 재시도 때 프롬프트 내용이 달라도 데몬이 같은 생성으로 본다.
 - 사람이 다른 코디네이터를 지정하면 `retiredCoordinator`가 `null`이 되어 읽기 예외와 보관 줄이 함께 사라진다.
 - 보관된 옛 코디네이터는 읽을 수 없다는 두 언어 오류를 돌려준다.
@@ -68,8 +69,9 @@ Intent: [intent.md](intent.md)
 | R3 | 카드 수를 못 세면 줄을 빼고 교체는 계속한다 | "an unknown card count…", "a failing card count still replaces…" |
 | R4 | 교체는 생성 요청에만 프롬프트를 담고 따로 보내지 않으며 옛 세션을 보관하지 않는다 | "a replacement creates the new coordinator with the handover…" |
 | R5 | 추가 지시 파일은 선택이며 정리·상한을 거쳐 맨 끝에 붙는다 | "host instructions go last…", "host instructions lose control…", "the host instruction file is optional…" |
-| R6 | 보관 줄은 보드가 교체로 은퇴시킨 코디네이터만, 진행 중·권한 대기면 꺼진다 | "only the coordinator a board replacement retired…", "a running or waiting retired coordinator…" |
+| R6 | 보관 줄은 보드가 만들고 교체로 은퇴시킨 코디네이터만, 진행 중·권한 대기(`attentionReason` 포함)면 꺼진다 | "only the coordinator a board replacement retired…", "a running or waiting retired coordinator…", "a coordinator the person picked by hand…" |
 | R7 | 보관은 사람이 누를 때만, 조건을 다시 확인한 뒤 | "settings offer the retired coordinator…", "after the person picks another coordinator…" |
+| R10 | 지정 전 도구 호출은 구분된 두 언어 오류, 시작 지시에 재시도 안내 | "a board tool called from the first prompt before the switch…", `test/lifecycle.test.ts` 준비 중 세션 거절 |
 | R8 | 새 코디네이터만 바로 앞 코디네이터를 읽고, 다른 비관리 세션은 여전히 못 읽는다 | "the new coordinator can read the coordinator it replaced…" |
 | R9 | 확인 문구와 설정 줄이 두 언어로 보인다 | 지어낸 데이터로 넓은 화면·390px, 한·영 화면 확인 |
 

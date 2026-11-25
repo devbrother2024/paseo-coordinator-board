@@ -12,12 +12,16 @@ import { coordinatorHandled } from "./review-wait";
 
 type ReviewContext = () => Promise<{ thresholdHours: number; covered: ReadonlySet<string> }>;
 
+export const notDesignatedYet = "보드가 아직 이 세션을 코디네이터로 지정하기 전입니다. 잠시 뒤 다시 부르세요. / The board has not designated this session as the coordinator yet. Call again shortly.";
+
 export async function managedRowsForCoordinator(paseo: PluginHandlerContext["paseo"], prefs: PreferenceStore, caller: string, targets?: ReadonlySet<string>) {
   const rows = await discoverBoardSessions(paseo, prefs, targets);
   const scope = prefs.read();
   const managed = managedSessions(rows, scope);
   if (scope.coordinator !== caller || !(managed.some(r => r.id === caller && !r.serverId) ||
     (isManagedCoordinator(scope, caller) && rows.some(r => r.id === caller && !r.serverId)))) {
+    // A session the board is still setting up may call a tool from its first prompt before the switch completes.
+    if (scope.pendingCoordinator?.id === caller && scope.coordinator !== caller) throw new Error(notDesignatedYet);
     throw new Error("코디네이터 지정이 해제되었습니다.");
   }
   return managed;
@@ -40,7 +44,7 @@ export function attachCoordinatorTools(server: Pick<PluginServerContext, "addHoo
         const target = (await discoverSessions(paseo)).find(r => r.id === sessionId && !r.serverId);
         if (!target) throw new Error("옛 코디네이터 세션을 찾을 수 없습니다. 보관되었거나 지워졌을 수 있습니다. / The previous coordinator session was not found. It may have been archived or removed.");
         const data = await reader.read(paseo, target, true);
-        if (handoverSource(prefs.read(), agent.id) !== sessionId) throw new Error("관리 범위가 바뀌었습니다.");
+        if (handoverSource(prefs.read(), agent.id) !== sessionId) throw new Error("관리 범위가 바뀌었습니다. / The managed scope changed.");
         return { text: JSON.stringify(data ? { sessionId, previousCoordinator: true, evidenceId: data.id, turns: data.turns }
           : { sessionId, previousCoordinator: true, status: target.status, turns: [] }) };
       }
