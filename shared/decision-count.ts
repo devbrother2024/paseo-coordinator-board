@@ -1,7 +1,8 @@
 import type { Note, SessionRow } from "./contract";
 import { trackedCoverage, pullKey, type TrackedDecisionView } from "./tracked-decisions";
 import type { PullRequestView } from "./prs";
-import { decidesNow } from "./merge-card-place";
+import { mergeHolds, mergeRecordLinks, snapshotHoldSessions } from "./merge-hold";
+import { placeMergeCards, pullDecidesNow } from "./merge-card-place";
 
 export function displayLane(session: SessionRow, note: Note | undefined): SessionRow["lane"] | "done" {
   if (session.nativePending) return "human";
@@ -22,9 +23,14 @@ export function displayLane(session: SessionRow, note: Note | undefined): Sessio
 
 export function decisionCount(view: {sessions: SessionRow[]; notes: Record<string, Note>; pullRequests?: PullRequestView; trackedDecisions?: TrackedDecisionView}) {
   const sessions = view.sessions.filter(row => displayLane(row, view.notes[row.id]) === "human");
-  // A merge card waits in project progress until GitHub confirms its PR is ready.
-  const records = (view.trackedDecisions?.items ?? []).filter(item => decidesNow(item, view.pullRequests));
+  const ledger = view.trackedDecisions?.items ?? [];
+  const prs = view.pullRequests?.items ?? [];
+  // A merge card whose work session still runs on the PR branch waits in project progress. Only sessions
+  // in the snapshot count here; the board screen also reads other hosts.
+  const holds = mergeHolds(prs, { sessions: snapshotHoldSessions(view.sessions), links: mergeRecordLinks(ledger) });
+  // A merge card also waits there until GitHub confirms its PR is ready. The board screen uses the same placement.
+  const records = placeMergeCards(ledger, view.pullRequests, holds).deciding;
   const covered = trackedCoverage(records);
   return records.length + sessions.filter(s => !covered.sessionIds.has(s.id)).length +
-    (view.pullRequests?.items.filter(pr => pr.lane === "review" && !covered.pullKeys.has(pullKey(pr.repo, pr.number))).length ?? 0);
+    prs.filter(pr => pullDecidesNow(pr, holds) && !covered.pullKeys.has(pullKey(pr.repo, pr.number))).length;
 }

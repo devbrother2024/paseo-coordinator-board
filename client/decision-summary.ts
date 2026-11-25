@@ -2,6 +2,7 @@ import { Parser } from "./vendor/marked/marked";
 import { lexBoardInline } from "./board-markdown";
 import type { Translate } from "./language";
 import { sessionDetail, type Card } from "./model";
+import { asksForDecision, unquoted } from "../shared/question-request";
 
 // A button can describe a Markdown title without putting links inside its press target.
 export function plainDecisionTitle(title: string) {
@@ -34,6 +35,41 @@ function excerptQuestion(text: string, dedicatedQuestion: boolean) {
     if (question) return question.slice(0, question.search(/[?？]/) + 1);
   }
   return lines[0] || "";
+}
+
+// Bold, italic or code that opens in one part and closes in another would break the Markdown.
+const balanced = (text: string) => ["**", "__", "`"].every(mark => text.split(mark).length % 2 === 1);
+
+/**
+ * A session's question Markdown starts at the line that asks. The title is the sentence in that line that makes the
+ * request, with the questions right before it. The sentences before those lead up to it, and everything after it is the body.
+ */
+export function questionParts(markdown: string) {
+  const [first = "", ...rest] = markdown.split("\n");
+  const after = rest.join("\n").replace(/^\s*\n/, "").trimEnd();
+  const whole = { lead: "", title: first.trim(), body: after };
+  // Sentence ends found outside quotes, so a quoted question never splits the line.
+  const cuts = [0, ...[...unquoted(first).matchAll(/[.!?。？！]+["'”’)\]]*\s+/g)].map(match => match.index + match[0].length), first.length];
+  const sentences = cuts.slice(1).map((end, index) => first.slice(cuts[index], end)).filter(sentence => sentence.trim());
+  const ask = sentences.findIndex(asksForDecision);
+  if (sentences.length < 2 || ask < 0) return whole;
+  // Questions right before the request sentence ask the same thing ("A or B? Which one should I use?").
+  let start = ask;
+  while (start > 0 && /[?？]["'”’)\]]*\s*$/.test(unquoted(sentences[start - 1]))) start--;
+  const lead = sentences.slice(0, start).join("").trim();
+  const title = sentences.slice(start, ask + 1).join("").trim();
+  const tail = sentences.slice(ask + 1).join("").trim();
+  if (![lead, title, tail].every(balanced)) return whole;
+  return { lead, title, body: [tail, after].filter(Boolean).join("\n\n") };
+}
+
+/**
+ * The question title shows two lines, so "More" must appear whenever that cuts it off: on a narrow screen or with a
+ * large font even a short title can. `fullHeight` is the title laid out in full and `shownHeight` the two-line title.
+ */
+export function questionFolds(input: { bodyFolds: boolean; fullHeight?: number; shownHeight?: number }) {
+  const { bodyFolds, fullHeight, shownHeight } = input;
+  return bodyFolds || (fullHeight !== undefined && shownHeight !== undefined && fullHeight > shownHeight + 1);
 }
 
 export function decisionSummary({ session, note }: Card, t: Translate) {

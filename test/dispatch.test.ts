@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "bun:test";
 import { createPaseoApi } from "@getpaseo/client";
 import { dispatchWorker, readCatalog, readManagedWorkspaces } from "../server/dispatch";
@@ -166,18 +167,55 @@ test("검증되지 않은 생성 모드는 완료로 보고하지 않고, 재시
   assert.equal(reqs.length, 1);
 });
 
-test("권한 지정 전 버전이 생성한 작업은 최초 페이로드 그대로 재확인한다", async () => {
+test("로컬 배정은 같은 요청 키에서 경로 출처만 바꿔도 거절한다", async () => {
+  const { sdk, submitted } = host();
+  const request = { ...task, expectedRoute: sol, needsHooks: true };
+  await dispatchWorker(sdk, request, () => state);
+  await assert.rejects(dispatchWorker(sdk, { ...request, routeSource: "coordinator" }, () => state), /다른 작업/);
+  assert.equal(submitted.length, 1);
+});
+
+test("권한과 경로 출처를 기록하기 전에 생성한 작업은 최초 페이로드 그대로 재확인한다", async () => {
   const { sdk, reqs, submitted } = host();
   const request = { ...task, needsHooks:true, expectedRoute:sol };
   await dispatchWorker(sdk, request, () => state);
   const original = reqs[0];
   delete original.metadata!["coordinator-board/dispatch-mode"];
+  delete original.metadata!["coordinator-board/dispatch-route-source"];
   delete original.config.modeId;
+  original.metadata!["coordinator-board/dispatch-intent"] = createHash("sha256").update(JSON.stringify([
+    task.projectId, task.workspaceId, task.grade, task.title, task.prompt, true, sol.provider, sol.model, sol.effort,
+  ])).digest("hex");
   const replay = await dispatchWorker(sdk, request, () => state);
   assert.equal(replay.sessionId, original.agentId);
   assert.equal("modeId" in replay, false);
   assert.equal(reqs.length, 1);
   assert.equal(submitted.length, 2);
+});
+
+test("명시한 경로의 실행기·모델·강도와 제외 목록을 확인한다", async () => {
+  const { sdk, submitted } = host();
+  const request: DispatchInput = { ...task, routeSource: "coordinator", expectedRoute: sol };
+  await assert.rejects(dispatchWorker(sdk, request, () => ({ ...state, excludedProviders: ["codex"] })), /excluded provider/i);
+  for (const expectedRoute of [
+    { ...sol, provider: "missing" }, { ...sol, model: "missing" },
+    { ...sol, model: "legacy" }, { ...sol, effort: "unsupported" },
+  ]) {
+    await assert.rejects(dispatchWorker(sdk, { ...request, expectedRoute }, () => state), /destination catalog/i);
+  }
+  assert.equal(submitted.length, 0);
+});
+
+test("명시한 경로에 필수 훅과 작업 권한 모드가 있어야 한다", async () => {
+  const { sdk, submitted, daemon } = host();
+  const request: DispatchInput = { ...task, routeSource: "coordinator" };
+  const configured = { ...state, workerModeOverrides: { cursor: "auto-review" } };
+  await assert.rejects(dispatchWorker(sdk, { ...request, needsHooks: true }, () => configured), /native hooks/i);
+  await assert.rejects(dispatchWorker(sdk, request, () => state), /choose a worker permission mode/i);
+  await assert.rejects(dispatchWorker(sdk, { ...request, expectedModeId: "another-mode" }, () => configured), /differs from the assignment/i);
+  daemon.listProviderModes = async () => ({ modes: [] });
+  await assert.rejects(dispatchWorker(sdk, request, () => configured), /could not verify.*worker permission mode/i);
+  assert.equal(submitted.length, 0);
 });
 
 test("직접 저장한 실행기 기본 강도를 보존하고 추천 목록 밖의 기본 모델은 지원되는 high를 고른다", () => {

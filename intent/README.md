@@ -167,4 +167,5 @@ Spec: [spec.md](spec.md)
 | 이름 | 상태 | 경로 | 한 줄 |
 |---|---|---|---|
 | [intent-workflow](intent-workflow/intent.md) | 구현됨 (PR #52) | 세션 | 이 저장소에 intent·spec·plan 구조를 들이고, 세션 경로와 접수 경로를 정한다 |
+| [assign-explicit-route](assign-explicit-route/intent.md) | 구현됨 (PR #55) | 세션 | 코디네이터가 고른 모델 경로를 보드의 원격 배정에 전달한다 |
 | [replace-bootstrap](replace-bootstrap/intent.md) | 구현됨 (PR #57) | 세션 | 보드에서 코디네이터를 교체하면 새 세션이 시작 지시로 옛 코디네이터의 일을 이어받고, 옛 세션은 사람이 설정에서 보관한다 |

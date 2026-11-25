@@ -4,16 +4,47 @@ import {
   cardCompletionRequest, choiceExplanationRequest, deferredNotice, missingChoicesNotice, OTHER_CHOICES, type Bilingual, type ChoiceGaps,
 } from "../shared/question-choices";
 
-/** The first `count` lines of Markdown, with an open code fence closed so the rest of the card renders normally. */
+const tableDivider = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const isTableStart = (line: string, next: string | undefined) => line.includes("|") && next !== undefined && next.includes("|") && tableDivider.test(next);
+const isHeading = (line: string) => /^\s{0,3}#{1,6}(\s|$)/.test(line);
+
+/**
+ * The first `count` lines of Markdown, cut so no block shows as a broken half: an open code fence is closed,
+ * a table keeps its header with its first row (the header and divider count as one line), and a heading at the end
+ * keeps the first thing under it.
+ */
 export function previewMarkdown(markdown: string, count = 4) {
   const lines = markdown.split(/\r?\n/);
   const kept: string[] = [];
   let fence: string | null = null;
-  for (const line of lines) {
-    if (kept.filter(Boolean).length >= count) break;
+  let units = 0;
+  let i = 0;
+  // Past the limit, a heading at the end gets one extension: up to the first line of content under it.
+  let extended = false;
+  let extending = false;
+  while (i < lines.length) {
+    if (units >= count && !extending) {
+      const lastShown = kept.findLast(line => line.trim());
+      if (extended || fence !== null || lastShown === undefined || !isHeading(lastShown)) break;
+      extended = extending = true;
+    }
+    const line = lines[i];
+    if (fence === null && isTableStart(line, lines[i + 1])) {
+      kept.push(line, lines[i + 1]);
+      i += 2;
+      units++;
+      if (i < lines.length && lines[i].trim() && lines[i].includes("|")) { kept.push(lines[i]); i++; units++; }
+      extending = false;
+      continue;
+    }
     kept.push(line);
+    i++;
+    if (line.trim()) units++;
     const opener = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    const opening = !!opener && fence === null;
     if (opener) fence = fence ? null : opener;
+    // An opening fence is not content yet: keep going to the block's first line.
+    if (line.trim() && !opening) extending = false;
   }
   const more = kept.length < lines.length && lines.slice(kept.length).some(line => line.trim());
   return { preview: (fence ? [...kept, fence] : kept).join("\n").trimEnd(), more };
