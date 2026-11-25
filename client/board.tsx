@@ -10,7 +10,7 @@ import { closedRevision } from "./tracked-reply-draft";
 import { mentionsSecurityGate, trackedCoverage, trackedReplyRoute, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
 import { projectFolderMap } from "../shared/project-folders";
 import { MergeFeedback, PullRequestCard, PullRequestSettings, WaitingMergeRow, type MergeNotice, type WorkSessionLink } from "./pull-requests";
-import { waitingMergeCard } from "../shared/merge-card-place";
+import { ownKanbanEntry, waitingMergeCard } from "../shared/merge-card-place";
 import { pullRowKey, recordActionKey, sessionRowKey, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
 import { rankDecisionRows, priorityLabel } from "./decision-priority";
 import { DecisionEditingRow, keepEditingPositions, useDecisionEditing } from "./decision-editing";
@@ -165,7 +165,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       title={item.title} why={wait.why} theme={theme} /> : null;
   };
   const hostWideFollowups = followups.filter(item=>item.entry.projectId === null);
-  const showHostWide = inFilter(null) && hostWideVisible({records:hostWideRecords.length, followups:hostWideFollowups.length});
+  // A host-wide merge card waiting as a PR row shows in its project, not here. Count only what this section shows.
+  const hostWideShown = hostWideRecords.filter(item => ownKanbanEntry(waitingMerges.get(item.key)));
+  const showHostWide = inFilter(null) && hostWideVisible({records:hostWideShown.length, followups:hostWideFollowups.length});
   const {records:filteredRecords,sessions:filteredSessions,prs:filteredPrs}=decisionsFor(inFilter);
   const filteredTotal=filteredRecords.length+filteredSessions.length+filteredPrs.length;
   const filteredHistory=history.filter(entry=>inFilter(entry.projectId));

@@ -54,3 +54,7 @@ export function settleMergeCards<T extends SettleCard>(items: readonly T[], view
 }
 
 export const settledKey = (repo: string, number: number) => repo + "#" + number;
+
+// Whether a ledger card takes a place of its own in the kanban. A merge card waiting with a PR row
+// shows as that row in its project, so it does not count toward a section (such as Host-wide) by itself.
+export const ownKanbanEntry = (wait: MergeWait | null | undefined) => !wait || !wait.pr;

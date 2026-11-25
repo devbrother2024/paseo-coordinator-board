@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { closedMergeTarget, settleMergeCards, settledKey, waitingMergeCard } from "../shared/merge-card-place";
+import { closedMergeTarget, ownKanbanEntry, settleMergeCards, settledKey, waitingMergeCard } from "../shared/merge-card-place";
 import { decisionCount } from "../shared/decision-count";
 import { trackedDecisionSchema } from "../shared/tracked-decisions";
 import type { PullRequestItem, PullRequestView } from "../shared/prs";
@@ -71,4 +71,12 @@ test("only a PR missing from a fully read open list is a merge or close candidat
   expect(closedMergeTarget(card(), view([pull()]))).toBeNull();
   for (const status of ["unavailable", "truncated", "unmapped", "off"] as const) expect(closedMergeTarget(card(), view([], status))).toBeNull();
   expect(closedMergeTarget(card({ matchedPull: { repo: "example/app", number: 12 } }), view([]))).toBeNull();
+});
+
+test("a host-wide section counts only cards it shows: a merge card waiting as a PR row is not one of them", () => {
+  const hostWide = [card({ projectId: null }), card({ id: "b", key: "ledger-b", projectId: null, mergeTarget: { repo: "example/app", number: 13 } })];
+  const asRow = view([pull({ projectIds: ["studio"] })]);
+  expect(hostWide.filter(item => ownKanbanEntry(waitingMergeCard(item, asRow))).map(item => item.key)).toEqual(["ledger-b"]);
+  expect(ownKanbanEntry({ why: "unmapped" })).toBe(true);
+  expect(ownKanbanEntry(null)).toBe(true);
 });

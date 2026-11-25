@@ -86,7 +86,9 @@ export function ReplyCard({entry, theme, links, open, openRemote}:Props) {
       <Text selectable style={{color:colors.foreground,fontWeight:"600"}}>{entry.title}</Text>
       <HistoryMarkdown theme={theme} source={`[${pullRef!.repo} #${pullRef!.number}](${pullUrl(pullRef!.repo,pullRef!.number)})`} />
     </> : <HistoryMarkdown theme={theme} source={entry.title} heading />}
-    <Text selectable style={{color:colors.foregroundMuted,fontSize:12}}>{[status, ledgerWaiting, mergeNotificationLabel(merge?.notification, t), date, merge?.mergeSha?.slice(0, 12)].filter(Boolean).join(" · ")}</Text>
+    <Text selectable style={{color:colors.foregroundMuted,fontSize:12}}>{[status, ledgerWaiting, mergeNotificationLabel(merge?.notification, t),
+      // Without the board's own merge record, the time is when the board confirmed the merge or close.
+      settled && !merge ? t("보드 확인 ", "Board confirmed ") + date : date, merge?.mergeSha?.slice(0, 12)].filter(Boolean).join(" · ")}</Text>
     {!!sessions.length && <View style={{flexDirection:"row",flexWrap:"wrap",gap:5}}>{sessions.map(session =>
       <SessionReference key={JSON.stringify([session.role,session.host,session.id])} session={session} state={session.state && states[session.state]} notFound={notFound && session.role !== "source"}
         open={open} openRemote={openRemote} theme={theme} />)}</View>}
