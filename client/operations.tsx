@@ -21,6 +21,7 @@ import { FactReplyControls } from "./fact-reply-controls";
 import { MergeJudgmentControls } from "./merge-judgment-controls";
 import { CoordinatorPinControls } from "./coordinator-pin";
 import { CoordinatorReplace } from "./coordinator-replace";
+import { RetiredCoordinator } from "./retired-coordinator";
 import { RouteEditor, routeName, wrap, type RoutingSave } from "./route-editor";
 import { useBoardLanguage } from "./language";
 import { explainEmptyRoute } from "./route-options";
@@ -250,7 +251,10 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
       extraAction={replacing => <Button theme={theme} label={t("다이제스트 요청", "Request digest")}
         disabled={busy || replacing || photoDraft.reading}
         onPress={() => { if (!photoDraft.readPending.current) void digest.request(); }} />}
-      footer={<DigestFeedback theme={theme} feedback={digest.feedback} />} />}
+      footer={<>
+        <RetiredCoordinator theme={theme} coordinator={coordinator} open={openCoordinator} />
+        <DigestFeedback theme={theme} feedback={digest.feedback} />
+      </>} />}
   </View>;
 
   return <View style={section}>

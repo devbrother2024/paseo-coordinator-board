@@ -87,7 +87,9 @@ export function CoordinatorReplace({ theme, coordinator, data, loading, disabled
     </View>}
     {confirm && target && <Text accessibilityLiveRegion="polite" style={{ color: c.foreground }}>
       {t(`교체할 모델 · ${routeName(target, t)}`, `Replacing with ${routeName(target, t)}`)}{mode ? " · " + t(`도구 권한 · ${mode.label}`, `Tool permissions · ${mode.label}`) : ""}{"\n"}
-      {t("새 운영 세션이 준비되면 담당자를 바꿉니다. 진행 중인 작업과 결정 카드는 유지됩니다.", "The new session takes over when ready. Current work and decisions stay on the board.")}
+      {t("새 운영 세션이 준비되면 담당자를 바꿉니다. 진행 중인 작업과 결정 카드는 유지됩니다.", "The new session takes over when ready. Current work and decisions stay on the board.")}{"\n"}
+      {t("새 세션은 옛 대화 맥락이 없습니다. 보드가 옛 코디네이터의 최근 기록과 열린 카드를 읽고 이어 가도록 시작 지시를 함께 보냅니다.",
+        "The new session has none of the old conversation. The board sends start instructions with it so it reads the previous coordinator's recent record and open cards and carries on.")}
     </Text>}
     {confirm && choice && <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
       <Switch accessibilityRole="switch" accessibilityLabel={rememberLabel} value={remember} disabled={blocked} onValueChange={setRemember}

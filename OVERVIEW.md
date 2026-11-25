@@ -39,10 +39,22 @@ The board records a fingerprint of the tool definitions (names, descriptions and
 
 There are two fixes.
 
-1. Choose **Replace with a new session**. This creates a coordinator in the operations folder and keeps current work and decision cards.
+1. Choose **Replace with a new session**. This creates a coordinator in the operations folder and keeps current work and decision cards. The new session follows its start instructions to read the previous coordinator's record and carry on (see **Handover after a replacement** below).
 2. Choose **Open coordinator session** and type `/clear` yourself. A new conversation starts in the same session, without the earlier conversation. The board never types `/clear` or `/compact` for you.
 
 The notice goes away once the new conversation starts. Some board tools that answer in plain text also say in their result that a replacement is needed when called with the old definitions. Tools that answer in JSON keep their result unchanged, so for those the notice on the board is the only signal. The board shows this only for Claude Code coordinators. Other providers may receive the new tools when Paseo reopens the session, which the board cannot tell, so it shows nothing for them.
+
+### Handover after a replacement
+
+A replacement coordinator starts without the old conversation. The confirmation box says so, and the board puts start instructions into the request that creates the new session. They open with **[Coordinator Board · Coordinator start]** to show they come from the board, and they carry the previous coordinator's session ID, a request to read its record with `read_board_conversation` and list the work in progress and the promises made before carrying on, and the number of open decisions and ledger cards. The new coordinator can read that record through the tool even when the previous coordinator sits outside the managed projects, as in the operations folder. Only the coordinator right before it can be read this way, and only while the session the board created by replacement is the coordinator. The board sends no separate message to the old or the new session. **Replace with a new session** in the board update notice follows the same flow.
+
+The previous coordinator stays after a replacement. **Settings → Replace coordinator** shows a **Previous coordinator · Archive** row: press **Archive** once the new coordinator has read the record. While the old session is still running or waiting on a permission request, the button is off and the reason is shown.
+
+A host administrator can put `coordinator-start.md` in the plugin data folder (`$PASEO_HOME/plugin-data/coordinator-board`) to add start instructions for every new coordinator. The board reads it each time it creates a coordinator and appends it to the start instructions, also on a first creation with no previous coordinator. A missing or empty file is ignored, only the first 4,000 characters are used, and control and bidirectional control characters other than line breaks and tabs are removed. For example:
+
+```markdown
+When you start, follow the START.md steps in the operations folder first.
+```
 
 ## Work with a coordinator
 

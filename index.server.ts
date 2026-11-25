@@ -55,7 +55,12 @@ export default function contribute(server: PluginServerContext) {
   facts.register(server);
   const operatingRoot = join(home, "plugin-workspaces");
   const operatingFolders = operatingDirectories(operatingRoot);
-  const operations = createOperations(prefs, operatingRoot, facts, () => invalidateCount());
+  // Counted from the same snapshot as the board, for the handover prompt of a replacement coordinator.
+  const openCards = async (paseo: PluginHandlerContext["paseo"]) => {
+    const view = await reads.read(() => buildSnapshot(paseo));
+    return { decisions: decisionCount(view), ledger: view.trackedDecisions.items.length };
+  };
+  const operations = createOperations(prefs, operatingRoot, facts, () => invalidateCount(), openCards);
   operations.register(server);
   registerSessionLinks(server, prefs);
   const decisions = new DecisionSender(prefs, notes, reader);
