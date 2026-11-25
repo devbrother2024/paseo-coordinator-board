@@ -3,7 +3,7 @@ import { Platform, Text, View, type TextStyle } from "react-native";
 import { openExternalUrl } from "@getpaseo/plugin/client";
 import { lexBoardMarkdown } from "./board-markdown";
 import { GitHubPullLink } from "./github-pull-link";
-import { pullReferenceTokens, tableRowClues, type PullLinkContext } from "./pull-reference-markdown";
+import { fallbackRepository, pullReferenceTokens, tableRowClues, type PullLinkContext } from "./pull-reference-markdown";
 import type { RepositoryIndex } from "./pull-repositories";
 import type { Token, Tokens } from "./vendor/marked/marked";
 import type { Theme } from "./controls";
@@ -42,6 +42,8 @@ export function HistoryMarkdown({source,theme,pullRepository,preview=false,headi
 }) {
   const tokens=useMemo(()=>lexBoardMarkdown(source),[source]);
   const known=useContext(KnownPullRepositories);
+  // The card's repository applies only when the whole text names no other repository.
+  const repository=useMemo(()=>fallbackRepository(tokens,pullRepository,known),[tokens,pullRepository,known]);
   const colors=theme.colors;
   const base:TextStyle={color:muted ? colors.foregroundMuted : colors.foreground,fontSize:muted ? 13 : 14,lineHeight:21};
   function paragraph(token:Token,i:number,style?:TextStyle,title=false) {
@@ -49,7 +51,7 @@ export function HistoryMarkdown({source,theme,pullRepository,preview=false,headi
       {"tokens" in token && token.tokens ? renderInline(token.tokens) : "text" in token ? token.text : token.raw}
     </Text>;
   }
-  const renderInline = (tokens: Token[], row?: PullLinkContext["row"]) => inline(pullReferenceTokens(tokens, { repository: pullRepository, known, row }), theme);
+  const renderInline = (tokens: Token[], row?: PullLinkContext["row"]) => inline(pullReferenceTokens(tokens, { repository, known, row }), theme);
   function blocks(all:Token[],topLevel=false):ReactNode[] {
     const visible=all.filter(token=>!["space","def"].includes(token.type));
     return (preview ? visible.slice(0,1) : visible).map((token,i)=>{

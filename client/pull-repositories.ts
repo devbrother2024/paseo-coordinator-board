@@ -6,8 +6,6 @@ import { repositorySlug } from "../shared/prs";
  */
 export type RepositoryIndex = {
   readonly names: ReadonlyMap<string, readonly string[]>;
-  /** Only the repository part of owner/repository, without project titles. */
-  readonly repoNames: ReadonlyMap<string, readonly string[]>;
   readonly repos: ReadonlySet<string>;
   /** Names that are not one word (spaces, Korean and other letters), lowercased and longest first, matched whole before splitting text into words. */
   readonly phrases: readonly string[];
@@ -22,7 +20,6 @@ const key = (name: string) => name.trim().toLowerCase();
 
 export function repositoryIndex(entries: Iterable<Entry>): RepositoryIndex {
   const names = new Map<string, Set<string>>();
-  const repoNames = new Map<string, Set<string>>();
   const repos = new Set<string>();
   const put = (map: Map<string, Set<string>>, name: string | null | undefined, repo: string) => {
     if (!name?.trim()) return;
@@ -37,24 +34,20 @@ export function repositoryIndex(entries: Iterable<Entry>): RepositoryIndex {
     const repo = parsed.data;
     repos.add(repo);
     add(repo.split("/")[1], repo);
-    put(repoNames, repo.split("/")[1], repo);
     for (const name of entry.names ?? []) add(name, repo);
   }
   const sorted = (map: Map<string, Set<string>>) => new Map([...map].map(([name, set]) => [name, [...set].sort()]));
   const phrases = [...names.keys()].filter(name => !/^[\w.-]+(?:\/[\w.-]+)?$/.test(name)).sort((a, b) => b.length - a.length || a.localeCompare(b));
-  return { names: sorted(names), repoNames: sorted(repoNames), repos, phrases };
+  return { names: sorted(names), repos, phrases };
 }
 
-/**
- * The repository a name stands for: null when the board does not know the name.
- * `repositoryOnly` ignores project titles, for names found anywhere in a line rather than right before a number.
- */
-export function resolveRepositoryName(index: RepositoryIndex | undefined, name: string, repositoryOnly = false): RepositoryClue | null {
+/** The repository a name stands for: null when the board does not know the name. */
+export function resolveRepositoryName(index: RepositoryIndex | undefined, name: string): RepositoryClue | null {
   if (!index) return null;
   const wanted = key(name);
   if (!wanted) return null;
   if (wanted.includes("/")) return index.repos.has(wanted) ? { repo: wanted } : null;
-  const found = (repositoryOnly ? index.repoNames : index.names).get(wanted);
+  const found = index.names.get(wanted);
   if (!found?.length) return null;
   return found.length === 1 ? { repo: found[0] } : { blocked: true };
 }

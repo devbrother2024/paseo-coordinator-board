@@ -1,40 +1,9 @@
 import { expect, test } from "bun:test";
 import { lexBoardMarkdown } from "../client/board-markdown";
-import { pullReferenceTokens } from "../client/pull-reference-markdown";
-import type { Token } from "../client/vendor/marked/marked";
+import { fallbackRepository, pullLinksIn, pullReferenceTokens } from "../client/pull-reference-markdown";
+import { knownPullRepositories, repositoryIndex } from "../client/pull-repositories";
 
-function references(tokens: Token[]): {repo: string; number: number}[] {
-  return tokens.flatMap(token => token.type === "pullReference" ? [{ repo: token.repo, number: token.number }]
-    : "tokens" in token && Array.isArray(token.tokens) ? references(token.tokens) : []);
-}
-
-test("bare PR numbers in a heading or formatted paragraph link to the card repository", () => {
-  const tokens = lexBoardMarkdown("# Approve #42\n\nSee **#43** and (#44번).");
-  expect(pullReferenceTokens(tokens)).toBe(tokens);
-  expect(references(pullReferenceTokens(tokens, { repository: "studio/app" }))).toEqual([
-    { repo: "studio/app", number: 42 },
-    { repo: "studio/app", number: 43 },
-    { repo: "studio/app", number: 44 },
-  ]);
-});
-
-test("code, explicit links, qualified references, escapes and invalid PR numbers are left alone", () => {
-  const tokens = lexBoardMarkdown([
-    "See `#1`, [#2](https://example.com), other/repo#3, other/repo #4, \\#5.",
-    "",
-    "```text",
-    "#6",
-    "```",
-    "",
-    "#0 and #2147483648 but #42.",
-  ].join("\n"));
-  expect(references(pullReferenceTokens(tokens, { repository: "studio/app" }))).toEqual([{repo:"studio/app", number:42}]);
-});
-
-const { repositoryIndex, knownPullRepositories } = await import("../client/pull-repositories");
-const { tableRowClues } = await import("../client/pull-reference-markdown");
-import type { Tokens } from "../client/vendor/marked/marked";
-
+const card = "studio/card";
 const known = repositoryIndex([
   { repo: "studio/alpha-web", names: ["Alpha"] },
   { repo: "studio/beta" },
@@ -45,15 +14,83 @@ const known = repositoryIndex([
   { repo: "studio/site", names: ["web"] },
   { repo: "studio/_alpha-web" },
 ]);
+const links = (markdown: string, repository?: string, index = known) => pullLinksIn(markdown, { repository, known: index });
+const one = (repo: string, number: number) => [{ repo, number }];
 
-function tableReferences(markdown: string, repository?: string) {
-  const table = lexBoardMarkdown(markdown).find(token => token.type === "table") as Tokens.Table;
-  const clues = tableRowClues(table, known);
-  return table.rows.map((row, r) => row.flatMap(cell => references(pullReferenceTokens(cell.tokens, { repository, known, row: clues[r] }))));
-}
+test("without a card repository or known repositories nothing is rewritten", () => {
+  const tokens = lexBoardMarkdown("승인 #42");
+  expect(pullReferenceTokens(tokens)).toBe(tokens);
+});
 
-test("each table row links its PR to the repository named in that row", () => {
-  expect(tableReferences([
+test("a number with no name beside it uses the card repository when the text names no other", () => {
+  expect(links("# 승인 #42\n\n**#43** 과 (#44번).", card)).toEqual([...one(card, 42), ...one(card, 43), ...one(card, 44)]);
+  expect(links("승인 #42")).toEqual([]);
+  // 코드, 링크 글자, 이스케이프, 잘못된 번호는 건드리지 않는다.
+  expect(links("`#1`, [#2](https://example.com), \\#5.\n\n```text\n#6\n```\n\n#0 그리고 #2147483648, #42.", card)).toEqual(one(card, 42));
+});
+
+test("owner/repository#N links only to a repository the board knows", () => {
+  expect(links("studio/beta#3 와 studio/beta #4 그리고 other/repo#5", card)).toEqual([...one("studio/beta", 3), ...one("studio/beta", 4)]);
+  // owner/repository 가 하나라도 있으면 이름 없는 번호는 카드 저장소로 가지 않는다.
+  expect(links("other/repo#5 정리 뒤 #6", card)).toEqual([]);
+  expect(links("alpha-web #1, other/repo #2 and #3", card)).toEqual(one("studio/alpha-web", 1));
+});
+
+test("the name right beside a number picks its repository; an unknown name leaves it unlinked", () => {
+  expect(links("alpha-web #12 와 beta #3")).toEqual([...one("studio/alpha-web", 12), ...one("studio/beta", 3)]);
+  expect(links("**Alpha** PR #12, 그리고 beta의 #3")).toEqual([...one("studio/alpha-web", 12), ...one("studio/beta", 3)]);
+  expect(links("[alpha-web](https://example.com/a) #12", card)).toEqual(one("studio/alpha-web", 12));
+  expect(links("#14 (beta)", card)).toEqual(one("studio/beta", 14));
+  expect(links("Merged #12 (alpha-web) and #13 (beta-api)", card)).toEqual([...one("studio/alpha-web", 12), ...one("studio/beta-api", 13)]);
+  expect(links("#18 ([beta](https://example.com/b))", card)).toEqual(one("studio/beta", 18));
+  // 링크로 쓴 저장소 이름도 이름이다(Codex 리뷰 재현 문장, 카드 저장소 alpha-web).
+  expect(links("[beta](https://github.com/studio/beta) #12", "studio/alpha-web")).toEqual(one("studio/beta", 12));
+  expect(links("alpha-web #1, [beta](https://github.com/studio/beta) #2 and #3", "studio/alpha-web")).toEqual([...one("studio/alpha-web", 1), ...one("studio/beta", 2)]);
+  // 조사를 떼고, 띄어 쓴 조사도 본다.
+  expect(links("GammaApi의 #166", card)).toEqual(one("labs/gamma-api", 166));
+  expect(links("beta-api에서 #20", card)).toEqual(one("studio/beta-api", 20));
+  expect(links("beta-api 에서 #21", card)).toEqual(one("studio/beta-api", 21));
+  expect(links("Alpha에서는 #12", card)).toEqual(one("studio/alpha-web", 12));
+  expect(links("Alpha랑 #12", card)).toEqual(one("studio/alpha-web", 12));
+  expect(links("web #31", card)).toEqual(one("studio/site", 31));
+  // 이름은 통째로 맞춘다.
+  expect(links("_alpha-web #12", card)).toEqual(one("studio/_alpha-web", 12));
+  for (const text of ["x_alpha-web #13", ".alpha-web #14", "x".repeat(200) + "_alpha-web #16"]) expect({ text, found: links(text, card) }).toEqual({ text, found: [] });
+  // 모르는 이름, 여럿 맞는 이름, 서로 다른 두 이름은 링크 없음.
+  for (const text of ["unknown-repo #5", "shared #4", "zeta-api의 #26", "zetaapp 의 #12", "ZetaApp #166", "ZetaApp의 #166", "zetaapp #166",
+    "#12 (zeta-api)", "alpha-web #12 (beta)"]) {
+    expect({ text, found: links(text, card) }).toEqual({ text, found: [] });
+  }
+  expect(links("beta #2, delta #5", card)).toEqual(one("studio/beta", 2));
+});
+
+test("project titles with spaces or Korean are matched whole beside a number", () => {
+  const titled = repositoryIndex([
+    { repo: "studio/alpha", names: ["Alpha Web"] },
+    { repo: "studio/alpha-tools", names: ["Alpha Web Tools"] },
+    { repo: "studio/web" },
+    { repo: "studio/kr", names: ["알파 웹"] },
+    { repo: "studio/one", names: ["알파"] },
+  ]);
+  const link = (text: string, repository?: string) => links(text, repository, titled);
+  expect(link("Alpha Web #12")).toEqual(one("studio/alpha", 12));
+  expect(link("alpha web의 #13")).toEqual(one("studio/alpha", 13));
+  expect(link("alpha web 에서 #13")).toEqual(one("studio/alpha", 13));
+  // 겹치는 이름은 가장 긴 것 먼저.
+  expect(link("Alpha Web Tools #14")).toEqual(one("studio/alpha-tools", 14));
+  expect(link("알파 웹 #15")).toEqual(one("studio/kr", 15));
+  expect(link("알파 웹에서 #16")).toEqual(one("studio/kr", 16));
+  expect(link("알파 #17", card)).toEqual(one("studio/one", 17));
+  expect(link("#18 (Alpha Web)")).toEqual(one("studio/alpha", 18));
+  expect(link("Web #19")).toEqual(one("studio/web", 19));
+  // 이름이 번호 옆에 없으면 링크 대상이 아니고, 카드 저장소도 막는다.
+  expect(link("Alpha Web 정리 후 #20", card)).toEqual([]);
+  expect(link("알파 웹 정리 후 #21", card)).toEqual([]);
+  expect(link("Alpha Webby #22", card)).toEqual([]);
+});
+
+test("a table's repository column, found by its header, links each row", () => {
+  expect(links([
     "| 저장소 | PR | 상태 |",
     "|---|---|---|",
     "| alpha-web | #12 | 병합됨 |",
@@ -63,87 +100,69 @@ test("each table row links its PR to the repository named in that row", () => {
     "| shared | #4 | 병합됨 |",
     "| | #5 | 병합됨 |",
     "| studio/beta | #6 | 병합됨 |",
-  ].join("\n"), "studio/card")).toEqual([
-    [{ repo: "studio/alpha-web", number: 12 }],
-    [{ repo: "studio/beta", number: 3 }],
-    [{ repo: "labs/gamma-api", number: 7 }],
-    [],
-    [],
-    [{ repo: "studio/card", number: 5 }],
-    [{ repo: "studio/beta", number: 6 }],
-  ]);
+  ].join("\n"), card)).toEqual([...one("studio/alpha-web", 12), ...one("studio/beta", 3), ...one("labs/gamma-api", 7), ...one("studio/beta", 6)]);
+  expect(links("| Repository | PR |\n|---|---|\n| beta | #3 |", card)).toEqual(one("studio/beta", 3));
+  // 머리가 없는 표는 칸을 추측하지 않는다. 다른 저장소 이름이 보이면 카드 저장소도 쓰지 않는다.
+  expect(links("| 이름 | 번호 |\n|---|---|\n| alpha-web | #12 |\n| delta | #2 |", card)).toEqual([]);
+  expect(links("| 메모 | 번호 |\n|---|---|\n| 고침 | #8 |", card)).toEqual(one(card, 8));
+  // 저장소 칸이 카드 저장소만 가리키면 빈 칸도 카드 저장소.
+  // (원장 카드의 저장소는 보드 색인에 들어 있다.)
+  const withCard = repositoryIndex([{ repo: card }, { repo: "studio/beta" }]);
+  expect(links("| 저장소 | PR |\n|---|---|\n| card | #1 |\n| | #2 |", card, withCard)).toEqual([...one(card, 1), ...one(card, 2)]);
 });
 
-test("a table without a repository header still finds the column that names known repositories", () => {
-  expect(tableReferences([
-    "| 이름 | 번호 |",
-    "|---|---|",
-    "| alpha-web | #12 |",
-    "| delta | #2 |",
-  ].join("\n"), "studio/card")).toEqual([[{ repo: "studio/alpha-web", number: 12 }], []]);
-  expect(tableReferences("| 메모 | 번호 |\n|---|---|\n| 고침 | #8 |", "studio/card")).toEqual([[{ repo: "studio/card", number: 8 }]]);
-  // 머리를 못 알아보는 표라도 같은 행에 모르는 저장소 이름이 있으면 카드 저장소로 가지 않는다.
-  expect(tableReferences("| 메모 | 대상 | 번호 |\n|---|---|---|\n| 고침 | zeta-api | #8 |\n| 고침 | ZetaApp | #9 |\n| 고침 | checks-failed | #10 |\n| 고침 | beta-api | #11 |", "studio/card")).toEqual([
-    [], [], [{ repo: "studio/card", number: 10 }], [{ repo: "studio/beta-api", number: 11 }],
-  ]);
-});
-
-test("a sentence links each PR number to the repository written before it", () => {
-  const link = (markdown: string, repository?: string) => references(pullReferenceTokens((lexBoardMarkdown(markdown)[0] as Tokens.Paragraph).tokens, { repository, known }));
-  expect(link("alpha-web #12 와 beta #3")).toEqual([{ repo: "studio/alpha-web", number: 12 }, { repo: "studio/beta", number: 3 }]);
-  expect(link("**Alpha** PR #12, 그리고 beta의 #3")).toEqual([{ repo: "studio/alpha-web", number: 12 }, { repo: "studio/beta", number: 3 }]);
-  // 같은 줄에서만 단서를 찾는다. 다음 줄의 단서 없는 번호는 카드 저장소.
-  expect(link("alpha-web #12\n그 다음 #13", "studio/card")).toEqual([{ repo: "studio/alpha-web", number: 12 }, { repo: "studio/card", number: 13 }]);
-  // 번호 뒤에만 이름이 있으면 그 줄의 이름 하나를 따른다.
-  expect(link("#14 (beta)", "studio/card")).toEqual([{ repo: "studio/beta", number: 14 }]);
-  // 모르는 저장소 이름, 둘 이상 맞는 이름은 잇지 않는다. 틀린 링크보다 링크 없음.
-  expect(link("unknown-repo #5", "studio/card")).toEqual([]);
-  expect(link("shared #4", "studio/card")).toEqual([]);
-  expect(link("#15 alpha-web beta", "studio/card")).toEqual([]);
-  expect(link("beta #2, delta #5", "studio/card")).toEqual([{ repo: "studio/beta", number: 2 }]);
-  expect(link("alpha-web fixed in PR #18", "studio/card")).toEqual([{ repo: "studio/alpha-web", number: 18 }]);
-  // 단서가 없으면 지금처럼 카드 저장소, 카드 저장소도 없으면 잇지 않는다.
-  expect(link("Approve #42", "studio/card")).toEqual([{ repo: "studio/card", number: 42 }]);
-  expect(link("Approve #42")).toEqual([]);
-  // 한 줄에 저장소 단서가 여럿이면 바로 앞(또는 바로 뒤 괄호) 이름이 없는 번호는 잇지 않는다.
-  expect(link("Merged #12 (alpha-web) and #13 (beta-api)", "studio/card")).toEqual([{ repo: "studio/alpha-web", number: 12 }, { repo: "studio/beta-api", number: 13 }]);
-  expect(link("#12 alpha-web 수정, #13 beta-api 수정", "studio/card")).toEqual([]);
-  // 줄에 모르는 저장소 이름이 있으면 카드 저장소로 가지 않는다. 바로 앞 이름은 조사를 떼고 본다.
-  expect(link("zeta-api 병합 완료 #26", "studio/card")).toEqual([]);
-  expect(link("#26 zeta-api 병합", "studio/card")).toEqual([]);
-  expect(link("zeta-api의 #26", "studio/card")).toEqual([]);
-  expect(link("GammaApi의 #166", "studio/card")).toEqual([{ repo: "labs/gamma-api", number: 166 }]);
-  expect(link("beta-api에서 #20", "studio/card")).toEqual([{ repo: "studio/beta-api", number: 20 }]);
-  // 이름과 조사 사이를 띄어 써도 바로 앞 이름이다.
-  expect(link("zetaapp 의 #12", "studio/card")).toEqual([]);
-  expect(link("beta-api 에서 #21", "studio/card")).toEqual([{ repo: "studio/beta-api", number: 21 }]);
-  // 프로젝트 이름은 번호 바로 앞에서만 단서다. 줄 다른 곳의 흔한 단어는 저장소로 보지 않는다.
-  // 줄에 프로젝트 이름이 있으면 링크 대상으로 쓰지 않더라도 카드 저장소로 가지 않는다.
-  expect(link("web 화면 고친 뒤 #30", "studio/card")).toEqual([]);
-  expect(link("Alpha 프로젝트 #12", "studio/card")).toEqual([]);
-  expect(link("Alpha에서는 #12", "studio/card")).toEqual([{ repo: "studio/alpha-web", number: 12 }]);
-  expect(link("Alpha랑 #12", "studio/card")).toEqual([{ repo: "studio/alpha-web", number: 12 }]);
-  // 모르는 CamelCase 이름, 번호 바로 앞의 모르는 한 단어도 저장소 단서다.
-  for (const text of ["ZetaApp #166", "ZetaApp의 #166", "ZetaApp 수정 (#26)", "zetaapp #166"]) expect(link(text, "studio/card")).toEqual([]);
-  expect(link("web #31", "studio/card")).toEqual([{ repo: "studio/site", number: 31 }]);
-  // 저장소 이름처럼 보이지 않는 일반어 앞 번호는 예전처럼 카드 저장소.
-  for (const text of ["GitHub PR #12", "follow-up #12", "v1.2 #12", "macOS #12", "README.md 수정 #12", "iOS #12", "JavaScript #12", "TypeScript #12",
-    "PowerShell #12", "YouTube #12", "iPhone #12", "feat/x 브랜치 #12", "e.g. 예시 #12", "i.e. 같은 #12", "UTF-8 고침 #12", "GPT-5 비교 #12",
-    "0.5.24-beta 배포 #12", "macos-latest 실패 #12", "Approve #12", "fixes #12", "checks-failed 상태 #12",
-    "Implements #12", "Supersedes #12", "Continues #12", "Part of #12", "Closes #12", "Refs #12", "See #12"]) {
-    expect(link(text, "studio/card")).toEqual([{ repo: "studio/card", number: 12 }]);
+test("every kind of other-repository clue in the text keeps the card repository away", () => {
+  const ambiguous = repositoryIndex([{ repo: "studio/shared-name" }, { repo: "labs/shared-name" }, { repo: "studio/alpha-web", names: ["Alpha Studio"] }]);
+  const kinds: [string, string][] = [
+    ["아는 다른 저장소", "alpha-web"],
+    ["프로젝트 이름 전체", "Alpha Studio"],
+    ["owner/repo 꼴", "other/tool"],
+    ["owner/repo#N 꼴", "other/tool#3"],
+    ["GitHub 주소", "https://github.com/other/tool/pull/3"],
+    ["여럿 맞는 이름", "shared-name"],
+  ];
+  for (const [kind, clue] of kinds) {
+    for (const form of [`${clue} 정리 후 #12`, `#12 ${clue} 정리`, `${clue}\n\n다음 문단 #12`, `- ${clue}\n- 목록 #12`, `| 메모 | 번호 |\n|---|---|\n| ${clue} | #12 |`]) {
+      const found = links(form, card, ambiguous);
+      expect({ kind, form, linksCard: found.some(link => link.repo === card) }).toEqual({ kind, form, linksCard: false });
+    }
   }
-  // 저장소 이름은 통째로 맞춘다. 앞에 붙은 밑줄·점·글자를 떼어 다른 저장소로 보내지 않는다.
-  expect(link("_alpha-web #12", "studio/card")).toEqual([{ repo: "studio/_alpha-web", number: 12 }]);
-  expect(link("x_alpha-web #13", "studio/card")).toEqual([]);
-  expect(link(".alpha-web #14", "studio/card")).toEqual([]);
-  expect(link("x".repeat(200) + "_alpha-web #16", "studio/card")).toEqual([]);
-  expect(link("alpha-web. 다음은 #15", "studio/card")).toEqual([{ repo: "studio/alpha-web", number: 15 }]);
-  // 화면이 줄바꿈으로 그리는 <br> 도 줄 경계다.
-  expect(link("beta #1<br>#2", "studio/card")).toEqual([{ repo: "studio/beta", number: 1 }, { repo: "studio/card", number: 2 }]);
-  expect(link("beta #3<br />#4", "studio/card")).toEqual([{ repo: "studio/beta", number: 3 }, { repo: "studio/card", number: 4 }]);
-  // owner/repo#N 꼴은 건드리지 않는다.
-  expect(link("other/thing#16 와 alpha-web #17")).toEqual([{ repo: "studio/alpha-web", number: 17 }]);
+  // 저장소 칸의 모르는 값도 다른 저장소 단서다.
+  expect(links("| 저장소 | 번호 |\n|---|---|\n| zeta-api | #8 |\n\n그 밖에 #9", card)).toEqual([]);
+  // 다른 저장소 단서가 하나도 없으면 카드 저장소.
+  for (const form of ["정리 후 #12", "README.md 수정 #12", "feat 브랜치 정리 #12", "UTF-8 고침 #12"]) {
+    expect({ form, found: links(form, card) }).toEqual({ form, found: one(card, 12) });
+  }
+});
+
+test("dropped links: plain words right before a number and lines that name repositories elsewhere", () => {
+  // 범위를 좁혀 생긴 링크 빠짐. 틀린 링크 대신 링크 없음.
+  for (const text of ["Approve #42", "GitHub PR #12", "follow-up #12", "v1.2 #12", "Closes #12", "alpha-web fixed in PR #18"]) {
+    expect({ text, found: links(text, card) }).toEqual({ text, found: [] });
+  }
+  expect(links("alpha-web #12\n그 다음 #13", card)).toEqual(one("studio/alpha-web", 12));
+  expect(links("alpha-web. 다음은 #15", card)).toEqual([]);
+  expect(links("#12 alpha-web 수정, #13 beta-api 수정", card)).toEqual([]);
+  expect(links("#15 alpha-web beta", card)).toEqual([]);
+  expect(links("Alpha 프로젝트 #12", card)).toEqual([]);
+  expect(links("web 화면 고친 뒤 #30", card)).toEqual([]);
+  expect(links("beta #1<br>#2", card)).toEqual(one("studio/beta", 1));
+  expect(links("other/thing#16 와 alpha-web #17")).toEqual(one("studio/alpha-web", 17));
+});
+
+test("names the board does not know, away from the number, do not stop the card repository", () => {
+  // 규칙 4 의 단서 목록 밖: 번호 옆이 아닌 모르는 슬러그·CamelCase 이름은 단서로 읽지 않는다.
+  for (const text of ["zeta-api 병합 완료 #26", "#26 zeta-api 병합", "ZetaApp 수정 (#26)"]) {
+    expect({ text, found: links(text, card) }).toEqual({ text, found: one(card, 26) });
+  }
+  expect(links("| 메모 | 대상 | 번호 |\n|---|---|---|\n| 고침 | zeta-api | #8 |", card)).toEqual(one(card, 8));
+});
+
+test("the fallback is decided once for the whole text", () => {
+  const tokens = lexBoardMarkdown("정리했습니다.\n\n## 결과\n\n- 첫째 #1\n- 둘째는 alpha-web 쪽");
+  expect(fallbackRepository(tokens, card, known)).toBeUndefined();
+  expect(fallbackRepository(lexBoardMarkdown("정리했습니다. #1"), card, known)).toBe(card);
+  expect(fallbackRepository(lexBoardMarkdown("card 정리 #1, studio/card#2"), card, known)).toBe(card);
 });
 
 test("the board knows repositories only from settings, ledger cards, PR lists and merge history", () => {
@@ -156,86 +175,7 @@ test("the board knows repositories only from settings, ledger cards, PR lists an
     trackedDecisions: { items: [{ projectId: "p3", projectTitle: "Beta", pullRepository: "studio/beta", mergeTarget: null, pullTarget: undefined, matchedPull: null }] },
     replyHistory: [{ pullMerge: { repo: "labs/delta" } }],
   });
-  const link = (markdown: string) => references(pullReferenceTokens((lexBoardMarkdown(markdown)[0] as Tokens.Paragraph).tokens, { known: index }));
-  expect(link("Alpha #1, alpha-web #2, gamma-api #3, Beta #4, delta #5, off #6, unmapped #7")).toEqual([
-    { repo: "studio/alpha-web", number: 1 }, { repo: "studio/alpha-web", number: 2 }, { repo: "labs/gamma-api", number: 3 },
-    { repo: "studio/beta", number: 4 }, { repo: "labs/delta", number: 5 },
+  expect(links("Alpha #1, alpha-web #2, gamma-api #3, Beta #4, delta #5, off #6, unmapped #7", undefined, index)).toEqual([
+    ...one("studio/alpha-web", 1), ...one("studio/alpha-web", 2), ...one("labs/gamma-api", 3), ...one("studio/beta", 4), ...one("labs/delta", 5),
   ]);
-});
-
-test("project titles with spaces or Korean are matched whole before splitting into words", () => {
-  const titled = repositoryIndex([
-    { repo: "studio/alpha", names: ["Alpha Web"] },
-    { repo: "studio/alpha-tools", names: ["Alpha Web Tools"] },
-    { repo: "studio/web" },
-    { repo: "studio/kr", names: ["알파 웹"] },
-    { repo: "studio/one", names: ["알파"] },
-  ]);
-  const link = (markdown: string, repository?: string) => references(pullReferenceTokens((lexBoardMarkdown(markdown)[0] as Tokens.Paragraph).tokens, { repository, known: titled }));
-  expect(link("Alpha Web #12")).toEqual([{ repo: "studio/alpha", number: 12 }]);
-  expect(link("alpha web의 #13")).toEqual([{ repo: "studio/alpha", number: 13 }]);
-  expect(link("alpha web 에서 #13")).toEqual([{ repo: "studio/alpha", number: 13 }]);
-  // 겹치는 이름은 가장 긴 것 먼저.
-  expect(link("Alpha Web Tools #14")).toEqual([{ repo: "studio/alpha-tools", number: 14 }]);
-  expect(link("알파 웹 #15")).toEqual([{ repo: "studio/kr", number: 15 }]);
-  expect(link("알파 웹에서 #16")).toEqual([{ repo: "studio/kr", number: 16 }]);
-  expect(link("알파 #17", "studio/card")).toEqual([{ repo: "studio/one", number: 17 }]);
-  expect(link("#18 (Alpha Web)")).toEqual([{ repo: "studio/alpha", number: 18 }]);
-  expect(link("Web #19")).toEqual([{ repo: "studio/web", number: 19 }]);
-  // 이름 안의 낱말은 다른 단서로 쓰지 않는다. 줄 다른 곳의 프로젝트 이름은 카드 저장소만 막는다.
-  expect(link("Alpha Web 정리 후 #20", "studio/card")).toEqual([]);
-  expect(link("알파 웹 정리 후 #21", "studio/card")).toEqual([]);
-  // 이름이 더 긴 낱말의 일부이면 그 이름이 아니다.
-  expect(link("Alpha Webby #22", "studio/card")).toEqual([]);
-});
-
-test("every kind of repository clue keeps a line away from the card repository", () => {
-  const index = repositoryIndex([
-    { repo: "studio/alpha-web", names: ["Alpha Studio"] },
-    { repo: "studio/beta" },
-  ]);
-  const card = "studio/card";
-  const lineLinks = (markdown: string) => references(pullReferenceTokens((lexBoardMarkdown(markdown)[0] as Tokens.Paragraph).tokens, { repository: card, known: index }));
-  const rowLinks = (markdown: string) => {
-    const table = lexBoardMarkdown(markdown).find(token => token.type === "table") as Tokens.Table;
-    const clues = tableRowClues(table, index);
-    return table.rows.flatMap((row, r) => row.flatMap(cell => references(pullReferenceTokens(cell.tokens, { repository: card, known: index, row: clues[r] }))));
-  };
-  // 종류마다: 줄에 있는 단서, 그 단서가 가리킬 저장소(모르면 null).
-  const kinds: [string, string, string | null][] = [
-    ["모르는 슬러그", "zeta-api", null],
-    ["모르는 CamelCase", "ZetaApp", null],
-    ["모르는 owner/repo", "other/tool", null],
-    ["여럿 맞는 이름", "shared-name", null],
-    ["프로젝트 이름 전체", "Alpha Studio", "studio/alpha-web"],
-    ["아는 저장소 이름", "beta", "studio/beta"],
-  ];
-  const ambiguous = repositoryIndex([{ repo: "studio/shared-name" }, { repo: "labs/shared-name" }]);
-  for (const [kind, clue, target] of kinds) {
-    const forms = [`${clue} 정리 후 #12`, `#12 ${clue} 정리`, `${clue}의 #12`, `${clue} 의 #12`];
-    for (const form of forms) {
-      const found = kind === "여럿 맞는 이름"
-        ? references(pullReferenceTokens((lexBoardMarkdown(form)[0] as Tokens.Paragraph).tokens, { repository: card, known: ambiguous }))
-        : lineLinks(form);
-      const label = `${kind}: ${form}`;
-      expect({ label, linksCard: found.some(link => link.repo === card) }).toEqual({ label, linksCard: false });
-      // 프로젝트 이름은 번호 바로 옆에서만 링크 대상이다.
-      const adjacent = form.endsWith("의 #12");
-      const expected = target && (kind !== "프로젝트 이름 전체" || adjacent) ? [{ repo: target, number: 12 }] : [];
-      expect({ label, found }).toEqual({ label, found: kind === "여럿 맞는 이름" ? [] : expected });
-    }
-    if (kind === "여럿 맞는 이름") continue;
-    for (const table of [`| 메모 | 대상 | 번호 |\n|---|---|---|\n| 고침 | ${clue} | #8 |`, `| 저장소 | 번호 |\n|---|---|\n| ${clue} | #8 |`]) {
-      const found = rowLinks(table);
-      expect({ table, found }).toEqual({ table, found: target ? [{ repo: target, number: 8 }] : [] });
-    }
-  }
-  // 브랜치 경로, 여러 단계 경로, 파일은 모르는 owner/repo 가 아니다.
-  for (const text of ["feat/x 브랜치 #12", "codex/fix-links 정리 #12", "client/vendor/marked 갱신 #12", "client/history-markdown.tsx 수정 #12", "origin/next 기준 #12"]) {
-    expect({ text, found: lineLinks(text) }).toEqual({ text, found: [{ repo: card, number: 12 }] });
-  }
-  // owner/repo#N 꼴은 지금처럼 건드리지 않고, 같은 줄의 다른 번호를 아는 저장소 하나로 몰지 않는다.
-  expect(lineLinks("other/tool#12")).toEqual([]);
-  expect(references(pullReferenceTokens((lexBoardMarkdown("alpha-web #1, other/repo #2 and #3")[0] as Tokens.Paragraph).tokens, { repository: card, known })))
-    .toEqual([{ repo: "studio/alpha-web", number: 1 }]);
 });
