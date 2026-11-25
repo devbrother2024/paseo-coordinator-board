@@ -34,7 +34,7 @@ const blockAsk: Step = ["assistant", "Pick a cache.\n\n```board-question\n" + JS
 
 /** Shows the card the way a snapshot does, and saves what it found. */
 function snapshot(scope: any, e: ReturnType<typeof evidence> | null, target = row(), ledger?: Set<string>) {
-  if (e) applyConversationEvidence(e, target, scope, ledger);
+  if (e) applyConversationEvidence(e, target, scope, ledger, NOW);
   else applyRecordedQuestions(target, scope, ledger, NOW);
   decorateDecision(target, undefined, scope, e ?? undefined);
   const scan = scanOf(target);
@@ -216,4 +216,33 @@ test("records survive old and damaged settings files entry by entry", () => {
   const read = new PreferenceStore(join(dir, "mixed.json")).read();
   expect(Object.keys(read.raisedQuestions)).toEqual(["worker"]);
   expect(Object.keys(read.closedQuestions)).toEqual(["k0"]);
+});
+
+// Regressions found by combining the earlier draft with another branch: both dropped an unhandled conversation decision.
+test("regression: a person's message that does not answer the decision keeps the card through later snapshots", async () => {
+  const scope = blank();
+  const steps: Step[] = [ask, ["user", "Can you also check the changelog?", 0.7], ["assistant", "The changelog is fine.", 0.6]];
+  const reader = new ConversationReader();
+  const sdk = { agents: { ref: () => ({ timeline: { refetch: async () => page(steps) } }) } };
+  const first = row();
+  await reader.decorate(sdk as any, [first], scope);
+  decorateDecision(first, undefined, scope, undefined);
+  saveScan(scope, first, scanOf(first)!, item => recordDisplay(questionDetails(item)), NOW);
+  expect(first).toMatchObject({ lane: "human", keptQuestion: { maybeAnswered: true }, decision: { source: "conversation", question: "Shall I publish it now?" } });
+  // Later the session answers more reports and the question leaves what the board reads. The record keeps the card.
+  steps.splice(0, steps.length, ["assistant", "Report noted.", 0.2]);
+  const later = row({ activityAt: "2" });
+  await reader.decorate(sdk as any, [later], scope);
+  decorateDecision(later, undefined, scope, undefined);
+  expect(later).toMatchObject({ lane: "human", keptQuestion: { key: first.keptQuestion.key, maybeAnswered: true },
+    decision: { source: "conversation", question: "Shall I publish it now?" } });
+});
+
+test("regression: a question asked 26 hours ago is still a card, only dimmed, from the conversation and from the record", () => {
+  const scope = blank();
+  const old: Step = ["assistant", "Release 0.9 is ready.\nShall I publish it now?", 26];
+  const shown = snapshot(scope, evidence(old, report, ["assistant", "Noted.", 25]));
+  expect(shown).toMatchObject({ lane: "human", keptQuestion: { stale: true }, decision: { source: "conversation" } });
+  const fromRecord = snapshot(scope, null, row({ status: "running", lane: "running", detail: "Working" }));
+  expect(fromRecord).toMatchObject({ lane: "human", keptQuestion: { key: shown.keptQuestion.key, stale: true }, decision: { version: shown.decision.version } });
 });

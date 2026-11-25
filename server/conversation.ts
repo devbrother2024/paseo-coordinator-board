@@ -216,11 +216,11 @@ export function usesConversationEvidence(row: Pick<SessionRow, "lane" | "detail"
   return (row.lane === "idle" || row.lane === "review") && !row.detail.includes("오류");
 }
 
-export function applyConversationEvidence(evidence: Evidence, row: SessionRow, prefs: Preferences, ledger?: ReadonlySet<string>) {
+export function applyConversationEvidence(evidence: Evidence, row: SessionRow, prefs: Preferences, ledger?: ReadonlySet<string>, now?: number) {
   if (!usesConversationEvidence(row)) return false;
   const judgment = prefs.judgments[row.id];
   Object.assign(row, classify(evidence, row, judgment?.projectId === row.projectId ? judgment : undefined, row.id === prefs.coordinator,
-    questionContext(prefs, row.id, ledger)), { evidenceId: evidence.id });
+    questionContext(prefs, row.id, ledger, now)), { evidenceId: evidence.id });
   return true;
 }
 
