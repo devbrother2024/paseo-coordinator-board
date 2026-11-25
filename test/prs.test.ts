@@ -346,3 +346,42 @@ test("a slow single read does not hold up the board: this read says computing, a
   expect((await checks.apply(pending, run, () => true, {left:3}))[0].reason).toBe("ready");
   expect(reads).toEqual([1]);
 });
+
+test("PRs never answered go before refreshing answered ones, so no PR starves under steady polling", async () => {
+  const f = fixture(["root"]);
+  f.behavior.rows = Array.from({length:8},(_,i)=>raw(i+1,{mergeable:"UNKNOWN"}));
+  for (let poll = 0; poll < 4; poll++) { await f.read(); f.tick(30_000); }
+  // Eight PRs, three single reads per poll: the first three polls cover all eight before any refresh.
+  expect(new Set(f.log.single).size).toBe(8);
+  expect(f.log.single.slice(0, 8).sort()).toEqual(Array.from({length:8},(_,i)=>"org/example#"+(i+1)).sort());
+});
+
+test("a closed answer is dropped when the PR shows up open again, and rechecked after a while", async () => {
+  const states = new Map<number,string>([[1,"CLOSED"]]);
+  const asked: number[] = [];
+  const f = fixture(["root"], async ({number}) => { asked.push(number); return states.get(number) as never; });
+  const target = [{repo:"org/example", number:1, projectId:"root"}];
+  const read = () => f.service.settledStates(f.sdk, target, () => undefined);
+  read(); await new Promise(resolve => setTimeout(resolve, 0));
+  expect(read().get("org/example#1")?.state).toBe("CLOSED");
+  // It reopens: the open list shows it, so the closed answer goes.
+  f.behavior.rows = [raw(1)];
+  f.tick(60_001); await f.read();
+  states.set(1, "MERGED");
+  expect(read().has("org/example#1")).toBe(false);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(read().get("org/example#1")?.state).toBe("MERGED");
+  // A closed answer the board never sees reopen is still asked again after ten minutes.
+  states.set(2, "CLOSED");
+  const second = [{repo:"org/example", number:2, projectId:"root"}];
+  const readSecond = () => f.service.settledStates(f.sdk, second, () => undefined);
+  readSecond(); await new Promise(resolve => setTimeout(resolve, 0));
+  const before = asked.length;
+  expect(readSecond().get("org/example#2")?.state).toBe("CLOSED");
+  expect(asked.length).toBe(before);
+  f.tick(10 * 60_000 + 1);
+  // The old answer stays while the recheck runs in the background.
+  expect(readSecond().get("org/example#2")?.state).toBe("CLOSED");
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(asked.length).toBe(before + 1);
+});

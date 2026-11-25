@@ -148,8 +148,9 @@ export class ProjectPullRequests {
   private readonly waiting: (() => void)[] = [];
   private running = 0;
   private readonly mergeability: MergeabilityChecks;
-  // Merged or closed is final. Anything else is asked again after a minute.
-  private readonly settled = new Map<string, SettledState | {retryAt:number; inflight?:true}>();
+  // Merged is final. Closed can reopen: it is dropped when the PR shows up open again and asked again
+  // after ten minutes (the old answer stays meanwhile). Anything else is asked again after a minute.
+  private readonly settled = new Map<string, (SettledState & {recheckAt?:number; inflight?:true}) | {retryAt:number; inflight?:true}>();
   private invalidated?: () => void;
   constructor(private store:PreferenceStore,private readonly deps:{localOrigin:typeof localOrigin; githubPulls:typeof githubPulls; githubPull?:typeof githubPull; now:()=>number} = {localOrigin,githubPulls,githubPull,now:Date.now},
     private readonly mergeApi=githubMergeApi(args=>run("gh",args)), private readonly lookupLifecycle=githubLifecycle) {
@@ -206,17 +207,21 @@ export class ProjectPullRequests {
       const recorded = known(target.repo, target.number);
       if (recorded) { result.set(key, recorded); continue; }
       const entry = this.settled.get(key);
-      if (entry && "state" in entry) { result.set(key, entry); continue; }
-      if (entry && (entry.inflight || entry.retryAt > now)) continue;
+      if (entry && "state" in entry) {
+        result.set(key, {state:entry.state, at:entry.at});
+        if (entry.state === "MERGED" || entry.inflight || (entry.recheckAt ?? Infinity) > now) continue;
+      } else if (entry && (entry.inflight || entry.retryAt > now)) continue;
       if (started >= mergeabilityRetry.perRead) continue;
       started++;
-      this.settled.set(key, {retryAt:Infinity, inflight:true});
+      const previous = entry && "state" in entry ? entry : undefined;
+      this.settled.set(key, previous ? {...previous, inflight:true} : {retryAt:Infinity, inflight:true});
       void this.explainLifecycle(paseo, target).then(({state}) => {
         if (state === "MERGED" || state === "CLOSED") {
-          this.settled.set(key, {state, at:new Date(this.deps.now()).toISOString()});
-          this.invalidated?.();
+          const at = previous?.state === state ? previous.at : new Date(this.deps.now()).toISOString();
+          this.settled.set(key, {state, at, ...(state === "CLOSED" ? {recheckAt:this.deps.now() + 10 * ttl} : {})});
+          if (previous?.state !== state) this.invalidated?.();
         } else this.settled.set(key, {retryAt:this.deps.now() + ttl});
-      }, () => this.settled.set(key, {retryAt:this.deps.now() + ttl}));
+      }, () => this.settled.set(key, previous ? {...previous, recheckAt:this.deps.now() + ttl, inflight:undefined} : {retryAt:this.deps.now() + ttl}));
     }
     while (this.settled.size > 500) this.settled.delete(this.settled.keys().next().value!);
     return result;
@@ -387,6 +392,8 @@ export class ProjectPullRequests {
       }
       return [repo,value] as const;
     })));
+    // A PR seen open again may have been reopened after a closed answer.
+    for (const source of sources.values()) for (const p of source?.items ?? []) this.settled.delete(settledKey(p.repo, p.number));
     const latest = this.store.read();
     const visible = projects.filter(p => allowed(p.projectId,latest));
     const byRepo = new Map<string,string[]>();
