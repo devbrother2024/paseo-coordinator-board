@@ -27,6 +27,7 @@ Intent: [intent.md](intent.md)
 - 보드는 `input`을 그 기능의 **지금 받는 형식**(`accepts`, 없으면 도구의 입력 형식)으로 검사한 뒤 그 도구의 실행 함수를 그대로 부른다. 결과는 도구를 직접 부른 것과 같다. 권한 확인(지정된 코디네이터인지, 관리 범위인지)도 그 실행 함수가 지금처럼 한다.
 - 모르는 기능 이름이면 오류 결과로 쓸 수 있는 이름 목록을 준다. 형식 검사에 실패하면 오류 결과로 어긋난 항목과 그 기능의 지금 입력 형식(JSON Schema)을 준다. 오류 문구의 머리는 두 언어다.
 - 새 선택 항목을 낼 때는 도구의 입력 형식(계약)을 두고 `accepts`에 더한다. 그 항목은 `board_action`으로만 받는다.
+- 코디네이터가 어떤 보드 도구를 불렀는지 타임라인의 도구 이름으로 판단하는 곳(예약된 다이제스트의 완료 판정)은 `board_action`으로 부른 경우를 그 기능을 부른 것으로 센다.
 
 ### 2.3 `read_board_guide`
 
@@ -83,6 +84,7 @@ Intent: [intent.md](intent.md)
 | R8 | 알림은 안내 판본마다 대화당 한 번이고, 글 결과에 붙었을 때만 기록한다 | `test/coordinator-tools.test.ts`의 `the guide note is attached once per guide revision`, `a JSON result does not count as told` |
 | R9 | 화면 안내는 맥락을 덜 잃는 순서이고 두 언어다 | `test/coordinator-tools.test.ts`의 `notice wording orders the fixes from least to most context lost` |
 | R10 | 보드는 세션을 다시 띄우지 않고 `/clear`, `/compact`를 보내지 않는다 | `test/coordinator-tools.test.ts`의 `the board never reloads a session, nor types /clear or /compact into one` |
+| R11 | 다이제스트 완료 판정이 `board_action`으로 부른 보드 도구를 센다 | `test/digest.test.ts`의 `a board tool run through board_action counts as that tool` |
 
 ## 5. 버린 설계
 

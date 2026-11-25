@@ -6,12 +6,12 @@ Spec: [spec.md](spec.md)
 
 ## 단위
 
-한 PR, 커밋 하나다.
+한 PR이다. 기능 커밋 하나에, `next` 병합 커밋과 문서 상태 커밋이 따른다.
 
 1. 시험 먼저: `test/coordinator-tools.test.ts`를 계약 기준 판정과 한 번 알림으로 고치고, `test/board-guide.test.ts`와 `test/coordinator-contract.test.ts`를 더한다.
 2. `shared/coordinator-contract.ts`(계약 번호, 도구 이름), `shared/coordinator-tools.ts`(기록 형식, 판정, 알림 조건).
 3. `server/board-guide.ts`(기능 목록, `board_action`, `read_board_guide`, 안내 판본), `server/coordinator-tools.ts`(이름과 입력 형식만 보는 지문, 기록, 알림), `server/coordinator.ts`(두 도구 붙이기), `server/preferences.ts`(기록 항목).
-4. 기존 도구 일곱 개의 설명을 짧게 줄이고 원래 문구를 `usage`로 옮긴다. 입력 형식과 실행 함수는 건드리지 않는다.
+4. 기존 도구 일곱 개의 설명을 짧게 줄이고 원래 문구를 `usage`로 옮긴다. 입력 형식과 실행 함수는 건드리지 않는다. `server/digest.ts`의 완료 판정이 `board_action` 경유 호출을 세게 한다(구현 중 발견).
 5. `client/coordinator-tools.ts`, `client/stale-coordinator-tools.tsx`의 안내 문구와 버튼 순서.
 6. 계약 스냅샷 `test/fixtures/coordinator-contract.json`.
 7. 문서: `README.md`, `OVERVIEW.md`, `AGENTS.md`, 코디네이터 헌장과 예시 문서의 안내 한 줄, `intent/README.md` 목록.
