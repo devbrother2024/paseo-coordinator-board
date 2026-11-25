@@ -31,7 +31,7 @@ export function workspacePull(ws?: Workspace): WorkspacePull | undefined {
   if (repo && branch) return { kind: "branch", repo, branch };
 }
 
-export function matchesWorkspace(pr: PullRequestItem, workspace?: WorkspacePull) {
+export function matchesWorkspace(pr: Pick<PullRequestItem, "repo" | "number" | "headRepo" | "headBranch">, workspace?: WorkspacePull) {
   if (!workspace) return false;
   return workspace.kind === "pr" ? workspace.repo === pr.repo && workspace.number === pr.number
     : workspace.repo === pr.headRepo && workspace.branch === pr.headBranch;
