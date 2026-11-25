@@ -258,3 +258,19 @@ test("a short reply to a restored card never joins the turn of the session's nex
   expect(result.queued).toBe(true);
   expect(f.sent.slice(sent)).toEqual([]);
 });
+
+test("a reply to a restored card closes the original question, and the session's new question stays open",async()=>{
+  const f=await fixture();
+  f.append("editor",{type:"assistant_message",text:"Q3. Shall I keep the original cutoff?"});
+  const before=(await f.snapshot()).sessions.find(row=>row.id==="editor").decision;
+  await f.ask({card:{kind:"session",projectId:"studio",sessionId:"editor",version:before.version},
+    recipientId:"editor",question:"What is the current value?",requestKey:"fixture-restored-question-idle"});
+  f.append("editor",{type:"assistant_message",text:"The current value is 0.04 seconds.\nShall I also trim the intro? Please choose one."});
+  expect((await f.snapshot()).sessions.find(row=>row.id==="editor").decision?.version).toBe(before.version);
+  await f.answer({projectId:"studio",sessionId:"editor",recipientId:"editor",version:before.version,
+    action:"reply",text:"Keep the original cutoff.",requestKey:"fixture-restored-answer-idle"});
+  f.append("editor",{type:"assistant_message",text:"Kept the original cutoff."});
+  const after=(await f.snapshot()).sessions.find(row=>row.id==="editor");
+  expect(after.decision?.question).toContain("trim the intro");
+  expect(after.keptQuestion?.older ?? []).toEqual([]);
+});

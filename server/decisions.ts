@@ -179,6 +179,13 @@ export class DecisionSender {
     const bare = !restored &&
       (!asked || (!!asked.turn && lastEvent?.role === "assistant" && lastEvent.seq === asked.turn.seq && !evidence.laterInput));
     const waitForTurn = activeReply && (!bare || !canReceiveBoardInput(agent,!row.decision.deliverWhenIdle));
+    // The question the shown card asks. A card restored from before a clarification asks the question it was saved with,
+    // not the newest one the session asked since: find that question among the open ones by its words. If it cannot be
+    // found, the receipt names no question the board knows, so the reply closes none (it stays open rather than closing
+    // the wrong one).
+    const answered = row.decision.source !== "conversation" ? undefined
+      : !restored ? row.keptQuestion?.key
+      : scanOf(row)?.open.findLast(item => item.question === row.decision!.question)?.key ?? "unmatched-restored-card";
     const decision = row.decision;
     if (inspectOnly && !waitForTurn) throw Error(waiting);
     if (waitForTurn) {
@@ -208,7 +215,7 @@ export class DecisionSender {
           answer: input.text, recipientId: input.recipientId, coordinator: input.action === "coordinate" },
         fingerprint, sessionId: row.id, version: input.version, evidenceId: evidence.id, status: "pending", beforeAnswer: current.answers[row.id]?.version, ...(note?.kind === "question" ? { noteRevision: note.revision } : {}),
         // The conversation question this reply answers. Its arrival closes that question and no other.
-        ...(decision.source === "conversation" && row.keptQuestion ? { question: row.keptQuestion.key } : {}),
+        ...(answered ? { question: answered } : {}),
       };
     });
     if (queuedId) removeLocalPhotos(this.queuePhotos,queuedId,input.images?.length ?? 0);
