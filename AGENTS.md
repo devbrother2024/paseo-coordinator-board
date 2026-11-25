@@ -50,7 +50,7 @@ Tech Stack: TypeScript, React 19 + React Native 0.81(클라이언트), Node(플�
 - 대시보드(`orca/src/dashboard/`)는 Orca 편집 탭에서 도는 프레임이라 DOM을 직접 만든다. 글은 `dom.ts`의 `h()`로 텍스트 노드로만 넣고 `innerHTML`을 쓰지 않는다. 열쇠 파일(`.coordinator-board/`)은 `.git/info/exclude`로 숨기고, 사용자 저장소에 `.gitignore`를 새로 만들지 않는다.
 - 출처 규칙의 Orca판: `terminal.sendText`는 사람이 친 글과 구분되지 않는다. 그래서 출처 없는 전송은 사용자가 쓰고 누른 글에만 쓴다. 보드가 만든 문장을 보내는 경로를 만들면 `[coordinator-board]` 머리말을 붙이고, 실패해도 다시 보내지 않는다.
 - 권한 대기 세션에는 보내지 않는다. 전송 직전에 `agents.list`로 상태를 다시 읽고 `replyGuard`(`orca/src/model.ts`)를 거친다.
-- Orca는 포커스된 워크스페이스의 터미널에만 글을 넣게 한다. 보내기 전 `terminal.focus`로 화면을 옮기는 일은 사람이 보내기를 누른 경로에서만 한다. 채팅 탭 세션(터미널 id 없음)에는 `agent.resume`으로 대화를 하나 더 띄우지 않고 `workspace.open`으로 보여 주기만 한다.
+- Orca는 포커스된 워크스페이스의 터미널에만 글을 넣게 한다. 보내기 전 `terminal.focus`로 화면을 옮기는 일은 사람이 보내기를 누른 경로에서만 한다. 채팅 탭 세션(터미널 id 없음)에는 `agent.resume`으로 대화를 하나 더 띄우지 않고 `workspace.open`으로 보여 주기만 한다. `agent.resume`은 `closedSessions`와 `resumeGuard`(`orca/src/model.ts`)를 거친 닫힌 세션에만, 사람이 보내기를 누른 경로에서만 쓴다.
 - 검증: `npx tsc -p orca`, `orca plugin test orca`, `orca plugin check orca`, `orca plugin validate orca`. CI에는 Orca CLI가 없어서 돌지 않으니 PR 전에 로컬에서 돌린다. 루트 `tsconfig.json`은 `orca`를 `exclude`한다.
 - 플러그인 승인(`--approve`)은 사람이 권한 목록을 보고 직접 한다. 에이전트가 대신 승인하지 않는다.
 
