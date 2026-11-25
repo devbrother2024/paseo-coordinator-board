@@ -28,7 +28,8 @@ export type QuestionEvent = AssistantEvent | InputEvent;
 
 export type QuestionContext = {
   closed?: Preferences["closedQuestions"];
-  boardMessageIds?: ReadonlySet<string>;
+  // Board reply message ids, with the question each answered when its receipt names it.
+  boardMessageIds?: ReadonlyMap<string, string | undefined>;
   clarificationIds?: ReadonlySet<string>;
   records?: readonly RaisedQuestion[];
   // Questions ledger cards carry for this session, with the key of the card. Undefined when the ledger was not read.
@@ -195,12 +196,17 @@ export function scanQuestions(evidence: { epoch?: string; events?: readonly Ques
       continue;
     }
     if (event.ids.some(id => context.clarificationIds?.has(id))) continue;
-    const open = list.filter(item => !item.closed);
-    if (!open.length) continue;
-    if (event.ids.some(id => context.boardMessageIds?.has(id))) {
-      close(open.at(-1)!, "board");
+    // A board reply closes the question it answered: the one its receipt names, or for a reply sent without that, the
+    // latest question asked before it, even one already closed. Reading the same timeline again closes nothing else.
+    const reply = event.ids.find(id => context.boardMessageIds?.has(id));
+    if (reply !== undefined) {
+      const answered = context.boardMessageIds!.get(reply);
+      const target = answered ? list.find(item => item.key === answered) : list.at(-1);
+      if (target) close(target, "board");
       continue;
     }
+    const open = list.filter(item => !item.closed);
+    if (!open.length) continue;
     // An answer that fits more than one open question cannot tell which one it answers, so it closes none.
     const matches = open.filter(item => answersChoices(event.text, choicesOf(item)));
     if (matches.length === 1) close(matches[0], "choice");
@@ -236,11 +242,11 @@ export function questionNotice(scan: QuestionScan, ended: boolean, now = Date.no
 export type LedgerView = { questions: ReadonlyMap<string, ReadonlyMap<string, string>>; resolved?: ReadonlySet<string> };
 export function questionContext(scope: Pick<Preferences, "closedQuestions" | "raisedQuestions" | "decisionReceipts" | "clarifications">, sessionId: string,
   ledger?: LedgerView, now?: number): QuestionContext {
-  const boardMessageIds = new Set<string>();
+  const boardMessageIds = new Map<string, string | undefined>();
   for (const [id, receipt] of Object.entries(scope.decisionReceipts ?? {})) {
     if (receipt.sessionId !== sessionId) continue;
-    boardMessageIds.add(id);
-    if (receipt.messageId) boardMessageIds.add(receipt.messageId);
+    boardMessageIds.set(id, receipt.question);
+    if (receipt.messageId) boardMessageIds.set(receipt.messageId, receipt.question);
   }
   const closed = Object.fromEntries(Object.entries(scope.closedQuestions ?? {}).filter(([, entry]) => entry.sessionId === sessionId));
   return { closed, boardMessageIds, clarificationIds: new Set(Object.keys(scope.clarifications ?? {})),
@@ -249,13 +255,16 @@ export function questionContext(scope: Pick<Preferences, "closedQuestions" | "ra
     ...(now === undefined ? {} : { now }) };
 }
 
-/** Questions ledger cards carry, by session: question to the card's key. */
-export function ledgerQuestionsBySession(items: readonly { key: string; sessionMatch?: { sessionId: string; question: string } | null }[]) {
+/** One revision of a ledger card: its key and fingerprint, as its resolution records them. */
+export const ledgerCardId = (key: string, fingerprint: string) => JSON.stringify([key, fingerprint]);
+
+/** Questions ledger cards carry, by session: question to the card revision (`ledgerCardId`). */
+export function ledgerQuestionsBySession(items: readonly { key: string; fingerprint: string; sessionMatch?: { sessionId: string; question: string } | null }[]) {
   const map = new Map<string, Map<string, string>>();
   for (const item of items) {
     if (!item.sessionMatch) continue;
     const questions = map.get(item.sessionMatch.sessionId) ?? new Map<string, string>();
-    questions.set(item.sessionMatch.question, item.key);
+    questions.set(item.sessionMatch.question, ledgerCardId(item.key, item.fingerprint));
     map.set(item.sessionMatch.sessionId, questions);
   }
   return map;

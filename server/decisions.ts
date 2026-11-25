@@ -203,6 +203,8 @@ export class DecisionSender {
           ...(input.images?.length ? {imageCount:input.images.length} : {}),
           answer: input.text, recipientId: input.recipientId, coordinator: input.action === "coordinate" },
         fingerprint, sessionId: row.id, version: input.version, evidenceId: evidence.id, status: "pending", beforeAnswer: current.answers[row.id]?.version, ...(note?.kind === "question" ? { noteRevision: note.revision } : {}),
+        // The conversation question this reply answers. Its arrival closes that question and no other.
+        ...(decision.source === "conversation" && row.keptQuestion ? { question: row.keptQuestion.key } : {}),
       };
     });
     if (queuedId) removeLocalPhotos(this.queuePhotos,queuedId,input.images?.length ?? 0);

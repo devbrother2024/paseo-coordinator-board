@@ -325,6 +325,15 @@ test("a reply to a question kept after another session's message never joins the
   expect(f.sent[0].text.endsWith(f.input.text)).toBe(true);
 });
 
+test("a reply's receipt names the conversation question it answers", async () => {
+  const f = await fixture();
+  const card = await f.row();
+  await f.send();
+  const receipts = Object.values(f.prefs.read().decisionReceipts);
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0].question).toBe(card.keptQuestion!.key);
+});
+
 test("a kept question still takes its answer while a status report is the latest message", async () => {
   const f = await fixture();
   f.timelines.worker.push({type:"assistant_message", text:"Status update only. No decision is requested."});

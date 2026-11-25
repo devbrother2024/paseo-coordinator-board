@@ -8,7 +8,8 @@ import { verifiedBoardFact } from "../server/board-facts";
 import { snapshotHoldSessions } from "../shared/merge-hold";
 import { decorateDecision } from "../server/session-decisions";
 import { PreferenceStore } from "../server/preferences";
-import { answersChoices, closeQuestionByPerson, questionContext, recordDisplay, saveScan, settlingLines } from "../server/open-questions";
+import { answersChoices, closeQuestionByPerson, ledgerCardId, ledgerQuestionsBySession, questionContext, recordDisplay, saveScan, settlingLines } from "../server/open-questions";
+import { TrackedDecisionStore } from "../server/tracked-decisions";
 import { keptQuestionNotice } from "../client/kept-question";
 
 const NOW = Date.parse("2030-01-02T12:00:00.000Z");
@@ -359,4 +360,52 @@ test("review: a status report after the question does not turn the kept question
   const shown = snapshot(scope, evidence(ask, ["assistant", "Status update only. No decision is requested.", 0.5]));
   expect(shown).toMatchObject({ lane: "human", decision: { source: "conversation", question: "Shall I publish it now?" } });
   expect(verifiedBoardFact(shown, evidence(ask, ["assistant", "Status update only. No decision is requested.", 0.5]), scope)).toBeNull();
+});
+
+test("review 2: a board reply closes the question it answered, also when the same timeline is read again", () => {
+  const older: Step = ["assistant", "Which region should I use? Please choose one.", 3];
+  const steps: Step[] = [older, report, ask, ["user", "Publish it.", 0.5, "board-reply-1"], ["assistant", "Publishing.", 0.4]];
+  const answered = evidence(...steps).events!.find(event => event.role === "assistant" && event.text.includes("Shall I publish")) as any;
+  // With the question it answered on record, and without it (replies sent before the board recorded it).
+  for (const question of [answered.key, undefined]) {
+    const scope = blank();
+    scope.decisionReceipts = { "board-reply-1": { fingerprint: "f", sessionId: "worker", version: "v", status: "sent", ...(question ? { question } : {}) } };
+    const first = snapshot(scope, evidence(...steps));
+    expect(first).toMatchObject({ lane: "human", detail: expect.stringContaining("Which region") });
+    // The next snapshot reads the same timeline with the newer question already closed: the older one stays open.
+    const again = snapshot(scope, evidence(...steps));
+    expect(again).toMatchObject({ lane: "human", detail: expect.stringContaining("Which region") });
+    expect(Object.values(scope.closedQuestions).map((entry: any) => entry.reason)).toEqual(["board"]);
+  }
+});
+
+test("review 2: a ledger card revised after an earlier revision was resolved does not close the moved question", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kept-question-ledger-"));
+  const feed = join(dir, "tracked.json");
+  const write = (title: string) => writeFileSync(feed, JSON.stringify({ version: 1, items: [{ source: "fixture", projectId: "book", id: "c1", title,
+    sessionId: "worker", where: "human", kind: "answer", sessionMatch: { projectId: "book", sessionId: "worker", question: "Shall I publish it now?" } }] }));
+  const store = new TrackedDecisionStore(feed);
+  const read = () => store.read(new Set(["book"]), [], { items: [], projects: [] }).items;
+  write("Publish 0.9");
+  const first = read()[0];
+  expect(store.resolve({ source: "fixture", projectId: "book", id: "c1", fingerprint: first.fingerprint }, () => new Set(["book"])).status).toBe("closed");
+  write("Publish 0.9 after the review");
+  const second = read()[0];
+  expect(second.fingerprint).not.toBe(first.fingerprint);
+  const resolved = store.resolvedKeys()!;
+  expect(resolved.has(ledgerCardId(first.key, first.fingerprint))).toBe(true);
+  expect(resolved.has(ledgerCardId(second.key, second.fingerprint))).toBe(false);
+  // The question moved to the revised card, which then left the ledger without its own resolution: it stays open.
+  const scope = blank();
+  const e = evidence(ask, report, reply);
+  const ledger = (items: typeof first[]) => ({ questions: ledgerQuestionsBySession(items), resolved });
+  applyConversationEvidence(e, row(), scope, ledger([second]), NOW);
+  const moved = row();
+  applyConversationEvidence(e, moved, scope, ledger([second]), NOW);
+  saveScan(scope, moved, scanOf(moved)!, () => ({}), NOW);
+  expect(scope.raisedQuestions.worker.questions[0].movedTo).toBe(ledgerCardId(second.key, second.fingerprint));
+  const left = row();
+  applyConversationEvidence(e, left, scope, ledger([]), NOW);
+  expect(left).toMatchObject({ lane: "human", detail: expect.stringContaining("Shall I publish") });
+  expect(scanOf(left)!.closed).toEqual([]);
 });

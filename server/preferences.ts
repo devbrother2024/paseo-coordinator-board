@@ -135,6 +135,8 @@ const schema = z.object({
     fingerprint: z.string(), sessionId: z.string(), version: z.string(), status: z.enum(["pending", "sent"]),
     evidenceId: z.string().optional(),
     noteRevision: z.number().optional(), beforeAnswer: z.string().optional(), messageId: z.string().optional(),
+    // The conversation question this reply answers, so its arrival closes that question and no other.
+    question: z.string().max(64).optional(),
   })).default({}),
   pendingCoordinator: z.object({
     id: z.string(), previous: z.string().nullable(),
