@@ -1,11 +1,12 @@
 // A display tokenizer for common shell syntax. Unrecognized syntax fails closed;
 // no shell is invoked and source text remains available on the card.
-export type ShellWord = { value: string; dynamic: boolean };
+export type ShellWord = { value: string; dynamic: boolean; parameterExpansion?: true };
 export type ShellCommand = {
   words: ShellWord[];
   redirects: ShellWord[];
   inputs: ShellWord[];
   substitutions: ShellCommand[][];
+  expandsInputParameters?: true;
 };
 
 const separator = /(?:&&|\|\||\|&|[;&|\n])/y;
@@ -23,6 +24,7 @@ export function shellCommands(source: string): ShellCommand[] | null {
   const character = () => source[index];
   const next = () => source[index++];
   const invalid = () => { throw Error("Unsupported shell syntax"); };
+  const parameter = () => /^\$(?:\{(?:[a-zA-Z_][a-zA-Z_0-9]*|\d+|[?*!@#$-])\}|[a-zA-Z_][a-zA-Z_0-9]*|[0-9?*!@#$-])/.exec(source.slice(index))?.[0];
 
   function substitution(depth: number): ShellCommand[] {
     if (next() === "$") {
@@ -41,12 +43,12 @@ export function shellCommands(source: string): ShellCommand[] | null {
   }
 
   function word(command: ShellCommand, depth: number) {
-    let value = "", dynamic = false, quote = "", quoted = false;
+    let value = "", dynamic = false, parameterExpansion = false, quote = "", quoted = false;
     const start = index;
     while (index < source.length) {
       const ch = character();
       if (!quote && (/[ \t\r\n;&|<>]/.test(ch) || (depth > 0 && ch === ")"))) break;
-      if (!quote && ch === "$" && /^(?:\$['"]|\$(?:\\\n)+['"({])/.test(source.slice(index))) return invalid();
+      if (!quote && ch === "$" && /^\$(?:['"]|\\\n)/.test(source.slice(index))) return invalid();
       if (ch === "\\" && quote !== "'") {
         next();
         const escaped = next();
@@ -69,6 +71,13 @@ export function shellCommands(source: string): ShellCommand[] | null {
           index += 2;
           continue;
         }
+        const expansion = ch === "$" ? parameter() : undefined;
+        if (expansion) {
+          dynamic = parameterExpansion = true;
+          value += expansion;
+          index += expansion.length;
+          continue;
+        }
         if (source.startsWith("${", index) || (!quote && /[(){}]/.test(ch))) return invalid();
         dynamic = true;
         value += next();
@@ -77,7 +86,7 @@ export function shellCommands(source: string): ShellCommand[] | null {
       }
     }
     if (quote || start === index) return invalid();
-    return { value, dynamic, quoted };
+    return { value, dynamic, quoted, ...(parameterExpansion ? { parameterExpansion: true as const } : {}) };
   }
 
   function sequence(depth: number, nested = false): ShellCommand[] {
@@ -87,7 +96,7 @@ export function shellCommands(source: string): ShellCommand[] | null {
     let needsCommand = false;
     const heredocs: { delimiter: string; tabs: boolean; expand: boolean; command: ShellCommand }[] = [];
     const finish = () => {
-      if (!command.words.length && !command.redirects.length && !command.inputs.length && !command.substitutions.length) return false;
+      if (!command.words.length && !command.redirects.length && !command.inputs.length && !command.substitutions.length && !command.expandsInputParameters) return false;
       commands.push(command);
       command = { words: [], redirects: [], inputs: [], substitutions: [] };
       needsCommand = false;
@@ -118,6 +127,7 @@ export function shellCommands(source: string): ShellCommand[] | null {
         } else {
           if (operator.includes(">") && (!operator.endsWith("&") || !/^\d+$|^-$/.test(target.value))) command.redirects.push(target);
           if (/^\d*<(?:>|$)/.test(operator)) command.inputs.push(target);
+          if (operator.endsWith("<<<") && target.parameterExpansion) command.expandsInputParameters = true;
         }
         continue;
       }
@@ -147,8 +157,12 @@ export function shellCommands(source: string): ShellCommand[] | null {
                   if (character() === "`" || source.startsWith("$(", index)) {
                     heredoc.command.substitutions.push(substitution(depth));
                     if (index > endOfLine) break;
-                  } else if (source.startsWith("${", index)) return invalid();
-                  else next();
+                  } else if (character() === "$") {
+                    const expansion = parameter();
+                    if (expansion) { heredoc.command.expandsInputParameters = true; index += expansion.length; }
+                    else if (source.startsWith("${", index)) return invalid();
+                    else next();
+                  } else next();
                 }
                 if (index > endOfLine + 1) continue;
               }
@@ -159,8 +173,8 @@ export function shellCommands(source: string): ShellCommand[] | null {
         }
         continue;
       }
-      const token = word(command, depth);
-      command.words.push({ value: token.value, dynamic: token.dynamic });
+      const { quoted: _quoted, ...token } = word(command, depth);
+      command.words.push(token);
     }
     if (nested || heredocs.length) return invalid();
     finish();

@@ -6,6 +6,71 @@ const shell = (command: string) => permissionSummary({ kind: "tool", name: "Bash
 const ko = (korean: string) => korean;
 const en = (_: string, english: string) => english;
 
+test("uniq preserves its output target after counting, clustered options and the option delimiter", () => {
+  for (const [command, detail] of [["uniq in out", "out"], ["uniq -c in out", "out"], ["uniq -cf1 in out", "out"],
+    ["uniq -- in out", "out"], ["uniq -- in -out", "-out"]]) {
+    expect(shell(command).groups).toEqual([{ name: "uniq", risk: "write", count: 1, detail }]);
+  }
+  expect(shell("uniq -c in").risk).toBe("read");
+});
+
+test("conditional directory changes retain possible earlier folders", () => {
+  for (const command of ["cd child || cat ../notes.txt", "cd child && pwd || cat ../notes.txt", "cd child | cat ../notes.txt"]) {
+    expect([command, shell(command).risk]).toEqual([command, "outside-read"]);
+    expect(shell(command)).toMatchObject({ cwd });
+  }
+  expect(shell("cd child && cat notes.txt").risk).toBe("read");
+});
+
+test("sed classifies the program separately from its input files", () => {
+  for (const [command, risk] of [
+    ["sed -n '1p' src/index.ts", "read"], ["sed -n '1p' src/raw.txt", "read"],
+    ["sed -n -e '1p' -e 's/e/w/p' -- src/index.ts", "read"], ["sed --expression='1p' src/index.ts", "read"],
+    ["sed -n '1p' -- .env", "sensitive-read"], ["sed -f program.sed src/index.ts", "execute"],
+    ["sed -e '1W out.txt' in.txt", "write"], ["sed -n '1p; w out.txt' in.txt", "write"],
+    ["sed -e '1e echo sample' in.txt", "execute"], ["sed -e 's#x#y#w out.txt' in.txt", "write"],
+    ["sed -e 's/x/y/e' in.txt", "execute"], ["sed -e 's/x/y/ew out.txt' in.txt", "execute"],
+  ]) expect([command, shell(command).risk]).toEqual([command, risk]);
+});
+
+test("package installs include execution risk and curl file outputs include write risk", () => {
+  for (const command of ["npm install", "npm ci", "bun install"]) {
+    const summary = shell(command);
+    expect(summary.risk).toBe("execute");
+    expect(permissionHeading(summary, en)).toContain("Run code · Network access");
+  }
+  for (const command of ["curl -o sample.txt https://example.invalid", "curl -sSosample.txt https://example.invalid", "curl --output=sample.txt https://example.invalid"]) {
+    const summary = shell(command);
+    expect(permissionHeading(summary, en)).toContain("Network access · Write or modify files");
+    expect(summary.groups[0]).toMatchObject({ detail: "sample.txt" });
+  }
+  for (const option of ["-O", "-JO", "-J -O", "--remote-name", "--remote-name-all"]) {
+    expect(permissionHeading(shell(`curl ${option} https://example.invalid/sample.txt`), en)).toContain("Write or modify files");
+  }
+  expect(permissionHeading(shell("curl -o - https://example.invalid"), en)).not.toContain("Write or modify files");
+  expect(permissionHeading(shell("curl -H '-o' https://example.invalid"), en)).not.toContain("Write or modify files");
+  expect(shell("curl -o first.txt --output-dir build https://example.invalid --next -o second.txt https://example.invalid").groups[0])
+    .toMatchObject({ detail: "build/first.txt, second.txt" });
+});
+
+test("the classifier flags parameter expansion without exposing its runtime value", () => {
+  for (const command of ['echo "$SAMPLE_TOKEN"', 'printf "%s" "${SAMPLE_TOKEN}"', 'cat <<< "$SAMPLE_TOKEN"', 'cat <<EOF\n$SAMPLE_TOKEN\nEOF']) {
+    expect([command, shell(command).risk]).toEqual([command, "sensitive-read"]);
+  }
+  expect(shell("echo '$SAMPLE_TOKEN'").risk).toBe("read");
+  expect(shell('echo "\\$SAMPLE_TOKEN"').risk).toBe("read");
+  expect(shell("echo $\\\nSAMPLE_TOKEN").risk).toBe("unknown");
+});
+
+test("file reads remain lexical and report unresolved symbolic links to callers", () => {
+  expect(classifyShellPermission("cat sample.txt", cwd)).toMatchObject({ risk: "read", readPathsUnresolved: true });
+  expect(shell("cat < sample.txt")).toMatchObject({ readPathsUnresolved: true });
+  expect(shell("cat -")).not.toHaveProperty("readPathsUnresolved");
+  expect(shell("printf sample")).not.toHaveProperty("readPathsUnresolved");
+  expect(permissionSummary({ kind: "tool", name: "Read", detail: { type: "read", filePath: "sample.txt" } }, cwd))
+    .toMatchObject({ readPathsUnresolved: true });
+});
+
 test("ANSI-C and locale quoting fail closed while literal quote text stays readable", () => {
   expect(shell(String.raw`echo $'\'' ; rm y ; echo $'\'' #'`).risk).toBe("unknown");
   expect(shell('echo $"translated"').risk).toBe("unknown");
@@ -51,7 +116,7 @@ test("the title keeps visible dangers alongside an unknown command", () => {
 
 test("the shell classifier takes only command text and cwd and preserves individual operations", () => {
   const command = `cd '${cwd}' && git status | cat; git status >>build/history.txt`;
-  expect(classifyShellPermission(command, cwd)).toEqual({ cwd, risk: "write", count: 3, commands: [
+  expect(classifyShellPermission(command, cwd)).toEqual({ cwd, risk: "write", count: 3, readPathsUnresolved: true, commands: [
     { name: "cd", risk: "folder", detail: ".", setsWorkingFolder: true },
     { name: "git status", risk: "read" },
     { name: "cat", risk: "read" },
@@ -128,7 +193,7 @@ test("risky options and unknown syntax do not look like read-only commands", () 
     ["git -c diff.external=custom diff", "unknown"], ["my-tool --help", "unknown"],
     ["cat 'unterminated", "unknown"], ["cat <<EOF\nbody", "unknown"],
     ["git status &&", "unknown"], ["git status &&\ncat README.md", "read"],
-    ["npm ci", "network"], ["bun install", "network"], ["git fetch", "network"],
+    ["npm ci", "execute"], ["bun install", "execute"], ["git fetch", "network"],
     ["sips -g pixelWidth image.png", "read"], ["sips -g pixelWidth --out result image.png", "write"],
     ["sips -g pixelWidth --embedProfile profile.icc image.png", "write"], ["sips -g pixelWidth --sample-flag image.png", "unknown"],
     ["git branch --show-current", "read"], ["sed -n '1,5p' file", "read"],

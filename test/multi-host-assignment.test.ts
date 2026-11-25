@@ -30,7 +30,7 @@ const modeId = "auto-review";
 const unsupportedSteer = "Update the Paseo host to steer a running turn from an agent. Leave the behavior out to queue the message, or use interrupt.";
 
 type Agent = {
-  id: string; workspaceId: string; title: string; status: string; pendingPermissions: { id: string; title: string }[];
+  id: string; workspaceId: string; title: string; status: string; pendingPermissions: { id: string; title: string; kind?: "tool" }[];
   updatedAt: string; currentModeId?: string; metadata?: Record<string, unknown>; archivedAt?: string;
 };
 type Create = { agentId: string; config: { provider: string; modeId?: string }; title: string;
@@ -69,7 +69,7 @@ function daemon(projectId: string, path: string, remoteUrl: string) {
         else {
           creates.set(input.agentId, input);
           add(input.agentId, "idle", { title: input.title, metadata: input.metadata, currentModeId: input.config.modeId,
-            pendingPermissions: state.permissionsOnCreate ? [{ id: "allow-fs", title: "Confirm file access" }] : [] });
+            pendingPermissions: state.permissionsOnCreate ? [{ id: "allow-fs", kind: "tool", title: "Confirm file access" }] : [] });
         }
         return { id: input.agentId, workspaceId: id };
       } } }),
@@ -331,7 +331,8 @@ test("a new remote worker that asks for permission does not receive a work promp
   expect(s.win.creates.size).toBe(1);
   expect(s.win.sends).toHaveLength(0);
   const rows = await discoverBoardSessions(s.sdk, s.store);
-  expect(rows.find(row => row.serverId === remote.serverId)).toMatchObject({ projectId, nativePending: true, lane: "human" });
+  expect(rows.find(row => row.serverId === remote.serverId)).toMatchObject({ projectId, nativePending: true, lane: "human",
+    detail: "응답을 기다리는 요청 1건 · Confirm file access" });
 });
 
 test("remote session questions join the managed project and the user's reply uses that worker's host", async () => {

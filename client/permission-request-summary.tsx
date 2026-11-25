@@ -16,6 +16,9 @@ export function PermissionRequestSummary({ summary, theme }: { summary: Permissi
   const groupLimit = 12;
   return <View style={{ gap: 7, minWidth: 0 }}>
     <Text selectable accessibilityRole="header" style={{ color, fontWeight: "600", fontSize: 14, lineHeight: 20 }}>{title}</Text>
+    {summary.readPathsUnresolved && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
+      {t("심볼릭 링크 대상 미확인", "Symbolic link targets unverified")}
+    </Text>}
     {summary.kind === "shell" && <>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 5 }}>
         {summary.groups.slice(0, groupLimit).map((group, index) =>

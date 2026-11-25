@@ -28,12 +28,14 @@ export function permissionVersion(agent: Entry["agent"]) {
   return createHash("sha256").update(JSON.stringify(requests.length ? requests : agent.updatedAt)).digest("hex");
 }
 
-function observedState(agent: Entry["agent"]): Pick<SessionRow, "lane" | "detail" | "nativePending"> {
+function observedState(agent: Entry["agent"], includeToolTitles: boolean): Pick<SessionRow, "lane" | "detail" | "nativePending"> {
   const pending = agent.pendingPermissions.length;
   if (pending) {
     // Providers may put the full command in a tool request's title. The card reads the
     // request itself to show the summary and keeps the original out of the headline.
-    const labels = agent.pendingPermissions.filter(p => p.kind !== "tool").map(p => p.title || p.name).filter(Boolean);
+    const labels = agent.pendingPermissions.filter(p => includeToolTitles || p.kind !== "tool")
+      .map(p => (p.title?.trim() || p.name || "").replace(/[\p{Cc}\u202a-\u202e\u2066-\u2069]/gu, " ").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
     const detail = [`응답을 기다리는 요청 ${pending}건`, ...labels].join(" · ").slice(0, 2000);
     return { lane: "human", nativePending: true, detail };
   }
@@ -54,10 +56,10 @@ function observedState(agent: Entry["agent"]): Pick<SessionRow, "lane" | "detail
   return { lane: "unknown", detail: "세션 상태 미확인" };
 }
 
-export function sessionRow(agent: Entry["agent"], project: Entry["project"] | null, workspace?: Workspace): SessionRow {
+export function sessionRow(agent: Entry["agent"], project: Entry["project"] | null, workspace?: Workspace, { includeToolTitles = false } = {}): SessionRow {
   const work = workspace && !workspace.internal ? workspacePull(workspace) : undefined;
   const permission = permissionVersion(agent);
-  const state = observedState(agent);
+  const state = observedState(agent, includeToolTitles);
   const waitingSince = state.lane === "review" ? agent.attentionTimestamp || agent.updatedAt
     : state.lane === "idle" ? agent.updatedAt : undefined;
   return {

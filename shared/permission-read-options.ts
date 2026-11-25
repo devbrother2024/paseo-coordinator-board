@@ -22,7 +22,6 @@ const readOptions: Readonly<Record<string, ReadOptions>> = {
   rg: { ...search, short: search.short?.replace("L", "") },
   grep: { ...search, short: search.short?.replace("R", "") },
   find: { flags: "-H -L -P -print -print0 -ls -depth -empty -readable -writable -executable -xdev -mount -ignore_readdir_race -not -and -or", values: "-name -iname -path -ipath -type -xtype -maxdepth -mindepth -size -mtime -mmin -user -group -perm" },
-  sed: { short: "n" },
   awk: { shortValue: "F", values: "--field-separator" },
   readlink: { short: "efmnqsvz", flags: "--canonicalize --canonicalize-existing --canonicalize-missing --no-newline --quiet --silent --verbose --zero" },
   stat: { short: "fLt", shortValue: "c", flags: "--dereference --file-system --terse", values: "--format --printf" },
@@ -102,7 +101,6 @@ export function readCommandOperands(name: string, args: string[]): string[] | nu
     if (!/^\s*\{\s*print(?:\s+\$\d+(?:\s*,\s*\$\d+)*)?\s*;?\s*\}\s*$/.test(parsed.operands[0] ?? "")) return null;
     return parsed.operands.slice(1);
   }
-  if (name === "sed") return parsed.operands.slice(1);
   if (name === "rg" || name === "grep") {
     const files = parsed.patternOption || args.includes("--files") ? parsed.operands : parsed.operands.slice(1);
     return [...parsed.patternFiles, ...(name === "rg" && !files.length ? ["."] : files)];
