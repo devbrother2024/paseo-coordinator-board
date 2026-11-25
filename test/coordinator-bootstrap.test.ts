@@ -258,3 +258,38 @@ test("a board tool called from the first prompt before the switch says it is not
   // A session that is no longer the coordinator keeps the earlier answer.
   await expect(oldTool.execute({}, { paseo: f.sdk, agent: { id: "old-coordinator" } })).rejects.toThrow("해제");
 });
+
+async function handoverReader(timeline: (id: string) => Promise<unknown>) {
+  const f = await replaced();
+  let fetches = 0;
+  f.sdk.agents.ref = ((ref) => (id: string) => ({ ...ref(id), timeline: { refetch: async () => { fetches++; return timeline(id); } } }))(f.sdk.agents.ref);
+  let hook: any;
+  // A fresh reader, as after a plugin restart: nothing cached for the old coordinator.
+  attachCoordinatorTools({ addHook: (_: unknown, h: any) => { hook = h; return () => {}; } } as any, f.prefs, new ConversationReader());
+  const read = async () => JSON.parse((await (await hook({ request: { purpose: "interactive", agentId: f.current, tools: [] } })).tools[0]
+    .execute({ sessionId: "old-coordinator" }, { paseo: f.sdk, agent: { id: f.current } })).text);
+  return { ...f, read, fetches: () => fetches };
+}
+const oldRecord = async (id: string) => ({ epoch: id, entries: [
+  { item: { type: "user_message", text: "Please watch PR 12." }, seqEnd: 1 },
+  { item: { type: "assistant_message", text: "I will report when checks finish." }, seqEnd: 2 },
+] });
+
+test("a closed previous coordinator's record is fetched from Paseo even with nothing cached", async () => {
+  const f = await handoverReader(oldRecord);
+  f.agents.get("old-coordinator").status = "closed";
+  const record = await f.read();
+  expect(f.fetches()).toBe(1);
+  expect(record).toMatchObject({ sessionId: "old-coordinator", previousCoordinator: true, status: "closed" });
+  expect(record.turns.map((turn: { text: string }) => turn.text).join(" ")).toContain("PR 12");
+});
+
+test("an unreadable previous record is reported in both languages instead of an empty record", async () => {
+  const f = await handoverReader(async () => { throw new Error("timeline unavailable"); });
+  f.agents.get("old-coordinator").status = "closed";
+  await expect(f.read()).rejects.toThrow(/읽지 못했습니다.*Could not read/);
+  f.agents.get("old-coordinator").status = "running";
+  const running = await f.read();
+  expect(running).toMatchObject({ previousCoordinator: true, status: "running", turns: [] });
+  expect(running.note).toMatch(/진행 중.*still running/);
+});

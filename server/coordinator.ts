@@ -43,10 +43,14 @@ export function attachCoordinatorTools(server: Pick<PluginServerContext, "addHoo
         await managedRowsForCoordinator(paseo, prefs, agent.id, new Set([sessionId]));
         const target = (await discoverSessions(paseo)).find(r => r.id === sessionId && !r.serverId);
         if (!target) throw new Error("옛 코디네이터 세션을 찾을 수 없습니다. 보관되었거나 지워졌을 수 있습니다. / The previous coordinator session was not found. It may have been archived or removed.");
-        const data = await reader.read(paseo, target, true);
+        // Closed or failed coordinators are the ones most in need of a handover, so their stored record is fetched too.
+        const data = await reader.read(paseo, target, true, { closed: true }).catch(() => {
+          throw new Error("옛 코디네이터의 기록을 읽지 못했습니다. 잠시 뒤 다시 부르고, 계속 실패하면 사용자에게 알리세요. / Could not read the previous coordinator's record. Call again shortly, and tell the person if it keeps failing.");
+        });
         if (handoverSource(prefs.read(), agent.id) !== sessionId) throw new Error("관리 범위가 바뀌었습니다. / The managed scope changed.");
-        return { text: JSON.stringify(data ? { sessionId, previousCoordinator: true, evidenceId: data.id, turns: data.turns }
-          : { sessionId, previousCoordinator: true, status: target.status, turns: [] }) };
+        return { text: JSON.stringify(data ? { sessionId, previousCoordinator: true, status: target.status, evidenceId: data.id, turns: data.turns }
+          : { sessionId, previousCoordinator: true, status: target.status, turns: [],
+            note: "옛 코디네이터가 아직 진행 중이라 기록을 읽지 못했습니다. 끝난 뒤 다시 부르세요. / The previous coordinator is still running, so its record could not be read. Call again when it finishes." }) };
       }
       const rows = await managedRowsForCoordinator(paseo, prefs, agent.id, sessionId ? new Set([sessionId]) : undefined);
       if (!sessionId) {

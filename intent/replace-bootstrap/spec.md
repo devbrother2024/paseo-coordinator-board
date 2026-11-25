@@ -35,7 +35,7 @@ Intent: [intent.md](intent.md)
 
 ### 옛 코디네이터 읽기(`server/coordinator.ts`)
 
-- `read_board_conversation`에 `sessionId`가 있고, 그 ID가 `retiredCoordinator(scope)`(현재 코디네이터가 보드가 교체로 만든 세션일 때의 `createdCoordinator.previous`)이며 부른 세션이 현재 코디네이터이면, 관리 범위와 상관없이 이 호스트의 그 세션 기록을 읽는다. 결과에 `previousCoordinator: true`를 붙인다.
+- `read_board_conversation`에 `sessionId`가 있고, 그 ID가 `retiredCoordinator(scope)`(현재 코디네이터가 보드가 교체로 만든 세션일 때의 `createdCoordinator.previous`)이며 부른 세션이 현재 코디네이터이면, 관리 범위와 상관없이 이 호스트의 그 세션 기록을 읽는다. 결과에 `previousCoordinator: true`를 붙인다. 닫힌 세션도 캐시에 기대지 않고 Paseo에 저장된 기록을 다시 읽는다(닫히거나 오류 난 코디네이터의 교체가 인계가 가장 필요한 경우). 기록을 읽지 못하면 빈 결과 대신 두 언어 오류를, 옛 세션이 아직 진행 중이면 빈 기록과 함께 두 언어 안내(`note`)를 돌려준다.
 - 그 밖의 세션은 지금처럼 관리 세션만 읽는다. 도구의 이름, 설명, 입력 형식은 그대로다.
 
 ### 옛 코디네이터 보관
@@ -72,7 +72,7 @@ Intent: [intent.md](intent.md)
 | R6 | 보관 줄은 보드가 만들고 교체로 은퇴시킨 코디네이터만, 진행 중·권한 대기(`attentionReason` 포함)면 꺼진다 | "only the coordinator a board replacement retired…", "a running or waiting retired coordinator…", "a coordinator the person picked by hand…" |
 | R7 | 보관은 사람이 누를 때만, 조건을 다시 확인한 뒤 | "settings offer the retired coordinator…", "after the person picks another coordinator…" |
 | R10 | 지정 전 도구 호출은 구분된 두 언어 오류, 시작 지시에 재시도 안내 | "a board tool called from the first prompt before the switch…", `test/lifecycle.test.ts` 준비 중 세션 거절 |
-| R8 | 새 코디네이터만 바로 앞 코디네이터를 읽고, 다른 비관리 세션은 여전히 못 읽는다 | "the new coordinator can read the coordinator it replaced…" |
+| R8 | 새 코디네이터만 바로 앞 코디네이터를 읽고(닫힌 세션은 다시 읽기, 못 읽으면 두 언어 안내), 다른 비관리 세션은 여전히 못 읽는다 | "the new coordinator can read the coordinator it replaced…", "a closed previous coordinator's record is fetched…", "an unreadable previous record is reported…" |
 | R9 | 확인 문구와 설정 줄이 두 언어로 보인다 | 지어낸 데이터로 넓은 화면·390px, 한·영 화면 확인 |
 
 ## 5. 버린 설계
