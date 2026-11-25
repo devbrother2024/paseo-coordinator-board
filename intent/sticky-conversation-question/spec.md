@@ -89,7 +89,7 @@ Intent: [intent.md](intent.md)
 - 카드 머리 아래 한 줄(있는 것만, ` · `로 이음): "오래된 질문", "세션 끝남 · 미처리", "세션에 답했을 수 있음 · 확인" 또는 "이 뒤로 세션이 n번 더 말함 · 아직 답 없음". 영어: "Old question", "Session ended · Not handled", "You may have answered in the session · Check", "The session spoke n more times since · No answer yet".
 - **처리됨으로 닫기** / **Close as handled**. "이 세션의 이전 미처리 질문" 목록과 질문마다 같은 버튼.
 - 끝난 세션의 카드는 답 입력을 내지 않고 "세션이 끝났거나 찾을 수 없어 답을 보낼 수 없습니다. 처리됐으면 처리됨으로 닫아 주세요."를 보인다.
-- 오래된 질문 카드는 흐리게 그린다.
+- 오래된 질문 카드는 흐리게 그린다. (대체됨: `coordinator-judges-open-questions` 뒤 흐림과 "오래된 질문" 표시는 없다.)
 
 ## 3. 경계와 실패
 

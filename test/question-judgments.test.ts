@@ -285,12 +285,11 @@ test("judge action: handled needs evidence that names something, and calling it 
 test("card line: no 'may have answered', no per-question close, and the coordinator's verdict is plain", () => {
   const decision = { source: "conversation" } as any;
   const maybe = keptQuestionNotice({ keptQuestion: { key: "k", later: 2, maybeAnswered: true }, decision })!;
-  expect(maybe.line).toEqual(["이 뒤로 세션이 2번 더 말함", "The session spoke 2 more times since"]);
+  expect(maybe.line).toBeNull();
   expect(JSON.stringify(maybe)).not.toMatch(/답했을 수 있음|may have answered/);
-  expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 0, verdict: "needed" }, decision })!.line).toEqual(
-    ["코디네이터 판단: 처리 필요", "Coordinator: needs your decision"]);
-  expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 0, ended: true, stale: true }, decision })!.line).toEqual(
-    ["오래된 질문 · 세션 끝남 · 미처리", "Old question · Session ended · Not handled"]);
+  expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 0, verdict: "needed", verdictTodo: "Pick the release region" }, decision })!.line).toEqual(
+    ["처리 필요 · Pick the release region", "Needs your decision · Pick the release region"]);
+  expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 0, ended: true }, decision })!.line).toBeNull();
   expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 0 }, decision })!.line).toBeNull();
 });
 

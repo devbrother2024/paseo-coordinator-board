@@ -44,12 +44,13 @@ const session = z.object({
   // `later` counts the session's messages since. `maybeAnswered`: the person wrote something else to the session after it.
   // `ended`: the session ended or the board cannot find it. `older`: earlier questions of the session still open.
   keptQuestion: z.object({
-    key: z.string().min(1).max(64), later: z.number().int().min(0), stale: z.literal(true).optional(),
+    key: z.string().min(1).max(64), later: z.number().int().min(0),
     maybeAnswered: z.literal(true).optional(), ended: z.literal(true).optional(),
     // The person's done note on the session already closed an earlier question, so it does not hide this one.
     noteSpent: z.literal(true).optional(),
     // The coordinator judged that the question still needs the person, and why.
-    verdict: z.literal("needed").optional(), verdictEvidence: z.string().max(2000).optional(),
+    // With a needed verdict, what the person is to do: the coordinator's todo, or the question's first line.
+    verdict: z.literal("needed").optional(), verdictTodo: z.string().max(80).optional(), verdictEvidence: z.string().max(2000).optional(),
     // Every other open question of the session. The card folds those past the first 10; none is cut.
     older: z.array(z.object({ key: z.string().min(1).max(64), question: z.string().max(340), askedAt: z.string().optional() })).optional(),
   }).optional(),

@@ -130,7 +130,8 @@ test("does not close (1): the person wrote about something else", () => {
   expect(result).toMatchObject({ lane: "human", detail: expect.stringContaining("Shall I publish"), keptQuestion: { maybeAnswered: true } });
   expect(judge(evidence(ask, ["user", "", 0.5], reply)).keptQuestion?.maybeAnswered).toBe(true);
   // The card does not say it may have been answered: the coordinator judges that (question-judgments).
-  expect(keptQuestionNotice({ keptQuestion: result.keptQuestion!, decision: { source: "conversation" } as any })?.line?.[0]).toBe("이 뒤로 세션이 1번 더 말함");
+  // Before the coordinator judges, the card is a plain decision card with no extra line.
+  expect(keptQuestionNotice({ keptQuestion: result.keptQuestion!, decision: { source: "conversation" } as any })?.line).toBeNull();
 });
 
 test("does not close (2): messages and heartbeats from other sessions", () => {
@@ -142,13 +143,12 @@ test("does not close (3): later messages from the session without a question", (
   expect(result).toMatchObject({ lane: "human", decisionRequestedAt: at(1), keptQuestion: { later: 2 } });
 });
 
-test("does not close (4): time and the number of later messages only dim the card", () => {
+test("does not close (4): time and the number of later messages change nothing on the card", () => {
   const replies = (count: number) => Array.from({ length: count }, (_, i): Step => ["assistant", `Report ${i} noted.`, 0.5]);
-  expect(judge(evidence(ask, ...replies(15))).keptQuestion?.stale).toBeUndefined();
-  expect(judge(evidence(ask, ...replies(16))).keptQuestion).toMatchObject({ later: 16, stale: true });
-  expect(judge(evidence(ask, ...replies(120))).keptQuestion).toMatchObject({ later: 120, stale: true });
-  expect(judge(evidence(["assistant", "Shall I publish it now?", 13], reply)).keptQuestion?.stale).toBe(true);
-  expect(judge(evidence(["assistant", "Shall I publish it now?", 24 * 30], reply)).lane).toBe("human");
+  for (const result of [judge(evidence(ask, ...replies(120))), judge(evidence(["assistant", "Shall I publish it now?", 24 * 30], reply))]) {
+    expect(result.lane).toBe("human");
+    expect(result.keptQuestion).not.toHaveProperty("stale");
+  }
 });
 
 test("does not close (5): a session that works, ends, is archived or cannot be found", () => {
@@ -165,7 +165,8 @@ test("does not close (5): a session that works, ends, is archived or cannot be f
   // Ended, or gone from the list (archived, host unreachable): the card stays as ended.
   const ended = snapshot(scope, null, row({ status: "closed", lane: "idle" }));
   expect(ended).toMatchObject({ lane: "human", keptQuestion: { key, ended: true } });
-  expect(keptQuestionNotice(ended)?.line?.[0]).toContain("세션 끝남 · 미처리");
+  // The card says so in place of the reply box; no extra line before the coordinator judges.
+  expect(keptQuestionNotice(ended)?.ended).toBe(true);
   // The question scrolled out of what the board reads: still open from the record.
   const scrolled = snapshot(scope, excerpt(page([reply], { entries: [entry(reply, 900)] })));
   expect(scrolled).toMatchObject({ lane: "human", keptQuestion: { key } });
@@ -217,12 +218,8 @@ test("the board reads further back only while a question it has not seen could b
 test("card lines in both languages", () => {
   const decision = { source: "conversation" } as any;
   expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 0 }, decision })?.line).toBeNull();
-  expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 1 }, decision })?.line).toEqual(
-    ["이 뒤로 세션이 1번 더 말함", "The session spoke 1 more time since"]);
-  expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 17, stale: true }, decision })?.line).toEqual(
-    ["오래된 질문", "Old question"]);
-  expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 3, ended: true, maybeAnswered: true }, decision })?.line).toEqual(
-    ["세션 끝남 · 미처리", "Session ended · Not handled"]);
+  expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 1 }, decision })?.line).toBeNull();
+  expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 3, ended: true, maybeAnswered: true }, decision })?.line).toBeNull();
   expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 1 }, decision: { source: "coordinator" } as any })).toBeNull();
 });
 
@@ -259,13 +256,14 @@ test("regression: a person's message that does not answer the decision keeps the
     decision: { source: "conversation", question: "Shall I publish it now?" } });
 });
 
-test("regression: a question asked 26 hours ago is still a card, only dimmed, from the conversation and from the record", () => {
+test("regression: a question asked 26 hours ago is still a plain card, from the conversation and from the record", () => {
   const scope = blank();
   const old: Step = ["assistant", "Release 0.9 is ready.\nShall I publish it now?", 26];
   const shown = snapshot(scope, evidence(old, report, ["assistant", "Noted.", 25]));
-  expect(shown).toMatchObject({ lane: "human", keptQuestion: { stale: true }, decision: { source: "conversation" } });
+  expect(shown).toMatchObject({ lane: "human", decision: { source: "conversation" } });
+  expect(shown.keptQuestion).not.toHaveProperty("stale");
   const fromRecord = snapshot(scope, null, row({ status: "running", lane: "running", detail: "Working" }));
-  expect(fromRecord).toMatchObject({ lane: "running", keptQuestion: { key: shown.keptQuestion.key, stale: true }, decision: { version: shown.decision.version } });
+  expect(fromRecord).toMatchObject({ lane: "running", keptQuestion: { key: shown.keptQuestion.key }, decision: { version: shown.decision.version } });
 });
 
 test("open questions are never cut by count: 70 stay", () => {

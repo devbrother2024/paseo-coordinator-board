@@ -138,6 +138,8 @@ const judgment = z.strictObject({
   questionKey: z.string().min(1).max(64),
   verdict: z.enum(["handled", "needed"]),
   evidence: z.string().max(2000).optional(),
+  // With needed: a short todo the card shows ("처리 필요 · <todo>"). Without one, the card shows the question's first line.
+  todo: z.string().trim().min(1).max(80).optional(),
 }).refine(input => input.verdict !== "handled" || (input.evidence ?? "").replace(/\s/g, "").length >= MIN_EVIDENCE, {
   path: ["evidence"],
   message: `handled 에는 근거가 필요합니다: 어느 글, 어느 답, 어느 카드인지 ${MIN_EVIDENCE}자 이상으로 적어 주세요. / `
@@ -147,12 +149,14 @@ const judgment = z.strictObject({
 const usage = [
   "보드가 [Coordinator Board · 판단 필요] 또는 [아직 판단 안 됨] 알림으로 보낸 열린 질문을 판단해 기록합니다. 그 세션 기록에서 질문 뒤를 읽고:",
   "- 사람의 답, 결정 반영 줄, 다른 세션의 처리, 원장 카드 해결이 있으면 verdict \"handled\", evidence 에 어느 글·답·카드인지 적습니다(공백 빼고 10자 이상).",
-  "- 질문이 실제 결정 요청이 아니라 다른 카드의 안내나 상태 설명이면 \"handled\", evidence 에 같은 질문을 가진 카드를 적습니다.",
-  "- 그 밖이거나 근거를 못 찾으면 \"needed\" 입니다. 카드는 사람에게 남습니다. 세션이 끝났어도 같은 기준입니다.",
+  "- 질문이 확인 요청이 아니라 보고·안내·다른 카드 안내면 \"handled\", evidence 에 어느 글이 무엇을 안내했는지(같은 질문을 가진 카드가 있으면 그 카드) 적습니다.",
+  "- 그 밖이거나 근거를 못 찾으면 \"needed\" 입니다. 카드는 사람에게 남습니다. todo 에 사람이 할 일을 80자 안으로 적으면 카드에 \"처리 필요 · <todo>\"로 보입니다. 세션이 끝났어도 같은 기준입니다.",
+  "- 오래됐다는 이유로 needed 나 handled 를 정하지 않습니다.",
   "Judge an open question the board listed in a [Coordinator Board · Judgment needed] or [Still not judged] notice. Read the session's record after the question:",
   "- If the person answered, the session wrote a decision-applied line, another session handled it, or a ledger card resolved it, use verdict \"handled\" with evidence naming the message, reply or card (at least 10 characters besides spaces).",
-  "- If it is not a real request for a decision but guidance for another card or a status note, use \"handled\" with evidence naming the card that holds the question.",
-  "- Otherwise, or when you find no evidence, use \"needed\". The card stays with the person. The same holds when the session ended.",
+  "- If it is not a request to confirm or decide but a report, guidance, or guidance for another card, use \"handled\" with evidence naming which message gave what guidance (and the card that holds the same question, if any).",
+  "- Otherwise, or when you find no evidence, use \"needed\". The card stays with the person. Put what the person is to do in todo (80 characters at most); the card shows \"Needs your decision · <todo>\". The same holds when the session ended.",
+  "- Age is not a reason for needed or handled.",
 ].join("\n");
 
 const fail = (ko: string, en: string) => ({ isError: true, text: `${ko} / ${en}` });
@@ -165,7 +169,7 @@ export function judgeOpenQuestionTool(prefs: PreferenceStore, invalidate: () => 
     usage,
     actionOnly: true,
     input: judgment,
-    async execute({ sessionId, questionKey, verdict, evidence }, { agent }) {
+    async execute({ sessionId, questionKey, verdict, evidence, todo }, { agent }) {
       // Recording handled again for a question the coordinator already closed is fine.
       const already = (scope: Preferences) => verdict === "handled" && scope.closedQuestions[questionKey]?.reason === "coordinator" &&
         scope.closedQuestions[questionKey]?.sessionId === sessionId;
@@ -195,7 +199,7 @@ export function judgeOpenQuestionTool(prefs: PreferenceStore, invalidate: () => 
           saved.questions = saved.questions.filter(item => item.key !== questionKey);
           if (!saved.questions.length) delete scope.raisedQuestions[sessionId];
         } else {
-          question.verdict = { kind: "needed", ...(note ? { evidence: note } : {}), at, by: agent.id };
+          question.verdict = { kind: "needed", ...(note ? { evidence: note } : {}), ...(todo ? { todo } : {}), at, by: agent.id };
           delete question.judge;
         }
       });

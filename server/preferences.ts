@@ -41,7 +41,7 @@ export const raisedQuestionSchema = z.object({
   // Why the coordinator should judge whether it was handled, while it has not.
   judge: z.enum(["others-open", "spoke-after", "person-wrote", "session-ended"]).optional(),
   // The coordinator's judgment that it still needs the person.
-  verdict: z.object({ kind: z.literal("needed"), evidence: z.string().max(2000).optional(), at: z.iso.datetime(), by: z.string().max(256) }).optional(),
+  verdict: z.object({ kind: z.literal("needed"), evidence: z.string().max(2000).optional(), todo: z.string().max(80).optional(), at: z.iso.datetime(), by: z.string().max(256) }).optional(),
   // The coordinator that was told to judge it, and when the board last tried to tell it (sent or failed).
   notified: z.string().max(256).optional(), notifiedAt: z.iso.datetime().optional(),
   // How many notices the coordinator got about it. Each reminder waits twice as long as the one before.

@@ -46,10 +46,9 @@ export type FoundQuestion = {
 };
 export type QuestionScan = { epoch?: string; open: FoundQuestion[]; closed: { key: string; reason: ClosedReason; epoch: string; seq: number }[] };
 
-const HOUR = 60 * 60 * 1000;
-// Display only: a question reads as old after this many later messages or this long. It never leaves for that.
-export const OLD_QUESTION = { later: 15, ageMs: 12 * HOUR };
 export const MAX_CLOSED = 4000;
+// The todo a needed verdict shows on the card.
+export const TODO_LENGTH = 80;
 
 const applied = /^(?:결정\s*반영|decision\s+applied)\s*[:：]\s*\S/iu;
 const moved = /^(?:질문(?:은|을)?\s+(?:원장\s+)?카드\s*\S{1,80}?\s*(?:으로|로)\s+옮(?:김|겼습니다|겼어요)|(?:the\s+)?question\s+(?:was\s+)?moved\s+to\s+(?:the\s+)?(?:ledger\s+)?card\s+\S.{0,80}?)$/iu;
@@ -245,20 +244,21 @@ export function judgeReason(scan: QuestionScan, item: FoundQuestion, index: numb
 
 /**
  * What the card shows about the open question. Other open questions of the session ride along, judged or not: a question
- * leaves only when something shows it was handled.
+ * leaves only when something shows it was handled. Age does not change the card: an open question is either still to
+ * decide or judged as needing the person, and a needed verdict says what to do (its todo, or the question's first line).
  */
-export function questionNotice(scan: QuestionScan, ended: boolean, now = Date.now()): NonNullable<SessionRow["keptQuestion"]> | undefined {
+export function questionNotice(scan: QuestionScan, ended: boolean, _now = Date.now()): NonNullable<SessionRow["keptQuestion"]> | undefined {
   const main = scan.open.at(-1);
   if (!main) return undefined;
-  const age = main.askedAt ? now - Date.parse(main.askedAt) : NaN;
-  const old = main.later > OLD_QUESTION.later || age > OLD_QUESTION.ageMs;
   const verdict = main.record?.verdict;
+  const firstLine = (main.markdown || main.question).split("\n").map(line => line.trim()).find(Boolean) ?? main.question;
+  const todo = (verdict?.todo || firstLine).slice(0, TODO_LENGTH);
   // All of them: the card folds what does not fit, nothing is cut here.
   const older = scan.open.slice(0, -1).reverse()
     .map(item => ({ key: item.key, question: item.question.slice(0, 340), ...(item.askedAt ? { askedAt: item.askedAt } : {}) }));
-  return { key: main.key, later: main.later, ...(old ? { stale: true as const } : {}), ...(main.maybeAnswered ? { maybeAnswered: true as const } : {}),
+  return { key: main.key, later: main.later, ...(main.maybeAnswered ? { maybeAnswered: true as const } : {}),
     ...(ended ? { ended: true as const } : {}), ...(older.length ? { older } : {}),
-    ...(verdict ? { verdict: "needed" as const, ...(verdict.evidence ? { verdictEvidence: verdict.evidence } : {}) } : {}) };
+    ...(verdict ? { verdict: "needed" as const, verdictTodo: todo, ...(verdict.evidence ? { verdictEvidence: verdict.evidence } : {}) } : {}) };
 }
 
 /** The context a session's scan needs from the host settings. */

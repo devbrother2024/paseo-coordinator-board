@@ -184,11 +184,11 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
       style={{ paddingVertical: 6, paddingHorizontal: 3 }} onPress={onPress}>
       <Text style={{ color: c.foregroundMuted, fontSize: 13, textDecorationLine: "underline" }}>{label}</Text>
     </Pressable>;
-  return <View style={{ gap: 7, ...(kept?.stale && { opacity: 0.6 }), ...(embedded && { paddingTop: 10, borderTopWidth: 1, borderColor: c.border }) }}>
+  return <View style={{ gap: 7, ...(embedded && { paddingTop: 10, borderTopWidth: 1, borderColor: c.border }) }}>
     <CardHeader theme={theme} text={marker}>
       {open && <SessionChip theme={theme} label={t("작업 세션 열기", "Open work session")} accessibilityLabel={named(t("작업 세션 열기", "Open work session")).accessibilityLabel} onPress={() => open(session.id)} />}
     </CardHeader>
-    {kept?.line && <Text style={{ color: kept.stale || kept.ended ? c.statusWarning : c.foregroundMuted, fontSize: 12 }}>{t(...kept.line)}</Text>}
+    {kept?.line && <Text style={{ color: c.statusWarning, fontSize: 12, fontWeight: "600" }}>{t(...kept.line)}</Text>}
     {split ? <View>
       {/* The full title, laid out unseen at the same width, tells whether two lines cut it off. */}
       <View pointerEvents="none" aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants"

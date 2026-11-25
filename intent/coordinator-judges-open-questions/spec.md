@@ -43,7 +43,7 @@ Intent: [intent.md](intent.md)
 ### 2.4 action `judge_open_question`
 
 - `board_action`으로만 닿는다(`actionOnly`). 도구 정의는 바뀌지 않는다.
-- 입력 `{ sessionId, questionKey, verdict: "handled" | "needed", evidence? }`. `handled`이면 `evidence`(공백을 빼고 10자 이상, 2000자까지, 어느 글·답·카드인지)가 있어야 한다.
+- 입력 `{ sessionId, questionKey, verdict: "handled" | "needed", evidence?, todo? }`. `todo`는 needed 판단에 카드가 보일 할 일(1~80자). `handled`이면 `evidence`(공백을 빼고 10자 이상, 2000자까지, 어느 글·답·카드인지)가 있어야 한다.
 - 이미 코디네이터 근거로 닫힌 질문에 `handled`를 다시 부르면 성공한다(멱등). `needed`는 열린 질문에만.
 - 부른 세션이 지금 코디네이터여야 하고, 그 질문이 그 세션의 열린 질문 기록에 있고 프로젝트가 선택돼 있어야 한다.
 - `handled`: `closedQuestions[questionKey] = { reason: "coordinator", evidence, question, projectId, ... }`, 기록에서 뺀다.
@@ -53,7 +53,7 @@ Intent: [intent.md](intent.md)
 ### 2.5 카드
 
 - `keptQuestion`에 `verdict?: "needed"`. `maybeAnswered`는 화면에 쓰지 않는다(버전에는 그대로 쓴다).
-- 앞면 한 줄: "오래된 질문", "세션 끝남 · 미처리", "코디네이터 판단: 처리 필요", "이 뒤로 세션이 n번 더 말함" 중 있는 것. "세션에 답했을 수 있음"과 "아직 답 없음"은 없다.
+- 앞면 한 줄은 처리 필요 판단에만: "처리 필요 · <할 일>" / "Needs your decision · <todo>". 할 일은 판단의 `todo`(80자까지), 없으면 질문의 첫 줄. 판단 전 카드에는 줄이 없다(보통 결정 카드). 오래됐다는 표시(흐림, "오래된 질문")와 "이 뒤로 세션이 n번 더 말함", "세션 끝남 · 미처리" 줄은 없다. 끝난 세션은 답 입력 대신 안내 문장으로 알린다. 기다린 시간은 머리 줄이 보인다.
 - `older`(같은 세션의 다른 열린 질문)는 판단과 상관없이 모두 담는다(개수로 자르지 않음). 카드는 10개를 넘는 것을 "외 n개 더 보기"로 접고, 펼치면 모두 보인다. 사라지는 것은 처리 근거로 닫힌 질문뿐이다. 제목은 "이 세션의 다른 결정". 질문마다의 버튼은 없다.
 - 사람이 직접 닫는 길: 근거·이력 안의 링크 "처리된 것으로 직접 닫기" 하나(카드의 질문만).
 - needed 판단의 근거는 근거·이력에 보인다.
