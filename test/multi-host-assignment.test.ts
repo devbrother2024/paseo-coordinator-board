@@ -246,12 +246,17 @@ test("remote first instructions work without agent steering and replay only once
   expect(s.mac.sends).toBeEmpty();
 });
 
-test("a steering compatibility rejection retries once with the same attributed message ID", async () => {
+test("a steering compatibility rejection waits for explicit replay with the same attributed message ID", async () => {
   const s = scenario();
   s.win.state.rejectNextSend = () => Error(unsupportedSteer);
-  const receipt = await s.assign(s.job);
-  expect(await s.assign(s.job)).toEqual(receipt);
   const options = { sourceAgentId: coordinator, sourceAgentServerId: local.serverId, messageId: creationUuid(s.job.requestKey, "prompt") };
+  await expect(s.assign(s.job)).rejects.toThrow(/같은 요청 키.*Retry with the same request key/);
+  expect(s.win.sendAttempts).toEqual([options]);
+  expect(s.win.sends).toBeEmpty();
+  const [sessionId] = s.win.creates.keys();
+  const receipt = await s.assign(s.job);
+  expect(receipt.sessionId).toBe(sessionId);
+  expect(await s.assign(s.job)).toEqual(receipt);
   expect(s.win.sendAttempts).toEqual([options, options]);
   expect(s.win.sends).toHaveLength(1);
   expect(s.win.creates.size).toBe(1);
@@ -272,12 +277,13 @@ test("the same request key recovers a created worker that never got its first in
   expect(s.win.sends).toHaveLength(1);
 });
 
-test("a permission request that appears before the compatibility retry stops delivery", async () => {
+test("a permission request that appears before explicit replay stops delivery", async () => {
   const s = scenario();
   s.win.state.rejectNextSend = agent => {
     agent.pendingPermissions = [{ id: "permission-1", title: "Confirm permission" }];
     return Error(unsupportedSteer);
   };
+  await expect(s.assign(s.job)).rejects.toThrow(/Could not confirm delivery/);
   await expect(s.assign(s.job)).rejects.toThrow(/Check whether the remote session is ready/);
   expect(s.win.sendAttempts).toHaveLength(1);
   expect(s.win.sends).toBeEmpty();

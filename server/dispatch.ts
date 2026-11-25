@@ -254,30 +254,17 @@ export async function sendRemoteAssignment(paseo: Pick<Sdk, "agents">, sessionId
     { cause },
   ), { code: (cause as { code?: string } | null)?.code });
 
-  const needsDelivery = async () => {
-    const timeline = await worker.timeline.refetch({ direction: "tail", projection: "projected", limit: 48 })
-      .catch(cause => { throw unconfirmed(cause); });
-    if (timeline.error || timeline.gap || timeline.staleCursor) throw unconfirmed();
-    if (timeline.entries.some(({ item }) => item.type === "tool_call" &&
-      item.callId === "paseo-agent-message:" + messageId && item.agentMessage?.event === "message" &&
-      item.agentMessage.sender.id === sourceAgentId && item.agentMessage.text === text)) return false;
-    const agent = (await worker.refresh().catch(cause => { throw unconfirmed(cause); }))?.agent;
-    if (!agent || agent.id !== sessionId || agent.archivedAt || agent.internal || !canReceiveBoardInput(agent, false)) {
-      throw new Error("원격 세션이 작업 지시를 받을 수 있는 상태인지 확인해 주세요. / Check whether the remote session is ready for a work request.");
-    }
-    checkScope();
-    return true;
-  };
-
-  if (!await needsDelivery()) return;
-  try {
-    // Omitting the behavior uses Paseo's queue for attributed messages on older hosts too.
-    await worker.send(text, options);
-  } catch (error) {
-    // Paseo rejects unsupported steering before sending. An uncertain result must be checked on explicit replay.
-    if (!(error instanceof Error) || !error.message.startsWith("Update the Paseo host to steer a running turn from an agent.")) {
-      throw unconfirmed(error);
-    }
-    if (await needsDelivery()) await worker.send(text, options).catch(cause => { throw unconfirmed(cause); });
+  const timeline = await worker.timeline.refetch({ direction: "tail", projection: "projected", limit: 48 })
+    .catch(cause => { throw unconfirmed(cause); });
+  if (timeline.error || timeline.gap || timeline.staleCursor) throw unconfirmed();
+  if (timeline.entries.some(({ item }) => item.type === "tool_call" &&
+    item.callId === "paseo-agent-message:" + messageId && item.agentMessage?.event === "message" &&
+    item.agentMessage.sender.id === sourceAgentId && item.agentMessage.text === text)) return;
+  const agent = (await worker.refresh().catch(cause => { throw unconfirmed(cause); }))?.agent;
+  if (!agent || agent.id !== sessionId || agent.archivedAt || agent.internal || !canReceiveBoardInput(agent, false)) {
+    throw new Error("원격 세션이 작업 지시를 받을 수 있는 상태인지 확인해 주세요. / Check whether the remote session is ready for a work request.");
   }
+  checkScope();
+  // Use the host's queue. A failed send can only be checked again by an explicit same-key replay.
+  await worker.send(text, options).catch(cause => { throw unconfirmed(cause); });
 }
