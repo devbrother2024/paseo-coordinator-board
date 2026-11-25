@@ -125,7 +125,7 @@ test("a work session on another host can own the PR once that host shows it in t
   await expect(f.run(owned)).rejects.toThrow("다른 기기 세션");
   f.remote.repos.set("peer-a/far-worker", ["example/book"]);
   expect(await f.run(owned)).toContain("merge card");
-  expect(f.prefs.read().pullJudgments["example/book#9"]).toMatchObject({ ownerSessionId: "far-worker" });
+  expect(f.prefs.read().pullJudgments["example/book#9"]).toMatchObject({ ownerSessionId: "far-worker", ownerSessionHost: "peer-a" });
 });
 
 test("remote owner candidates come only from cards for this PR or project and from remote assignments", () => {

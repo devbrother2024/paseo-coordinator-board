@@ -1,6 +1,6 @@
 import type { PullRequestItem } from "../shared/prs";
 import type { TrackedDecision } from "../shared/tracked-decisions";
-import { trackedWorkSession, type RemoteWorkSession } from "./tracked-session-targets";
+import { trackedWorkSession, type RemoteWorkSession, type WorkSessionHost } from "./tracked-session-targets";
 
 type PullRef = Pick<PullRequestItem, "repo" | "number" | "projectIds">;
 type Directory = Parameters<typeof trackedWorkSession>[1];
@@ -53,4 +53,13 @@ export function remoteSessionView<S, L>(answer: RemoteAnswer<S, L> | undefined, 
 // preview opened asks once more, unless the person already chose to go ahead while it was running.
 export function confirmAfterLookup(fresh: { running: boolean } | null | undefined, acknowledgedRunning: boolean): "merge" | "ask" {
   return fresh?.running && !acknowledgedRunning ? "ask" : "merge";
+}
+
+// The owner the coordinator named for this PR, on the host where the board verified it.
+// It joins the PR row like a ledger card's session, so the running check covers it too.
+export function judgedOwnerSession(pr: Pick<PullRequestItem, "judgment">, hosts: readonly WorkSessionHost[], linkedIds: ReadonlySet<string>): RemoteWorkSession | undefined {
+  const id = pr.judgment?.ownerSessionId, serverId = pr.judgment?.ownerSessionHost;
+  if (!id || !serverId || linkedIds.has(id)) return undefined;
+  const host = hosts.find(entry => entry.serverId === serverId);
+  return host ? { kind: "remote", id, hosts: [host] } : undefined;
 }

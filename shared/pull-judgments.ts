@@ -5,6 +5,8 @@ export const MAX_PULL_JUDGMENTS = 500;
 export const pullJudgmentSchema = z.object({
   repo: repositorySlug, number: z.number().int().positive(), headSha: commitSha, verdict: pullVerdict,
   reason: z.string().trim().min(1).max(300), ownerSessionId: z.string().min(1).max(256).optional(),
+  // The host where the board verified a remote owner (its serverId). Absent for a session on this host.
+  ownerSessionHost: z.string().min(1).max(256).optional(),
   at: z.iso.datetime(), coordinator: z.string(),
 });
 export type PullJudgment = z.output<typeof pullJudgmentSchema>;
@@ -30,6 +32,7 @@ export function applyPullJudgments<T extends PullRequestItem>(items: readonly T[
     const judgment = current && {
       verdict: current.verdict, reason: current.reason, at: current.at,
       ...(current.ownerSessionId ? { ownerSessionId: current.ownerSessionId } : {}),
+      ...(current.ownerSessionHost ? { ownerSessionHost: current.ownerSessionHost } : {}),
     };
     if (pr.reason !== "ready") return { ...pr, lane: "progress", ...(judgment ? { judgment } : {}) } as T;
     let gate: PullGate;

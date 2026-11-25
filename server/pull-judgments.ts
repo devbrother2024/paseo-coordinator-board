@@ -79,11 +79,12 @@ export function judgePullTool(prefs: PreferenceStore, prs: Reader, invalidate: (
           `The PR head is ${pull.headSha ?? "unavailable"}. Review that commit again.`);
       }
       // A session on another host owns the PR only when that host shows it in the PR's repository.
+      let ownerSessionHost: string | null = null;
       if (remoteOwner && owners && ownerSessionId) {
         const scope = prefs.read();
-        const confirmed = await verifyRemoteOwner(ownerSessionId, pull, owners.hints(new Set(scope.projects), ownerSessionId),
+        ownerSessionHost = await verifyRemoteOwner(ownerSessionId, pull, owners.hints(new Set(scope.projects), ownerSessionId),
           scope.dispatchReceipts, (owners.deps ?? remoteOwnerDeps)(paseo, scope));
-        if (!confirmed) {
+        if (!ownerSessionHost) {
           throw fail("ownerSessionId가 관리 세션이 아니고, 다른 기기 세션을 확인하지 못했습니다.",
             "ownerSessionId is not a managed session, and the board could not confirm it as a session on another host.");
         }
@@ -92,7 +93,7 @@ export function judgePullTool(prefs: PreferenceStore, prs: Reader, invalidate: (
         if (scope.coordinator !== agent.id) throw fail("코디네이터 지정이 바뀌었습니다.", "The coordinator changed.");
         scope.pullJudgments[pullJudgmentKey(repo, number)] = {
           repo, number, headSha, verdict, reason: reason.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim() || "-",
-          ...(ownerSessionId ? { ownerSessionId } : {}), at: now().toISOString(), coordinator: agent.id,
+          ...(ownerSessionId ? { ownerSessionId } : {}), ...(ownerSessionHost ? { ownerSessionHost } : {}), at: now().toISOString(), coordinator: agent.id,
         };
         scope.pullJudgments = prunePullJudgments(scope.pullJudgments);
       });

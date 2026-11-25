@@ -33,16 +33,17 @@ export function ownerHostCandidates(sessionId: string, pull: PullScope, hints: r
 }
 
 // A session on another host can own a PR only after that host shows it working in the PR's repository.
+// Returns that host's serverId, so the board can check the same host later, or null.
 export async function verifyRemoteOwner(sessionId: string, pull: PullScope, hints: readonly OwnerHint[],
-  receipts: Preferences["dispatchReceipts"], deps: RemoteOwnerDeps): Promise<boolean> {
+  receipts: Preferences["dispatchReceipts"], deps: RemoteOwnerDeps): Promise<string | null> {
   let hosts: readonly HostEntry[];
-  try { hosts = await deps.hosts(); } catch { return false; }
+  try { hosts = await deps.hosts(); } catch { return null; }
   for (const serverId of ownerHostCandidates(sessionId, pull, hints, receipts, hosts).slice(0, 3)) {
     let repos: string[] | null;
     try { repos = await deps.read(serverId, sessionId); } catch { continue; }
-    if (repos?.includes(pull.repo)) return true;
+    if (repos?.includes(pull.repo)) return serverId;
   }
-  return false;
+  return null;
 }
 
 type Workspace = Awaited<ReturnType<HostSdk["workspaces"]["list"]>>["entries"][number];

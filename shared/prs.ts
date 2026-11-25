@@ -31,7 +31,7 @@ const pull = z.object({
   headRepo:repositorySlug.optional(), headBranch:z.string().optional(), headSha:commitSha.optional(),
   projectIds:z.array(z.string()), lane:z.enum(["review","progress"]), reason:pullReason, detail:pullDetail.optional(), updatedAt:z.string(),
   gate:pullGate.optional(),
-  judgment:z.object({ verdict:pullVerdict, reason:z.string(), at:z.string(), ownerSessionId:z.string().optional() }).optional(),
+  judgment:z.object({ verdict:pullVerdict, reason:z.string(), at:z.string(), ownerSessionId:z.string().optional(), ownerSessionHost:z.string().optional() }).optional(),
 });
 export const pullRequestViewSchema = z.object({
   items:z.array(pull),

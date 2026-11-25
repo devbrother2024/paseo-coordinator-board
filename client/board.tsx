@@ -3,7 +3,7 @@ import { historySessionLinks, type HistoryLinks } from "./history-sessions";
 import { ReplyHistory } from "./reply-history";
 import { followupKind, hostWideVisible } from "./reply-followup";
 import { createRemoteWorkSessionStates, trackedSessionOwner, trackedWorkSession, workSessionPresence } from "./tracked-session-targets";
-import { ledgerPullSession } from "./pull-work-session";
+import { judgedOwnerSession, ledgerPullSession } from "./pull-work-session";
 import type { TrackedSessionLinks } from "./tracked-session-chips";
 import { TrackedDecisionCard } from "./tracked-decisions";
 import { closedRevision } from "./tracked-reply-draft";
@@ -313,7 +313,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       {hostId, hostLabel, sessions: snapshot.sessions, hosts: peerHosts, folders}, linkedIds) : undefined;
     const ledgerLocal = fromLedger?.kind === "local" && actions.onOpen ? snapshot?.sessions.find(s => s.id === fromLedger.id) : undefined;
     if (ledgerLocal) localLink(ledgerLocal);
-    const remoteSession = fromLedger?.kind === "remote" && onOpenHostSession ? {...fromLedger, states: workSessionStates, fresh: freshWorkSessionStates, open: onOpenHostSession} : undefined;
+    // The owner the coordinator named on another host comes first; otherwise the ledger card's remote session.
+    const remoteTarget = judgedOwnerSession(pr, peerHosts, linkedIds) ?? (fromLedger?.kind === "remote" ? fromLedger : undefined);
+    const remoteSession = remoteTarget && onOpenHostSession ? {...remoteTarget, states: workSessionStates, fresh: freshWorkSessionStates, open: onOpenHostSession} : undefined;
     return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions} remoteSession={remoteSession}
       clarification={decision && !embedded && questionFor({kind:"pull",projectId,repo:pr.repo,number:pr.number,updatedAt:pr.updatedAt},pr.repo + " #" + pr.number)}
       decision={decision} showDivider={!decision || embedded} securityGate={securityGate} openCoordinator={openCoordinator} onResult={notice => {

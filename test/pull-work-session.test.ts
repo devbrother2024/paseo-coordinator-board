@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { confirmAfterLookup, ledgerPullSession, mergeGate, pullSessionNote, remoteAnswerMaxAgeMs, remoteSessionView } from "../client/pull-work-session";
+import { confirmAfterLookup, judgedOwnerSession, ledgerPullSession, mergeGate, pullSessionNote, remoteAnswerMaxAgeMs, remoteSessionView } from "../client/pull-work-session";
 import { createRemoteWorkSessionLookup, createRemoteWorkSessionStates, findRemoteWorkSessionState, workSessionPresence } from "../client/tracked-session-targets";
 import { trackedDecisionSchema } from "../shared/tracked-decisions";
 
@@ -112,4 +112,14 @@ test("the confirmation read asks the host again instead of reusing this refresh'
   expect(confirming).toEqual({ host: west, running: true });
   expect(confirmAfterLookup(confirming, false)).toBe("ask");
   expect(reads).toBe(2);
+});
+
+test("a remote owner the coordinator named joins the PR row on the host where the board verified it", () => {
+  const judged = (extra = {}) => ({ judgment: { verdict: "ready" as const, reason: "Checks pass", at: "2026-11-25T00:00:00.000Z", ownerSessionId: "far-worker", ownerSessionHost: "peer-a", ...extra } });
+  expect(judgedOwnerSession(judged(), [west, east], none)).toEqual({ kind: "remote", id: "far-worker", hosts: [west] });
+  // A local owner (no host), a host no longer connected, or a session the row already links gives nothing.
+  expect(judgedOwnerSession(judged({ ownerSessionHost: undefined }), [west, east], none)).toBeUndefined();
+  expect(judgedOwnerSession(judged({ ownerSessionHost: "gone" }), [west, east], none)).toBeUndefined();
+  expect(judgedOwnerSession(judged(), [west, east], new Set(["far-worker"]))).toBeUndefined();
+  expect(judgedOwnerSession({}, [west], none)).toBeUndefined();
 });

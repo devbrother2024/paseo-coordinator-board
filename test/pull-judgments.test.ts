@@ -132,3 +132,8 @@ test("each GitHub state has its own words, and status unknown is kept for lookup
   expect(pullColumn(pr({ reason: "computing", lane: "progress" }))).toBe("running");
   expect(pullColumn(pr({ reason: "review-required", lane: "progress" }))).toBe("review");
 });
+
+test("a verified remote owner's host is carried to the PR row", () => {
+  const [item] = applyPullJudgments([pr()], { ...on, judgments: judged("ready", { ownerSessionId: "far", ownerSessionHost: "peer-a" }), ledgerPulls: none });
+  expect(item.judgment).toMatchObject({ ownerSessionId: "far", ownerSessionHost: "peer-a" });
+});
