@@ -20,3 +20,14 @@ export function keptQuestionNotice(session: Pick<SessionRow, "keptQuestion" | "d
   const line: [string, string] | null = ko.length ? [ko.join(" · "), en.join(" · ")] : null;
   return { key: kept.key, stale: !!kept.stale, ended: !!kept.ended, line, older: kept.older ?? [], verdictEvidence: kept.verdictEvidence };
 }
+
+type OlderQuestion = NonNullable<NonNullable<SessionRow["keptQuestion"]>["older"]>[number];
+export const OLDER_SHOWN = 10;
+
+/** The other open questions the card shows: the first 10, and all of them once opened. `more` labels the toggle. */
+export function olderQuestions(older: readonly OlderQuestion[], open: boolean) {
+  const hidden = older.length - OLDER_SHOWN;
+  if (hidden <= 0) return { shown: [...older], more: null };
+  return open ? { shown: [...older], more: ["접기", "Less"] as [string, string] }
+    : { shown: older.slice(0, OLDER_SHOWN), more: [`외 ${hidden}개 더 보기`, `${hidden} more`] as [string, string] };
+}

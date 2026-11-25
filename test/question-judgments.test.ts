@@ -8,7 +8,7 @@ import { PreferenceStore } from "../server/preferences";
 import { recordDisplay, saveScan } from "../server/open-questions";
 import { coordinatorClosures, judgeOpenQuestionTool, judgmentNotice, QuestionNotices } from "../server/question-judgments";
 import { boardActions, boardActionTool } from "../server/board-guide";
-import { keptQuestionNotice } from "../client/kept-question";
+import { keptQuestionNotice, olderQuestions } from "../client/kept-question";
 
 const NOW = Date.parse("2030-01-02T12:00:00.000Z");
 const at = (hoursAgo: number) => new Date(NOW - hoursAgo * 3600_000).toISOString();
@@ -225,4 +225,19 @@ test("card line: no 'may have answered', no per-question close, and the coordina
   expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 0, ended: true, stale: true }, decision })!.line).toEqual(
     ["오래된 질문 · 세션 끝남 · 미처리", "Old question · Session ended · Not handled"]);
   expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 0 }, decision })!.line).toBeNull();
+});
+
+test("every other open question rides on the card: more than 10 fold away but all of them open", () => {
+  const prefs = store();
+  const asks = Array.from({ length: 16 }, (_, i): Step => ["assistant", `Shall I publish build ${i}?`, 2]);
+  const card = snapshot(prefs, evidence(...asks));
+  expect(card.keptQuestion.older).toHaveLength(15);
+  const folded = olderQuestions(card.keptQuestion.older, false);
+  expect(folded.shown).toHaveLength(10);
+  expect(folded.more).toEqual(["외 5개 더 보기", "5 more"]);
+  const open = olderQuestions(card.keptQuestion.older, true);
+  expect(open.shown).toHaveLength(15);
+  expect(open.shown.map(item => item.question)).toContain("Shall I publish build 0?");
+  expect(open.more).toEqual(["접기", "Less"]);
+  expect(olderQuestions(card.keptQuestion.older.slice(0, 4), false)).toMatchObject({ more: null });
 });

@@ -50,7 +50,8 @@ const session = z.object({
     noteSpent: z.literal(true).optional(),
     // The coordinator judged that the question still needs the person, and why.
     verdict: z.literal("needed").optional(), verdictEvidence: z.string().max(2000).optional(),
-    older: z.array(z.object({ key: z.string().min(1).max(64), question: z.string().max(340), askedAt: z.string().optional() })).max(10).optional(),
+    // Every other open question of the session. The card folds those past the first 10; none is cut.
+    older: z.array(z.object({ key: z.string().min(1).max(64), question: z.string().max(340), askedAt: z.string().optional() })).optional(),
   }).optional(),
   lastSummary: z.string().max(400).optional(),
   lastMessage: z.string().max(4000).optional(),

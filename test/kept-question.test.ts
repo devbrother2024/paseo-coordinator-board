@@ -273,7 +273,8 @@ test("open questions are never cut by count: 70 stay", () => {
   const asks = Array.from({ length: 70 }, (_, i): Step => ["assistant", `Shall I publish build ${i}?`, 2]);
   const shown = snapshot(scope, evidence(...asks));
   expect(scope.raisedQuestions.worker.questions).toHaveLength(70);
-  expect(shown.keptQuestion.older).toHaveLength(10);
+  // Every other open question rides on the card (the card folds those past 10).
+  expect(shown.keptQuestion.older).toHaveLength(69);
   // From the record alone, after they all scrolled out, all 70 are still open.
   const later = snapshot(scope, excerpt(page([reply], {}, 1000)));
   expect(scanOf(later)!.open).toHaveLength(70);

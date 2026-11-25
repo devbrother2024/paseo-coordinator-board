@@ -253,7 +253,8 @@ export function questionNotice(scan: QuestionScan, ended: boolean, now = Date.no
   const age = main.askedAt ? now - Date.parse(main.askedAt) : NaN;
   const old = main.later > OLD_QUESTION.later || age > OLD_QUESTION.ageMs;
   const verdict = main.record?.verdict;
-  const older = scan.open.slice(0, -1).slice(-10).reverse()
+  // All of them: the card folds what does not fit, nothing is cut here.
+  const older = scan.open.slice(0, -1).reverse()
     .map(item => ({ key: item.key, question: item.question.slice(0, 340), ...(item.askedAt ? { askedAt: item.askedAt } : {}) }));
   return { key: main.key, later: main.later, ...(old ? { stale: true as const } : {}), ...(main.maybeAnswered ? { maybeAnswered: true as const } : {}),
     ...(ended ? { ended: true as const } : {}), ...(older.length ? { older } : {}),

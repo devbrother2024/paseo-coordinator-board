@@ -19,7 +19,7 @@ import { foldsAsk } from "./card-steps";
 import { cardInputPlaceholder, sendWords, withRequest } from "./card-input";
 import { applyBlockChoice, blockPicks, blockQuestionLabel } from "../shared/question-block";
 import { closeKeptQuestion } from "../shared/kept-question";
-import { keptQuestionNotice } from "./kept-question";
+import { keptQuestionNotice, olderQuestions } from "./kept-question";
 
 type Action = DecisionInput["action"];
 type CoordinationDraft = { text: string; recipientId: string };
@@ -57,6 +57,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   const [replyOverflows, setReplyOverflows] = useState<boolean>();
   const [showEvidence, setShowEvidence] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
+  const [olderOpen, setOlderOpen] = useState(false);
   const [questionOpen, setQuestionOpen] = useState(false);
   const [titleHeights, setTitleHeights] = useState<{ fullHeight?: number; shownHeight?: number }>({});
   const [requestedFrom, setRequestedFrom] = useState<string | null>(null);
@@ -206,7 +207,8 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
     {!formal && decision && <QuestionContext theme={theme} title={session.title} choices={decision.choices} context={context} notice={choiceNotice} />}
     {!!kept?.older.length && <View style={{ gap: 4 }}>
       <Text style={{ color: c.foregroundMuted, fontSize: 12, fontWeight: "600" }}>{t("이 세션의 다른 결정", "Other decisions in this session")}</Text>
-      {kept.older.map(item => <Text key={item.key} selectable style={{ color: c.foreground, fontSize: 13 }}>{item.question}</Text>)}
+      {olderQuestions(kept.older, olderOpen).shown.map(item => <Text key={item.key} selectable style={{ color: c.foreground, fontSize: 13 }}>{item.question}</Text>)}
+      {(() => { const more = olderQuestions(kept.older, olderOpen).more; return more && disclose(t(...more), olderOpen, () => setOlderOpen(v => !v)); })()}
     </View>}
     {completion && !coordination && <View style={wrap}>
       <Button theme={theme} {...named(t(...completion.label))} disabled={busy || replyPhotos.reading}
