@@ -1,5 +1,6 @@
 import type { PullDetail, PullRequestItem, PullRequestView } from "./prs";
-import type { TrackedDecision } from "./tracked-decisions";
+import { pullKey, type TrackedDecision } from "./tracked-decisions";
+import { heldMergeRecord, type MergeHold } from "./merge-hold";
 
 export type MergeWaitReason = PullDetail | "unmapped" | "off";
 // A ledger merge card whose PR GitHub has not confirmed ready. It waits in project progress as a PR row.
@@ -22,7 +23,31 @@ export function waitingMergeCard(item: MergeCard, view: PullRequestView | undefi
   return { why: own?.status === "off" ? "off" : "unmapped" };
 }
 
-export const decidesNow = (item: MergeCard, view: PullRequestView | undefined) => waitingMergeCard(item, view) === null;
+type Holds = ReadonlyMap<string, MergeHold>;
+const noHolds: Holds = new Map();
+
+// Whether a ledger card is in My decisions now: its PR is not waiting on GitHub, and no work session runs on its branch.
+export const decidesNow = (item: MergeCard, view: PullRequestView | undefined, holds: Holds = noHolds) =>
+  !heldMergeRecord(item, holds) && waitingMergeCard(item, view) === null;
+
+// Whether a merge-ready PR row is in My decisions now. A work session running on its branch keeps it in project progress.
+export const pullDecidesNow = (pr: Pick<PullRequestItem, "repo" | "number" | "lane">, holds: Holds = noHolds) =>
+  pr.lane === "review" && holds.get(pullKey(pr.repo, pr.number)) !== "running";
+
+// One placement for the board screen and the decision count. held cards show as their PR row in the kanban;
+// waiting cards show there too, or as a small row when the board could not read their PR.
+export function placeMergeCards<T extends MergeCard & Pick<TrackedDecision, "key">>(items: readonly T[], view: PullRequestView | undefined, holds: Holds = noHolds) {
+  const deciding: T[] = [];
+  const waiting = new Map<string, MergeWait>();
+  const held = new Set<string>();
+  for (const item of items) {
+    if (heldMergeRecord(item, holds)) { held.add(item.key); continue; }
+    const wait = waitingMergeCard(item, view);
+    if (wait) waiting.set(item.key, wait);
+    else deciding.push(item);
+  }
+  return { deciding, waiting, held };
+}
 
 export type SettledState = { state: "MERGED" | "CLOSED"; at: string };
 type SettleCard = MergeCard & Pick<TrackedDecision, "key">;

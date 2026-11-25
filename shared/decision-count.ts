@@ -1,8 +1,8 @@
 import type { Note, SessionRow } from "./contract";
 import { trackedCoverage, pullKey, type TrackedDecisionView } from "./tracked-decisions";
 import type { PullRequestView } from "./prs";
-import { heldMergeRecord, mergeHolds, mergeRecordLinks, snapshotHoldSessions } from "./merge-hold";
-import { decidesNow } from "./merge-card-place";
+import { mergeHolds, mergeRecordLinks, snapshotHoldSessions } from "./merge-hold";
+import { placeMergeCards, pullDecidesNow } from "./merge-card-place";
 
 export function displayLane(session: SessionRow, note: Note | undefined): SessionRow["lane"] | "done" {
   if (session.nativePending) return "human";
@@ -28,9 +28,9 @@ export function decisionCount(view: {sessions: SessionRow[]; notes: Record<strin
   // A merge card whose work session still runs on the PR branch waits in project progress. Only sessions
   // in the snapshot count here; the board screen also reads other hosts.
   const holds = mergeHolds(prs, { sessions: snapshotHoldSessions(view.sessions), links: mergeRecordLinks(ledger) });
-  // A merge card also waits there until GitHub confirms its PR is ready.
-  const records = ledger.filter(item => decidesNow(item, view.pullRequests) && !heldMergeRecord(item, holds));
+  // A merge card also waits there until GitHub confirms its PR is ready. The board screen uses the same placement.
+  const records = placeMergeCards(ledger, view.pullRequests, holds).deciding;
   const covered = trackedCoverage(records);
   return records.length + sessions.filter(s => !covered.sessionIds.has(s.id)).length +
-    prs.filter(pr => pr.lane === "review" && holds.get(pullKey(pr.repo, pr.number)) !== "running" && !covered.pullKeys.has(pullKey(pr.repo, pr.number))).length;
+    prs.filter(pr => pullDecidesNow(pr, holds) && !covered.pullKeys.has(pullKey(pr.repo, pr.number))).length;
 }

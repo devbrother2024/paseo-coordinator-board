@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { asksBeforeMerge, heldMergeRecord, mergeHolds, mergeHoldWords, mergeRecordLinks, snapshotHoldSessions } from "../shared/merge-hold";
 import { decisionCount } from "../shared/decision-count";
+import { decidesNow, placeMergeCards, pullDecidesNow } from "../shared/merge-card-place";
 import type { PullRequestItem } from "../shared/prs";
 import { pullColumn } from "../shared/pull-judgments";
 import type { SessionRow } from "../shared/contract";
@@ -135,4 +136,27 @@ test("the decision count leaves out PRs and ledger merge cards held by a session
   expect(decisionCount({ sessions: [row("running")], notes: {}, pullRequests: ledgerPulls, trackedDecisions })).toBe(0);
   expect(decisionCount({ sessions: [row("running", { workspacePull: nextUnit })], notes: {}, pullRequests: ledgerPulls, trackedDecisions })).toBe(1);
   expect(decisionCount({ sessions: [row("idle")], notes: {}, pullRequests: ledgerPulls, trackedDecisions })).toBe(1);
+});
+
+test("one placement decides ledger merge cards and PR rows for the board and the count alike", () => {
+  const card = (key: string, number: number, matched = true) => ({ key, kind: "merge", mergeTarget: { repo: "org/example", number },
+    ...(matched ? { matchedPull: { repo: "org/example", number } } : {}), projectId: "project", sessionId: key + "-work" }) as unknown as TrackedDecision;
+  const running = card("running", 7), resting = card("resting", 8), notReady = card("not-ready", 9, false);
+  const items = [pr({ gate: "ledger" }), pr({ number: 8, gate: "ledger", headBranch: "feat/other", url: "https://github.com/org/example/pull/8" }),
+    pr({ number: 9, lane: "progress", reason: "checks-pending", gate: undefined, url: "https://github.com/org/example/pull/9" })];
+  const view = { projects: [{ projectId: "project", repo: "org/example", mode: "auto" as const, status: "ok" as const }], items };
+  const sessions = [row("running", { id: "running-work", workspacePull: undefined }), row("idle", { id: "resting-work", workspacePull: undefined })];
+  // The ledger card's session works on the PR branch only when its workspace says so.
+  const onPr = [{ ...sessions[0], workspacePull: onBranch }, sessions[1]];
+  const holds = mergeHolds(items, { sessions: snapshotHoldSessions(onPr), links: mergeRecordLinks([running, resting, notReady]) });
+  const placed = placeMergeCards([running, resting, notReady], view, holds);
+  expect([...placed.held]).toEqual(["running"]);
+  expect(placed.deciding.map(item => item.key)).toEqual(["resting"]);
+  expect([...placed.waiting.keys()]).toEqual(["not-ready"]);
+  expect(decidesNow(running, view, holds)).toBe(false);
+  expect(decidesNow(resting, view, holds)).toBe(true);
+  expect(items.filter(item => pullDecidesNow(item, holds)).map(item => item.number)).toEqual([8]);
+  // The count sees the same: one ledger card (its PR row is covered by the card).
+  const trackedDecisions = { status: "ok", items: [running, resting, notReady] } as never;
+  expect(decisionCount({ sessions: onPr, notes: {}, pullRequests: view, trackedDecisions })).toBe(placed.deciding.length);
 });

@@ -10,7 +10,7 @@ import { closedRevision } from "./tracked-reply-draft";
 import { mentionsSecurityGate, trackedCoverage, trackedReplyRoute, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
 import { projectFolderMap } from "../shared/project-folders";
 import { MergeFeedback, PullRequestCard, PullRequestSettings, WaitingMergeRow, type MergeNotice, type WorkSessionLink } from "./pull-requests";
-import { ownKanbanEntry, waitingMergeCard } from "../shared/merge-card-place";
+import { ownKanbanEntry, placeMergeCards, pullDecidesNow } from "../shared/merge-card-place";
 import { foldReceipts, pullRowKey, receiptsToFold, recordActionKey, RECEIPT_FOLD_MS, sessionRowKey, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
 import { rankDecisionRows, priorityLabel } from "./decision-priority";
 import { DecisionEditingRow, keepEditingPositions, useDecisionEditing } from "./decision-editing";
@@ -19,7 +19,7 @@ import { latestMergeNotification } from "./merge-notification";
 import { decisionSummary } from "./decision-summary";
 import { matchesWorkspace } from "../shared/workspace-pull";
 import { ownerRunning } from "../shared/pull-judgments";
-import { heldMergeRecord, mergeHolds, mergeRecordLinks, snapshotHoldSessions } from "../shared/merge-hold";
+import { mergeHolds, mergeRecordLinks, snapshotHoldSessions } from "../shared/merge-hold";
 import type { PullRequestItem } from "../shared/prs";
 import { getPaseoClient, type PluginScreenProps } from "@getpaseo/plugin/client";
 import { remoteScope, readRemoteHistorySession } from "./remote-sessions";
@@ -89,17 +89,13 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     }),
   });
   const pullHold = (pr: Pick<PullRequestItem, "repo" | "number">) => holds.get(pullKey(pr.repo, pr.number));
-  const readyPrs = pullRequests?.items.filter(pr => pr.lane === "review" && pullHold(pr) !== "running") ?? [];
+  const readyPrs = pullRequests?.items.filter(pr => pullDecidesNow(pr, holds)) ?? [];
   // Held PRs sit in the kanban's running column as plain PR rows.
   const kanbanPrs = pullRequests?.items.map(pr => pullHold(pr) === "running" ? { ...pr, lane: "progress" as const } : pr) ?? [];
-  // A held ledger merge card shows as its PR row in the kanban instead.
-  const records = sortedRecords.filter(item => !heldMergeRecord(item, holds));
-  // A merge card waits in project progress until GitHub confirms its PR is ready.
-  const waitingMerges = new Map(records.flatMap(item => {
-    const wait = waitingMergeCard(item, pullRequests);
-    return wait ? [[item.key, wait] as const] : [];
-  }));
-  const deciding = records.filter(item => !waitingMerges.has(item.key));
+  // The same placement as the decision count. A merge card waits in project progress until GitHub confirms its PR
+  // is ready, and while a work session runs on its branch (then it shows as its PR row instead).
+  const { deciding, waiting: waitingMerges, held: heldMerges } = placeMergeCards(sortedRecords, pullRequests, holds);
+  const records = sortedRecords.filter(item => !heldMerges.has(item.key));
   // Cards whose PR row cannot show in the kanban (no readable PR) keep a small row with the reason.
   const unlisted = (item: TrackedDecision) => { const wait = waitingMerges.get(item.key); return !!wait && !wait.pr; };
   const [inlineReceipts, setInlineReceipts] = useState<InlineReceipt[]>([]);
