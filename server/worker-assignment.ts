@@ -168,7 +168,8 @@ export class WorkerAssignment {
       if (!planned.workspaces.some(workspace => workspace.id === job.workspaceId)) throw new PlacementError("placement-changed");
       retain = !planned.localOnly;
       receipt = { fingerprint, projectId: job.projectId, sourceProjectId: planned.sourceProjectId, workspaceId: job.workspaceId,
-        remote: !!planned.serverId, location: planned.location, createdAt: new Date().toISOString(), requestKey: job.requestKey };
+        remote: !!planned.serverId, location: planned.location, createdAt: new Date().toISOString(), requestKey: job.requestKey,
+        routeSource: job.routeSource ?? "board" };
       originServerId = planned.originServerId;
       limit = initial.assignmentHosts[planned.location.serverId]?.limit ?? null;
     }

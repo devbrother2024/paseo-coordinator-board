@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { reportingKey } from "../shared/contract";
 import {
-  dispatchInputSchema, includedCatalog, resolveRoute, sameRoute, effectiveWorkerMode,
+  available, dispatchInputSchema, includedCatalog, resolveRoute, sameRoute, effectiveWorkerMode, supportsWorkerHooks,
   type CatalogModel, type DispatchInput, type ProviderEntry, type RouteChoice, type RoutePolicy, type WorkspaceChoice,
 } from "../shared/dispatch";
 import { readAccountUsage } from "./usage-routing";
@@ -55,7 +55,7 @@ function workerModesOf(provider: string, modes: ProviderMode[] | null) {
 export async function requireWorkerMode(paseo: Pick<Sdk, "providers">, provider: string, id: string, cwd?: string) {
   const modes = workerModesOf(provider, await readModes(paseo, provider, cwd));
   if (!modes?.some(mode => mode.id === id))
-    throw new Error(`${provider} 작업 권한 모드 '${id}'를 확인할 수 없습니다. 설정에서 사용할 수 있는 작업 권한을 선택하세요.`);
+    throw new Error(`${provider} 작업 권한 모드 '${id}'를 확인할 수 없습니다. 설정에서 사용할 수 있는 작업 권한을 선택하세요. / Could not verify the '${id}' worker permission mode for ${provider}. Choose an available worker mode in Settings.`);
 }
 
 export async function readProviderAvailability(paseo: Pick<Sdk, "providers">) {
@@ -65,7 +65,7 @@ export async function readProviderAvailability(paseo: Pick<Sdk, "providers">) {
   } catch {
     // RPC diagnostics may contain local paths or configuration details.
   }
-  throw new Error("호스트의 실행기 목록을 확인하지 못했습니다.");
+  throw new Error("호스트의 실행기 목록을 확인하지 못했습니다. / Could not read the host's provider list.");
 }
 
 export async function readProviderDirectory(paseo: Pick<Sdk, "providers">, cwd?: string, withLabels = false, withCoordinatorModes = false): Promise<Directory> {
@@ -112,7 +112,7 @@ export async function readCatalog(paseo: Pick<Sdk, "providers">, cwd?: string, w
   const directory = await readProviderDirectory(paseo, cwd, false, withCoordinatorModes);
   const available = directory.providers.filter(p => p.available);
   if (available.length && available.every(p => p.status === "error"))
-    throw new Error("이 호스트의 모델 목록을 읽지 못했습니다. 연결을 확인하고 다시 시도해 주세요.");
+    throw new Error("이 호스트의 모델 목록을 읽지 못했습니다. 연결을 확인하고 다시 시도해 주세요. / Could not read this host's model list. Check the connection and try again.");
   return directory.catalog;
 }
 
@@ -150,6 +150,7 @@ export function creationUuid(key: string, kind: "agent" | "prompt") {
 const fingerprintKey = "coordinator-board/dispatch-intent";
 const parentKey = "coordinator-board/dispatch-parent";
 const modeKey = "coordinator-board/dispatch-mode";
+const routeSourceKey = "coordinator-board/dispatch-route-source";
 export const assignmentReceiptKey = "coordinator-board/assignment-receipt";
 
 type WorkerTarget = {
@@ -159,6 +160,18 @@ type WorkerTarget = {
   beforeCreate: () => Promise<void>;
   deliver?: (worker: Awaited<ReturnType<Sdk["agents"]["create"]>>, parent: string, messageId: string, text: string) => Promise<void>;
 };
+
+function validateCoordinatorRoute(route: RouteChoice, catalog: CatalogModel[], excluded: string[], needsHooks: boolean | undefined,
+  modeId: string | undefined) {
+  if (excluded.includes(route.provider))
+    throw new Error("보드 배정에서 제외한 실행기입니다. 활성화된 실행기를 선택해 주세요. / This route uses an excluded provider. Choose an enabled provider.");
+  if (!available(route, catalog))
+    throw new Error("대상 호스트에서 실행기·모델·추론 강도를 확인할 수 없습니다. / This provider, model or reasoning effort is unavailable in the destination catalog.");
+  if (needsHooks && !supportsWorkerHooks(route.provider))
+    throw new Error("이 실행기는 작업에 필요한 네이티브 훅을 지원하지 않습니다. / This provider does not support the native hooks required for this task.");
+  if (!modeId)
+    throw new Error("설정에서 이 실행기의 작업 권한 모드를 선택해 주세요. / Choose a worker permission mode for this provider in Settings.");
+}
 
 export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | "providers">, request: DispatchInput,
   getScope: () => DispatchScope, placement?: WorkerTarget) {
@@ -170,10 +183,14 @@ export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | 
     return { workerModeOverrides: state.workerModeOverrides ?? {}, coordinator: state.coordinator, routing: state.routing, excluded: state.excludedProviders, usageRouting: state.usageRouting !== false };
   };
   const initial = scopeForProject();
+  const routeSource = input.routeSource ?? "board";
+  const usesBoardUsage = (scope: typeof initial) => routeSource === "board" && scope.usageRouting && !scope.routing[input.grade];
   const sessionId = creationUuid(input.requestKey, "agent");
   const fingerprint = createHash("sha256").update(JSON.stringify([
     input.projectId, input.workspaceId, input.grade, input.title, input.prompt, !!input.needsHooks,
     input.expectedRoute.provider, input.expectedRoute.model, input.expectedRoute.effort,
+    // Preserve the fingerprint of requests made before choosing a route source was possible.
+    ...(input.routeSource ? [input.routeSource] : []),
   ])).digest("hex");
   const workspace = paseo.workspaces.ref(input.workspaceId);
   const [target, receipt] = await Promise.all([workspace.refresh(), paseo.agents.ref(sessionId).refresh()]);
@@ -183,6 +200,7 @@ export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | 
   }
   let parent: string;
   let modeId: string | undefined;
+  let includeRouteSource = true;
   const route = input.expectedRoute;
   if (receipt) {
     scopeForProject();
@@ -196,10 +214,12 @@ export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | 
     parent = previousParent;
     const previousMode = receipt.agent.metadata[modeKey];
     if (typeof previousMode === "string") modeId = previousMode;
+    // Replay old create payloads without metadata added in later versions.
+    includeRouteSource = Object.hasOwn(receipt.agent.metadata, routeSourceKey);
     // An agent snapshot alone does not confirm that its initial prompt was accepted.
     // Replay the original creation key/payload so the daemon settles that operation.
   } else {
-    const checkUsage = initial.usageRouting && !initial.routing[input.grade];
+    const checkUsage = usesBoardUsage(initial);
     const provider = route.provider;
     modeId = effectiveWorkerMode(provider, initial.workerModeOverrides);
     const [catalog, usage] = await Promise.all([
@@ -209,18 +229,20 @@ export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | 
     ]);
     const state = scopeForProject();
     if (modeId !== effectiveWorkerMode(provider, state.workerModeOverrides))
-      throw new Error("작업 권한 설정이 바뀌었습니다. 미리보기를 다시 확인해 주세요.");
-    if (checkUsage !== (state.usageRouting && !state.routing[input.grade])) {
-      throw new Error("배정 설정이 바뀌었습니다. 미리보기를 다시 확인해 주세요.");
-    }
-    const selected = resolveRoute(input.grade, state.routing, includedCatalog(catalog, state.excluded), input.needsHooks, state.usageRouting ? usage : []);
-    if (!selected || !sameRoute(route, selected)) {
-      throw new Error("현재 배정 결과가 미리보기와 다릅니다. 호스트와 모델을 다시 확인해 주세요.");
+      throw new Error("작업 권한 설정이 바뀌었습니다. 미리보기를 다시 확인해 주세요. / Worker permission settings changed. Preview the assignment again.");
+    if (routeSource === "coordinator") {
+      validateCoordinatorRoute(route, catalog, state.excluded, input.needsHooks, modeId);
+    } else {
+      if (checkUsage !== usesBoardUsage(state))
+        throw new Error("배정 설정이 바뀌었습니다. 미리보기를 다시 확인해 주세요. / Routing settings changed. Preview the assignment again.");
+      const selected = resolveRoute(input.grade, state.routing, includedCatalog(catalog, state.excluded), input.needsHooks, state.usageRouting ? usage : []);
+      if (!selected || !sameRoute(route, selected))
+        throw new Error("현재 배정 결과가 미리보기와 다릅니다. 호스트와 모델을 다시 확인해 주세요. / The current route differs from the preview. Check the host and model.");
     }
     parent = state.coordinator;
   }
   if (input.expectedModeId !== undefined && input.expectedModeId !== modeId)
-    throw new Error("작업 권한이 배정 미리보기와 다릅니다. 호스트 설정을 다시 확인해 주세요.");
+    throw new Error("작업 권한이 배정 미리보기와 다릅니다. 호스트 설정을 다시 확인해 주세요. / The worker permission mode differs from the assignment preview. Check the host settings.");
   await placement?.beforeCreate();
   const messageId = creationUuid(input.requestKey, "prompt");
   const worker = await workspace.agents.create({
@@ -232,6 +254,7 @@ export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | 
       ...(!placement?.parentServerId && { [reportingKey]: true }),
       [fingerprintKey]: fingerprint, "coordinator-board/grade": input.grade,
       [parentKey]: parent, ...(modeId && { [modeKey]: modeId }),
+      ...(includeRouteSource && { [routeSourceKey]: routeSource }),
       ...(placement?.receiptFingerprint && { [assignmentReceiptKey]: placement.receiptFingerprint }),
     },
   });
@@ -239,7 +262,7 @@ export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | 
   if (modeId) {
     const agent = (await paseo.agents.ref(sessionId).refresh())?.agent;
     if (agent?.currentModeId !== modeId)
-      throw new Error(`작업 세션 ${sessionId}을 만들었지만 요청한 권한 '${modeId}'를 확인할 수 없습니다. 기존 세션에서 권한을 확인하세요.`);
+      throw new Error(`작업 세션 ${sessionId}을 만들었지만 요청한 권한 '${modeId}'를 확인할 수 없습니다. 기존 세션에서 권한을 확인하세요. / Worker ${sessionId} was created, but its '${modeId}' permission mode could not be verified. Check the existing session.`);
   }
   if (placement?.deliver) await placement.deliver(worker, parent, messageId, input.prompt);
   return { sessionId, route, ...(modeId && { modeId }) };

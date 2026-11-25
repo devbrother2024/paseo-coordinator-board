@@ -39,6 +39,7 @@ export const dispatchInputSchema = z.strictObject({
   title: z.string().trim().min(1).max(160), prompt: z.string().trim().min(1).max(24000),
   requestKey: z.string().min(12).max(96).regex(/^[a-zA-Z0-9_-]+$/),
   expectedRoute: routeChoiceSchema, expectedModeId: identifier.optional(), needsHooks: z.boolean().optional(),
+  routeSource: z.literal("coordinator").optional(),
   ...placementFields, expectedHostId: hostIdentity.optional(),
 });
 
@@ -54,8 +55,12 @@ function primary(provider: string) {
   return provider === "claude" || provider === "codex";
 }
 
+export function supportsWorkerHooks(provider: string) {
+  return primary(provider);
+}
+
 export function eligibleProvider(grade: Grade, provider: string, needsHooks = false, catalog?: readonly CatalogModel[]) {
-  if (needsHooks && !primary(provider)) return false;
+  if (needsHooks && !supportsWorkerHooks(provider)) return false;
   if (grade === "M") {
     if (!catalog) return primary(provider);
     // Old catalogs omitted mode discovery for Claude Code and Codex.

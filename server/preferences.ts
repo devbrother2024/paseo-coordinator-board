@@ -58,6 +58,7 @@ const schema = z.object({
     delivered: z.boolean().optional(),
     createdAt: z.iso.datetime().optional(),
     requestKey: dispatchInputSchema.shape.requestKey.optional(),
+    routeSource: z.enum(["board", "coordinator"]).optional(),
   })).default({}),
   dispatchTombstones: z.record(z.string().uuid(), z.object({
     serverId: hostIdentity,
