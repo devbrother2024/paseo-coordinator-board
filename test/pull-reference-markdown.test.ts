@@ -81,6 +81,10 @@ test("a table without a repository header still finds the column that names know
     "| delta | #2 |",
   ].join("\n"), "studio/card")).toEqual([[{ repo: "studio/alpha-web", number: 12 }], []]);
   expect(tableReferences("| 메모 | 번호 |\n|---|---|\n| 고침 | #8 |", "studio/card")).toEqual([[{ repo: "studio/card", number: 8 }]]);
+  // 머리를 못 알아보는 표라도 같은 행에 모르는 저장소 이름이 있으면 카드 저장소로 가지 않는다.
+  expect(tableReferences("| 메모 | 대상 | 번호 |\n|---|---|---|\n| 고침 | zeta-api | #8 |\n| 고침 | ZetaApp | #9 |\n| 고침 | checks-failed | #10 |\n| 고침 | beta-api | #11 |", "studio/card")).toEqual([
+    [], [], [{ repo: "studio/card", number: 10 }], [{ repo: "studio/beta-api", number: 11 }],
+  ]);
 });
 
 test("a sentence links each PR number to the repository written before it", () => {
@@ -110,10 +114,18 @@ test("a sentence links each PR number to the repository written before it", () =
   expect(link("GammaApi의 #166", "studio/card")).toEqual([{ repo: "labs/gamma-api", number: 166 }]);
   expect(link("beta-api에서 #20", "studio/card")).toEqual([{ repo: "studio/beta-api", number: 20 }]);
   // 프로젝트 이름은 번호 바로 앞에서만 단서다. 줄 다른 곳의 흔한 단어는 저장소로 보지 않는다.
-  expect(link("web 화면 고친 뒤 #30", "studio/card")).toEqual([{ repo: "studio/card", number: 30 }]);
+  // 줄에 프로젝트 이름이 있으면 링크 대상으로 쓰지 않더라도 카드 저장소로 가지 않는다.
+  expect(link("web 화면 고친 뒤 #30", "studio/card")).toEqual([]);
+  expect(link("Alpha 프로젝트 #12", "studio/card")).toEqual([]);
+  expect(link("Alpha에서는 #12", "studio/card")).toEqual([{ repo: "studio/alpha-web", number: 12 }]);
+  expect(link("Alpha랑 #12", "studio/card")).toEqual([{ repo: "studio/alpha-web", number: 12 }]);
+  // 모르는 CamelCase 이름, 번호 바로 앞의 모르는 한 단어도 저장소 단서다.
+  for (const text of ["ZetaApp #166", "ZetaApp의 #166", "ZetaApp 수정 (#26)", "zetaapp #166"]) expect(link(text, "studio/card")).toEqual([]);
   expect(link("web #31", "studio/card")).toEqual([{ repo: "studio/site", number: 31 }]);
   // 저장소 이름처럼 보이지 않는 일반어 앞 번호는 예전처럼 카드 저장소.
-  for (const text of ["GitHub PR #12", "follow-up #12", "v1.2 #12", "macOS #12", "README.md 수정 #12"]) {
+  for (const text of ["GitHub PR #12", "follow-up #12", "v1.2 #12", "macOS #12", "README.md 수정 #12", "iOS #12", "JavaScript #12", "TypeScript #12",
+    "PowerShell #12", "YouTube #12", "iPhone #12", "feat/x 브랜치 #12", "e.g. 예시 #12", "i.e. 같은 #12", "UTF-8 고침 #12", "GPT-5 비교 #12",
+    "0.5.24-beta 배포 #12", "macos-latest 실패 #12", "Approve #12", "fixes #12", "checks-failed 상태 #12"]) {
     expect(link(text, "studio/card")).toEqual([{ repo: "studio/card", number: 12 }]);
   }
   // owner/repo#N 꼴은 건드리지 않는다.
