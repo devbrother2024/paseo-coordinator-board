@@ -314,10 +314,22 @@ test("a queued conversation answer rechecks the revision after restart", async (
   expect(await f.send()).toMatchObject({queued:true});
   expect(f.sent).toBeEmpty();
   f.actors.worker.status = "idle"; f.actors.worker.activeTurn = null;
-  f.timelines.worker.push({type:"assistant_message",text:"Should we change the layout?"});
+  // A new question from the session replaces the card, so the answer to the old one is held.
+  f.timelines.worker.push({type:"assistant_message",text:"Which layout should we use? Please choose one."});
   const restarted = new DecisionSender(f.prefs, f.notes, new ConversationReader());
   await restarted.resume(f.sdk);
   expect(f.sent).toBeEmpty();
+});
+
+test("a queued answer still goes out when the session only spoke without asking, since its question is still open", async () => {
+  const f = await fixture();
+  Object.assign(f.actors.worker, {status:"running", provider:"other", activeTurn:{id:"turn"}});
+  expect(await f.send()).toMatchObject({queued:true});
+  f.actors.worker.status = "idle"; f.actors.worker.activeTurn = null;
+  f.timelines.worker.push({type:"assistant_message",text:"Noted the report from the other session."});
+  const restarted = new DecisionSender(f.prefs, f.notes, new ConversationReader());
+  await restarted.resume(f.sdk);
+  expect(f.sent).toHaveLength(1);
 });
 
 test("a conversation idle marker queues a running Codex reply and sends its original photos once after idle", async()=>{

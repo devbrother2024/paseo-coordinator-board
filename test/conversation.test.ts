@@ -23,7 +23,8 @@ test("대화 발췌는 첫 줄의 네 칸 들여쓴 예시와 실제 대기 표�
 test("텍스트 요청과 근거를 보여주고, 후속 메시지는 대조 대상으로 둔다", () => {
   const e = evidence(question);
   expect(classify(e,row)).toMatchObject({lane:"human", detail:expect.stringContaining("두 번째 자막")});
-  expect(classify(evidence(question,["user_message","다른 작업 진행 상황은?" ]),row).lane).toBe("review");
+  // Something else from the person keeps the question open and says it may have been answered.
+  expect(classify(evidence(question,["user_message","다른 작업 진행 상황은?" ]),row)).toMatchObject({lane:"human",keptQuestion:{maybeAnswered:true}});
   expect(classify(evidence(["assistant_message","확인해 주실 것은 없습니다."]),row).lane).toBe("idle");
   expect(classify(evidence(["assistant_message","제가 다시 확인하겠습니다."]),row).lane).toBe("idle");
   expect(classify(evidence(["assistant_message","필요하시면 알려 주세요."]),row).lane).toBe("idle");
@@ -155,7 +156,7 @@ test("a message ending in a question block becomes a decision card with its opti
   const only = evidence(["assistant_message", block]);
   expect(only.turns.at(-1).text).toBe("Where should the cache live?");
   expect(classify(only,row).lane).toBe("human");
-  expect(classify(evidence(["assistant_message", block],["user_message","다른 작업은?"]),row).lane).toBe("review");
+  expect(classify(evidence(["assistant_message", block],["user_message","다른 작업은?"]),row)).toMatchObject({lane:"human",keptQuestion:{maybeAnswered:true}});
   // A broken block is not a card of its own, and the text stays as written.
   const broken = evidence(["assistant_message", "I compared two places.\n\n```board-question\n{ nope\n```"]);
   expect(broken.turns.at(-1).block).toBeUndefined();

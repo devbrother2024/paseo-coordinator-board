@@ -40,8 +40,14 @@ const session = z.object({
   decisionRequestedAt: z.string().optional(),
   activityAt: z.string().optional(),
   waitingSince: z.string().optional(),
-  // A question the session asked earlier that the person has not answered. `later` counts the session's messages since.
-  keptQuestion: z.object({ key: z.string().min(1).max(64), later: z.number().int().min(1), stale: z.literal(true).optional() }).optional(),
+  // The open question the board found in the session's conversation, kept until something shows it was handled.
+  // `later` counts the session's messages since. `maybeAnswered`: the person wrote something else to the session after it.
+  // `ended`: the session ended or the board cannot find it. `older`: earlier questions of the session still open.
+  keptQuestion: z.object({
+    key: z.string().min(1).max(64), later: z.number().int().min(0), stale: z.literal(true).optional(),
+    maybeAnswered: z.literal(true).optional(), ended: z.literal(true).optional(),
+    older: z.array(z.object({ key: z.string().min(1).max(64), question: z.string().max(340), askedAt: z.string().optional() })).max(10).optional(),
+  }).optional(),
   lastSummary: z.string().max(400).optional(),
   lastMessage: z.string().max(4000).optional(),
   lastMessageTruncated: z.literal(true).optional(),

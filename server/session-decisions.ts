@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { sourceQuestion } from "../shared/clarifications";
 import type { Note, SessionRow } from "../shared/contract";
 import type { Decision } from "../shared/decision-actions";
-import { conversationQuestionDetails, keptFallback, type Evidence } from "./conversation";
+import { questionDetails, scanOf, type Evidence } from "./conversation";
+import { questionContext, scanQuestions } from "./open-questions";
 import type { Preferences } from "./preferences";
 
 export function decorateDecision(row: SessionRow, note: Note | undefined, prefs: Preferences, evidence?: Evidence) {
@@ -13,7 +14,7 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
   let content: Omit<Decision, "version">;
   if (row.nativePending) {
     content = { source: "permission", question: row.detail };
-  } else if (row.status === "idle" && row.evidenceId && !dismissed && row.lane === "human") {
+  } else if (((row.status === "idle" && row.evidenceId) || row.keptQuestion) && !dismissed && row.lane === "human") {
     const judgment = prefs.judgments[row.id];
     const structured = judgment?.kind === "question" && judgment.evidenceId === row.evidenceId && judgment.projectId === row.projectId;
     content = structured
@@ -26,8 +27,10 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
     return;
   }
   const version = createHash("sha256").update(JSON.stringify([
-    // A kept question is the same card however many times the session speaks after it.
-    row.projectId, row.id, row.nativePending ? row.permissionVersion : content.source === "conversation" && row.keptQuestion ? "kept:" + row.keptQuestion.key : row.evidenceId,
+    // A question from the conversation is the same card however many times the session speaks after it. Once the person
+    // writes something else to the session, the card changes once, so a reply written before that is checked again.
+    row.projectId, row.id, row.nativePending ? row.permissionVersion
+      : content.source === "conversation" && row.keptQuestion ? "q:" + row.keptQuestion.key + (row.keptQuestion.maybeAnswered ? ":m" : "") : row.evidenceId,
     note?.revision ?? 0, content,
   ])).digest("hex");
   if (content.source !== "permission" && answer?.version === version) {
@@ -37,8 +40,11 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
   } else {
     row.decision = { ...content, version };
     if (content.source !== "permission" && evidence?.deliverWhenIdle) row.decision.deliverWhenIdle = true;
-    if (content.source === "conversation" && evidence) {
-      const excerpt = conversationQuestionDetails(evidence, row.id === prefs.coordinator, { closedKey: prefs.closedQuestions?.[row.id]?.key });
+    const scan = content.source !== "conversation" ? undefined
+      : scanOf(row) ?? (evidence ? scanQuestions(evidence, row.id === prefs.coordinator, questionContext(prefs, row.id)) : undefined);
+    const main = scan?.open.at(-1);
+    if (main) {
+      const excerpt = questionDetails(main);
       // Display-only fields stay out of the version, so new context never reopens an answered card.
       if (excerpt?.question === content.question) {
         if (excerpt.markdown !== content.question) row.decision.questionMarkdown = excerpt.markdown;
@@ -48,21 +54,6 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
         if (excerpt.block) row.decision.block = excerpt.block;
       }
     }
-  }
-}
-
-// A ledger card that points at the session already carries its next step, so the kept question leaves My decisions.
-// A question in the session's last message stays as it is.
-export function retireCoveredKeptQuestions(rows: SessionRow[], covered: ReadonlySet<string>) {
-  for (const row of rows) {
-    if (!row.keptQuestion || !covered.has(row.id)) continue;
-    const fallback = keptFallback(row);
-    delete row.keptQuestion;
-    delete row.decisionRequestedAt;
-    if (row.decision?.source === "conversation") delete row.decision;
-    delete row.decisionAnswered;
-    if (fallback) Object.assign(row, fallback);
-    else Object.assign(row, { lane: "idle", detail: "" });
   }
 }
 

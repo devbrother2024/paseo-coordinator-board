@@ -1,4 +1,5 @@
 import { decorateDecision, restoreClarifiedDecision } from "./session-decisions";
+import { questionContext } from "./open-questions";
 import { join } from "node:path";
 import { SessionPhotoStore } from "./session-photos";
 import { describePhotos, photoReceiptId, saveLocalPhotos, readLocalPhoto, removeLocalPhotos } from "./reply-photos";
@@ -161,7 +162,7 @@ export class DecisionSender {
     const judgment = current.judgments[row.id];
     if (verifiedBoardFact(row, evidence, current, note)) throw Error(changed);
     Object.assign(row, classify(evidence, row, judgment?.projectId === row.projectId ? judgment : undefined, row.id === current.coordinator,
-      { closedKey: current.closedQuestions?.[row.id]?.key }), { evidenceId: evidence.id });
+      questionContext(current, row.id)), { evidenceId: evidence.id });
     decorateDecision(row, note, current, evidence);
     restoreClarifiedDecision(row, note, current, evidence);
     if (!row.decision || row.decision.source === "permission" || row.decision.version !== input.version) throw Error(changed);
