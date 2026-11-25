@@ -80,3 +80,12 @@ test("a host-wide section counts only cards it shows: a merge card waiting as a 
   expect(ownKanbanEntry({ why: "unmapped" })).toBe(true);
   expect(ownKanbanEntry(null)).toBe(true);
 });
+
+test("review waits run on the settled list: a session named only by a merged card counts as uncovered", async () => {
+  const { coveredSessionIds } = await import("../server/review-wait");
+  const merged = card({ sessionId: "worker" });
+  const states = new Map([[settledKey("example/app", 12), { state: "MERGED" as const, at: "2026-11-25T01:00:00.000Z" }]]);
+  const { items } = settleMergeCards([merged], view([]), states);
+  expect(coveredSessionIds([merged]).has("worker")).toBe(true);
+  expect(coveredSessionIds(items).has("worker")).toBe(false);
+});
