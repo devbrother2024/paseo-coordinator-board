@@ -1,4 +1,5 @@
-import { defineAgentTool } from "@getpaseo/plugin/server";
+import { coordinatorTool } from "./board-guide";
+import { boardGuideName } from "../shared/coordinator-contract";
 import { z } from "zod";
 import { trackedPullTarget, usesSourceCoordinator, type TrackedDecision } from "../shared/tracked-decisions";
 import { managedRowsForCoordinator } from "./coordinator";
@@ -41,9 +42,10 @@ export function matchesReviewEvidence(item: TrackedDecision, evidence: Evidence 
 }
 
 export function trackedReviewTool(prefs: PreferenceStore, tracked: TrackedDecisionStore, prs: ProjectPullRequests, reader: ConversationReader, invalidate: () => void) {
-  return defineAgentTool({
+  return coordinatorTool({
     name: "review_board_records",
-    description: "Without input, archive verified merge-only records and list remaining coordinator checks. For a finished check, cite its current key, fingerprint, evidenceId and exact completion final paragraph from the latest assistant report in its source session, explicitly confirming completion. Judge whether the quoted result fully resolves the check. This tool records the evidence, never performs the action or decides for the user.",
+    description: `Archive verified merge-only records and list coordinator checks, or close one check with cited completion evidence. Records evidence only. Never performs the action or decides for the user. Details: ${boardGuideName} topic review_board_records.`,
+    usage: "Without input, archive verified merge-only records and list remaining coordinator checks. For a finished check, cite its current key, fingerprint, evidenceId and exact completion final paragraph from the latest assistant report in its source session, explicitly confirming completion. Judge whether the quoted result fully resolves the check. This tool records the evidence, never performs the action or decides for the user.",
     input: z.strictObject({review: z.strictObject({
       key:z.string().min(1).max(6000), fingerprint:z.string().regex(/^[a-f0-9]{64}$/),
       evidenceId:z.string().min(1).max(64), quote:z.string().trim().min(8).max(1600),

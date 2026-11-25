@@ -87,9 +87,14 @@ const schema = z.object({
     id: z.string(), previous: z.string().nullable(), workspaceId: z.string(), config: coordinatorConfig,
     language: z.enum(["ko", "en"]).optional(),
   }).optional(),
-  // For each coordinator, the fingerprint of the board tool definitions its current conversation first called.
+  // For each coordinator, the tool contract its current conversation holds: the fingerprint and contract number
+  // from its first board tool call, and the guide revision it read and was told to read.
   // A stamp the board cannot read is dropped rather than stopping the board.
-  toolStamps: z.record(z.string(), z.object({ session: z.string().regex(conversationIdPattern), fingerprint: z.string().max(128), at: z.iso.datetime() })).catch({}),
+  toolStamps: z.record(z.string(), z.object({
+    session: z.string().regex(conversationIdPattern), fingerprint: z.string().max(128), at: z.iso.datetime(),
+    contract: z.number().int().positive().max(1_000_000).optional(), early: z.boolean().optional(),
+    guide: z.string().max(64).optional(), noted: z.string().max(64).optional(),
+  })).catch({}),
 });
 export type Preferences = z.infer<typeof schema>;
 export type DispatchReceipt = Preferences["dispatchReceipts"][string];

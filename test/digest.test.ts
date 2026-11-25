@@ -4,7 +4,7 @@ import { PreferenceStore } from "../server/preferences";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { sendCoordinatorRequest, digestPrompt, digestWithFactReplies, recordDigestCompletion } from "../server/digest";
+import { sendCoordinatorRequest, digestPrompt, digestWithFactReplies, recordDigestCompletion, completedBoardTools } from "../server/digest";
 
 function fixture() {
   let owner = "primary";
@@ -104,4 +104,16 @@ test("only a verified complete digest turn advances the host timestamp", async (
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("a board tool run through board_action counts as that tool", () => {
+  const call = (name: string, extra: Record<string, unknown> = {}) => ({ type: "tool_call", name, status: "completed", ...extra }) as any;
+  const viaAction = (input: unknown, status = "completed") => call("mcp__paseo__board_action", { status, detail: { type: "unknown", input, output: null } });
+  expect(completedBoardTools(call("mcp__paseo__review_board_records"))).toEqual(["review_board_records"]);
+  expect(completedBoardTools(viaAction({ contract: 1, action: "review_board_records", input: {} }))).toEqual(["board_action", "review_board_records"]);
+  // A call that did not complete, and one without a readable action, name nothing more.
+  expect(completedBoardTools(viaAction({ contract: 1, action: "review_board_records" }, "failed"))).toEqual([]);
+  for (const input of [undefined, null, "review_board_records", { action: 3 }, []]) expect(completedBoardTools(viaAction(input))).toEqual(["board_action"]);
+  expect(completedBoardTools(call("board_action"))).toEqual(["board_action"]);
+  expect(completedBoardTools({ type: "user_message", text: "review_board_records" } as any)).toEqual([]);
 });

@@ -21,7 +21,7 @@
 아래 가운데 **하나라도** 해당하면 만듭니다.
 
 - 설계 갈림길이 있어 **버린 대안을 남길 가치**가 있다.
-- 계약이 바뀐다: 플러그인 데이터 파일 형식(호스트 설정, 메모, 사진, `tracked-decisions.json`, `tracked-sources.json`, `account-usage.json`, 프로젝트 원장), 서버와 화면 사이의 RPC 계약(`shared/contract.ts`), 코디네이터 도구 입력 형식(`shared/coordinator-tools.ts`). 이미 저장된 데이터나 옛 도구 정의를 기억하는 대화가 깨질 수 있다.
+- 계약이 바뀐다: 플러그인 데이터 파일 형식(호스트 설정, 메모, 사진, `tracked-decisions.json`, `tracked-sources.json`, `account-usage.json`, 프로젝트 원장), 서버와 화면 사이의 RPC 계약(`shared/contract.ts`), 코디네이터 도구의 이름과 입력 형식(`shared/coordinator-contract.ts`의 계약). 이미 저장된 데이터나 옛 도구 정의를 기억하는 대화가 깨질 수 있다.
 - 경계가 바뀐다: 세션에 보내는 전송(출처, 받는 조건), 대기 중인 요청에 답하는 길, 외부 명령(`gh`, `git`) 실행, 다른 호스트와 네트워크.
 - 일이 커서 여러 PR로 쪼개야 한다.
 
@@ -168,3 +168,4 @@ Spec: [spec.md](spec.md)
 |---|---|---|---|
 | [intent-workflow](intent-workflow/intent.md) | 구현됨 (PR #52) | 세션 | 이 저장소에 intent·spec·plan 구조를 들이고, 세션 경로와 접수 경로를 정한다 |
 | [assign-explicit-route](assign-explicit-route/intent.md) | 구현됨 (PR #55) | 세션 | 코디네이터가 고른 모델 경로를 보드의 원격 배정에 전달한다 |
+| [stable-coordinator-tools](stable-coordinator-tools/intent.md) | 승인 | 세션 | 코디네이터 도구를 계약으로 고정하고, 새 기능은 안내 도구와 범용 도구로 내어 운영 중인 대화를 그대로 쓴다 |

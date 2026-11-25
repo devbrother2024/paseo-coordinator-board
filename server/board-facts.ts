@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { defineAgentTool, type PluginHandlerContext, type PluginServerContext } from "@getpaseo/plugin/server";
+import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
+import { coordinatorTool } from "./board-guide";
+import { boardGuideName } from "../shared/coordinator-contract";
 import { z } from "zod";
 import { factReplySettings, setFactAutoReply, type BoardFact } from "../shared/board-facts";
 import type { Note, SessionRow } from "../shared/contract";
@@ -164,9 +166,10 @@ export class BoardFacts {
     return cycle;
   }
 
-  readonly tool = defineAgentTool({
+  readonly tool = coordinatorTool({
     name: "answer_board_fact",
-    description: "During a newly authorized digest cycle, deliver a verified answer about the worker's own managed membership, project or observed runtime state. Use the actual cycleId and the worker's current evidenceId. The server generates the informational answer. Never use this to approve, choose, spend, publish, delegate or complete work.",
+    description: `During an authorized digest cycle, deliver a board-verified informational answer to a worker. Never use this to approve, choose, spend, publish, delegate or complete work. Details: ${boardGuideName} topic answer_board_fact.`,
+    usage: "During a newly authorized digest cycle, deliver a verified answer about the worker's own managed membership, project or observed runtime state. Use the actual cycleId and the worker's current evidenceId. The server generates the informational answer. Never use this to approve, choose, spend, publish, delegate or complete work.",
     input: z.strictObject({ cycleId: z.string().length(64), sessionId: id, evidenceId: z.string().min(1).max(64) }),
     execute: async (input, {paseo,agent}) => {
       const cycle = this.authorized(this.store.read(),agent.id,input.cycleId);

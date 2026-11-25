@@ -1,4 +1,6 @@
-import { defineAgentTool, type PluginServerContext } from "@getpaseo/plugin/server";
+import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { coordinatorTool } from "./board-guide";
+import { boardGuideName } from "../shared/coordinator-contract";
 import { z } from "zod";
 import { commitSha, mergeJudgmentSettings, pullVerdict, repositorySlug, setMergeJudgment, type PullRequestItem } from "../shared/prs";
 import { pullJudgmentKey, prunePullJudgments } from "../shared/pull-judgments";
@@ -36,9 +38,10 @@ const fail = (ko: string, en: string) => new Error(ko + " / " + en);
 type OwnerSources = { hints: (selected: Set<string>, sessionId: string) => OwnerHint[]; deps?: (paseo: Parameters<typeof remoteOwnerDeps>[0], scope: Preferences) => RemoteOwnerDeps };
 
 export function judgePullTool(prefs: PreferenceStore, prs: Reader, invalidate: () => void, now = () => new Date(), owners?: OwnerSources) {
-  return defineAgentTool({
+  return coordinatorTool({
     name: "judge_board_pull",
-    description: "Without input, list open PRs in managed projects with their head commit, GitHub status, your current verdict and matching work sessions. "
+    description: `List open PRs in managed projects, or record your verdict on one PR's exact head commit. Records a board judgment only. It never merges, approves or sends messages. Details: ${boardGuideName} topic judge_board_pull.`,
+    usage: "Without input, list open PRs in managed projects with their head commit, GitHub status, your current verdict and matching work sessions. "
       + "To record a verdict, give repo, number, headSha (the exact 40-character head commit you checked), verdict and a one-line reason. "
       + "Use ready only when the work is finished, review comments are addressed and checks pass on that head. Use needs-changes when something must be fixed, "
       + "in-progress while a work session is still changing the PR, and blocked when it waits on something outside the PR. "
