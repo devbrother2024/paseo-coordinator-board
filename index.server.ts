@@ -43,9 +43,11 @@ import { pullJudgmentKey } from "./shared/pull-judgments";
 import { operatingDirectories, operatingDirectory } from "./server/operating-folders";
 import { CoordinatorToolStamps, readCoordinatorTools } from "./server/coordinator-tools";
 import { coveredSessionIds, decorateReviewWait, reviewWaitThreshold } from "./server/review-wait";
+import { answeredRequests } from "./shared/answered-requests";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(hostVisibility);
+  server.registerSettings(answeredRequests);
   const queueSettings = server.registerSettings(parallelWait);
   async function parallelMinutes() {
     const state = await queueSettings?.read().catch(() => undefined);

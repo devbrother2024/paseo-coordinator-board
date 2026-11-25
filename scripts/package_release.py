@@ -36,6 +36,8 @@ required = {
     "client/tracked-decisions.tsx", "client/project-kanban.tsx", "client/remote-running.tsx", "client/remote-sessions.ts",
     "shared/github-repository.ts", "shared/workspace-pull.ts", "shared/pages.ts", "server/snapshot-reads.ts", "shared/readiness.ts",
     "client/history-markdown.tsx", "client/vendor/marked/marked.js", "third-party/marked/LICENSE", "client/reply-history.tsx", "client/history-sessions.ts", "shared/reply-history.ts",
+    "client/permission-request-summary.tsx", "shared/permission-summary.ts", "shared/shell-permission-command.ts",
+    "shared/permission-read-options.ts", "shared/permission-read-paths.ts", "shared/permission-command-effects.ts",
     "package.json", "LICENSE", "OVERVIEW.md", "README.md", "templates/coordinator-session.md",
     "third-party/better-paseo/LICENSE", "THIRD_PARTY_NOTICES.md", "assets/preview.png",
 }

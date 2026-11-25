@@ -75,6 +75,20 @@ test("출처가 명시된 권한 요청은 러닝보다 우선한다. 오류·�
   assert.doesNotMatch(JSON.stringify(rows), /synthetic private detail/);
 });
 
+test("a provider's raw command stays out of the card headline and changes the permission version", async () => {
+  const command = "git log && cat README.md";
+  const permission = { id: "tool-1", provider: "codex", name: "exec_command", kind: "tool", title: command,
+    detail: { type: "shell", command } } satisfies Agent["pendingPermissions"][number];
+  const question = { id: "question-1", provider: "claude", name: "AskUserQuestion", kind: "question", title: "Choose a theme" } as const;
+  const sessions = (value: string) => directory(() => page([entry({ id: "worker", pendingPermissions: [
+    { ...permission, detail: { type: "shell", command: value } }, question,
+  ] })]));
+  const [original] = await discoverSessions(sessions(command));
+  const [changed] = await discoverSessions(sessions(command + " && mkdir build"));
+  assert.equal(original.detail, "응답을 기다리는 요청 2건 · Choose a theme");
+  assert.notEqual(original.permissionVersion, changed.permissionVersion);
+});
+
 test("계속 같은 페이지를 돌려주거나 연결에 실패하면 빈 보드로 숨기지 않는다", async () => {
   await assert.rejects(discoverSessions(directory(() => page([], "same"))), /다음 목록 페이지/);
   await assert.rejects(discoverSessions(directory(() => {

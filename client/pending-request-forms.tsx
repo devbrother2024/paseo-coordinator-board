@@ -3,10 +3,12 @@ import { AutoGrowInput } from "./auto-grow-input";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { answeredRequests, wasSent, withSent } from "../shared/answered-requests";
+import { permissionSummary } from "../shared/permission-summary";
 import { Button, type Theme } from "./controls";
 import { useDecisionInteraction } from "./decision-editing";
 import { HistoryMarkdown } from "./history-markdown";
 import { useBoardLanguage } from "./language";
+import { PermissionRequestSummary } from "./permission-request-summary";
 import {
   actionLabel, actionResponse, answerResponse, answerSummary, canSubmit, createResponder, dismissResponse, emptyDraft,
   noteSent, outcomeText, requestName, requestView, sentOn, showsTextInput, toggleOption, waitingLine, writeOther,
@@ -28,6 +30,7 @@ export function PendingRequests({ hostId, sessionId, sessionTitle, version, them
   const { t } = useBoardLanguage();
   const c = theme.colors;
   const [requests, setRequests] = useState<PendingRequest[] | null>(null);
+  const [cwd, setCwd] = useState<string>();
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<Record<string, Result>>({});
@@ -68,7 +71,10 @@ export function PendingRequests({ hostId, sessionId, sessionTitle, version, them
     setFailed(false);
     try {
       const result = await connect().agent.refresh();
-      if (mounted.current && token === reading.current) setRequests(result?.agent.pendingPermissions ?? []);
+      if (mounted.current && token === reading.current) {
+        setCwd(result?.agent.cwd);
+        setRequests(result?.agent.pendingPermissions ?? []);
+      }
     } catch {
       if (mounted.current && token === reading.current) setFailed(true);
     }
@@ -77,6 +83,7 @@ export function PendingRequests({ hostId, sessionId, sessionTitle, version, them
 
   // Runs only from a button the person pressed. Nothing here answers on its own.
   async function settle(request: PendingRequest, detail: string, work: (responder: Responder) => Promise<Outcome>) {
+    if (stored.current.status !== "ready") return;
     const line = requestName(request, t);
     setBusy(true);
     let outcome: Outcome;
@@ -95,25 +102,28 @@ export function PendingRequests({ hostId, sessionId, sessionTitle, version, them
     accessibilityLabel={sessionTitle + " · " + t("작업 세션 열기", "Open work session")} onPress={() => open(sessionId)} />;
   const settled = Object.entries(results).filter(([id, result]) =>
     (result.outcome === "sent" || result.outcome === "handled") && !requests?.some(request => request.id === id));
-  // Without the record the board cannot tell whether a request was already answered, so it does not answer.
-  if (record.status === "error" || record.status === "invalid") return <View style={{ gap: 6 }}>
-    <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{t("보낸 응답 기록을 읽지 못해 보드에서 답하지 않습니다. 작업 세션에서 답해 주세요.", "The record of sent responses could not be read, so the board will not answer. Answer in the work session.")}</Text>
-    <View style={wrap}><Button theme={theme} label={t("기록 다시 읽기", "Reload record")} onPress={() => void record.reload()} />{openSession}</View>
-  </View>;
   if (failed) return <View style={{ gap: 6 }}>
     <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{t("요청 내용을 읽지 못했습니다. 작업 세션에서 확인해 주세요.", "Could not load the request. Review it in the work session.")}</Text>
     <View style={wrap}><Button theme={theme} label={t("요청 다시 읽기", "Reload request")} onPress={() => void load()} />{openSession}</View>
   </View>;
-  if (!requests || record.status === "loading") return <Text style={{ color: c.foregroundMuted }}>{t("요청 내용을 읽는 중…", "Loading the request…")}</Text>;
+  if (!requests) return <Text style={{ color: c.foregroundMuted }}>{t("요청 내용을 읽는 중…", "Loading the request…")}</Text>;
   const sent = sentRecords();
+  // Only forms that can send an answer depend on the host record. The permission
+  // summary and the link to the original session remain available during a read failure.
+  const recordNeeded = record.status !== "ready" && requests.some(request => requestView(request).mode !== "session");
   return <View style={{ gap: 10 }}>
+    {recordNeeded && (record.status === "loading" ?
+      <Text style={{ color: c.foregroundMuted }}>{t("응답 기록을 읽는 중…", "Loading the response record…")}</Text> : <View style={{ gap: 6 }}>
+        <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning }}>{t("보낸 응답 기록을 읽지 못했습니다. 작업 세션에서 답할 수 있습니다.", "Could not read the record of sent responses. You can answer in the work session.")}</Text>
+        <View style={wrap}><Button theme={theme} label={t("기록 다시 읽기", "Reload record")} onPress={() => void record.reload()} />{openSession}</View>
+      </View>)}
     {settled.map(([id, result]) => <Text key={id} accessibilityLiveRegion="polite" selectable
       style={{ color: result.outcome === "sent" ? c.statusSuccess : c.foregroundMuted }}>{result.line} · {outcomeText(result.outcome, t)}</Text>)}
     {!requests.length && !settled.length && <Text style={{ color: c.foregroundMuted }}>
       {t("승인 요청은 작업 세션에서 확인해 주세요.", "Review the approval request in the work session.")}
     </Text>}
     {requests.map((request, index) => <View key={request.id} style={{ gap: 7, ...(index > 0 && { paddingTop: 10, borderTopWidth: 1, borderColor: c.border }) }}>
-      <RequestForm request={request} theme={theme} sessionTitle={sessionTitle} busy={busy}
+      <RequestForm request={request} cwd={cwd} theme={theme} sessionTitle={sessionTitle} busy={busy} canRespond={record.status === "ready"}
         // A request answered before this card was drawn starts as sent but not confirmed.
         outcome={results[request.id]?.outcome ?? (wasSent(sent, sessionId, request.id) ? "unconfirmed" : undefined)}
         openSession={openSession} onSend={(response, detail) => void settle(request, detail, responder => responder.respond(request.id, response))}
@@ -122,24 +132,27 @@ export function PendingRequests({ hostId, sessionId, sessionTitle, version, them
   </View>;
 }
 
-function RequestForm({ request, theme, sessionTitle, busy, outcome, openSession, onSend, onCheck }: {
-  request: PendingRequest; theme: Theme; sessionTitle: string; busy: boolean; outcome?: Outcome; openSession: ReactNode; onSend: Send; onCheck: () => void;
+function RequestForm({ request, cwd, theme, sessionTitle, busy, canRespond, outcome, openSession, onSend, onCheck }: {
+  request: PendingRequest; cwd?: string; theme: Theme; sessionTitle: string; busy: boolean; canRespond: boolean;
+  outcome?: Outcome; openSession: ReactNode; onSend: Send; onCheck: () => void;
 }) {
   const { t } = useBoardLanguage();
   const c = theme.colors;
   const view = useMemo(() => requestView(request), [request]);
+  const summary = useMemo(() => permissionSummary(request, cwd), [request, cwd]);
   // A response that went out is not sent again. Checking again only reads whether the session took it.
-  const locked = busy || outcome === "sent" || outcome === "handled" || outcome === "unconfirmed";
+  const locked = !canRespond || busy || outcome === "sent" || outcome === "handled" || outcome === "unconfirmed";
   const status = outcome && outcome !== "busy" && <View style={{ gap: 6 }}>
     <Text accessibilityLiveRegion="polite" selectable style={{ color: outcome === "sent" ? c.statusSuccess : outcome === "failed" ? c.statusDanger : c.statusWarning }}>{outcomeText(outcome, t)}</Text>
     {outcome === "unconfirmed" && <View style={wrap}>
       <Button theme={theme} label={t("다시 확인", "Check again")} accessibilityLabel={sessionTitle + " · " + t("응답 처리 다시 확인", "Check the response again")}
-        disabled={busy} onPress={onCheck} />
+        disabled={busy || !canRespond} onPress={onCheck} />
       {openSession}
     </View>}
   </View>;
   return <>
-    {view.mode !== "question" && <Text selectable style={{ color: c.foregroundMuted, fontSize: 13 }}>{waitingLine(request, t)}</Text>}
+    {summary ? <PermissionRequestSummary key={summary.kind === "shell" ? summary.command : summary.kind} summary={summary} theme={theme} />
+      : view.mode !== "question" && <Text selectable style={{ color: c.foregroundMuted, fontSize: 13 }}>{waitingLine(request, t)}</Text>}
     {view.mode === "question" && <QuestionForm key={request.id} request={request} questions={view.questions} theme={theme} sessionTitle={sessionTitle} locked={locked} busy={busy} onSend={onSend} />}
     {view.mode === "plan" && <PlanForm plan={view.plan} actions={view.actions} provider={request.provider} theme={theme} sessionTitle={sessionTitle} locked={locked} onSend={onSend} />}
     {view.mode === "plan" && view.more && <>
@@ -147,7 +160,9 @@ function RequestForm({ request, theme, sessionTitle, busy, outcome, openSession,
       <View style={wrap}>{openSession}</View>
     </>}
     {view.mode === "session" && <>
-      <Text style={{ color: c.foregroundMuted }}>{t("이 요청은 내용을 꼼꼼히 봐야 해서 작업 세션에서 답합니다.", "This request needs a close look, so answer it in the work session.")}</Text>
+      <Text style={{ color: c.foregroundMuted }}>{summary
+        ? t("승인 여부는 작업 세션에서 선택합니다.", "Choose whether to approve in the work session.")
+        : t("이 요청은 작업 세션에서 답합니다.", "Answer this request in the work session.")}</Text>
       <View style={wrap}>{openSession}</View>
     </>}
     {status}

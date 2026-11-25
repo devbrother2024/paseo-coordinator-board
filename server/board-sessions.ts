@@ -135,7 +135,8 @@ async function readWorkers(sdk: HostSdk, host: { id: string; label: string }, en
       }
       const workspace = await workspaceRead;
       if (!workspace || workspace.internal || workspace.archivingAt || workspace.projectId !== receipt.sourceProjectId) return;
-      const source = sessionRow(agent, result.project, workspace);
+      // Remote cards use the provider title because they do not open the local request form.
+      const source = sessionRow(agent, result.project, workspace, { includeToolTitles: true });
       const row = { ...source, sourceProjectId: source.projectId, sourceProjectTitle: source.projectTitle, projectId: receipt.projectId,
         serverId: host.id, assignment: { ...receipt.location, label: host.label } };
       if (inactive && receipt.delivered && (agent.status === "idle" || agent.status === "closed") && !agent.activeTurn &&
