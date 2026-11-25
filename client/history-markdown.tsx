@@ -83,5 +83,6 @@ export function HistoryMarkdown({source,fallbackSource,theme,pullRepository,prev
       }
     });
   }
-  return <View style={{gap:6}}>{blocks(tokens,true)}</View>;
+  // Fills the width its parent gives. Under a parent with `alignItems: "flex-start"` the root would shrink to its content, and a list item's `flex:1` text column then gets almost no width on iOS: the text wraps a character or two at a time and overlaps what follows.
+  return <View style={{gap:6,alignSelf:"stretch"}}>{blocks(tokens,true)}</View>;
 }
