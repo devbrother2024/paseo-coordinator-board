@@ -74,9 +74,10 @@ export function waitedLabel(since: string | undefined, now: number, t: Translate
 // A finished session needs the coordinator when one is assigned, it has waited
 // past the threshold, no open ledger card covers it, and the coordinator has
 // not acted on its current state (a message or a judgment on this excerpt).
-export function needsCoordinator(input: { coordinator: string | null; waitingSince?: string; now: number; thresholdHours: number;
+// The coordinator's own session is never flagged.
+export function needsCoordinator(input: { coordinator: string | null; sessionId?: string; waitingSince?: string; now: number; thresholdHours: number;
   covered: boolean; coordinatorTouched: boolean }) {
-  if (!input.coordinator || input.covered || input.coordinatorTouched) return false;
+  if (!input.coordinator || input.sessionId === input.coordinator || input.covered || input.coordinatorTouched) return false;
   const start = input.waitingSince ? Date.parse(input.waitingSince) : NaN;
   return Number.isFinite(start) && input.now - start >= input.thresholdHours * HOUR;
 }

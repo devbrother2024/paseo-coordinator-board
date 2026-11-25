@@ -73,6 +73,9 @@ test("미처리 판정: 코디네이터 없음, 문턱 전후, 열린 카드, �
   expect(needsCoordinator({ ...base, coordinatorTouched: true })).toBe(false);
   expect(needsCoordinator({ ...base, waitingSince: undefined })).toBe(false);
   expect(needsCoordinator({ ...base, thresholdHours: 24 })).toBe(false);
+  // The coordinator's own session never waits on the coordinator.
+  expect(needsCoordinator({ ...base, sessionId: "coord" })).toBe(false);
+  expect(needsCoordinator({ ...base, sessionId: "worker" })).toBe(true);
 });
 
 test("원장 카드가 가리키는 세션을 모은다", () => {
@@ -104,7 +107,7 @@ test("스냅숏 꾸미기: 확인 대기 카드에 요약·전체 글·미처리
   const since = new Date(now - 20 * hour).toISOString();
   const row = (id: string, lane: "review" | "idle" | "running" = "review") => ({ id, title: id, projectId: "p", projectTitle: "P", workspaceTitle: "w",
     model: null, status: "idle", lane, detail: "세션 결과 확인 필요", waitingSince: since });
-  const rows = [row("stuck"), row("carded"), row("judged"), row("nudged"), row("quiet", "idle"), row("busy", "running")];
+  const rows = [row("stuck"), row("carded"), row("judged"), row("nudged"), row("quiet", "idle"), row("busy", "running"), row("coord")];
   const evidence = new Map([
     ["stuck", excerpt(page([said("구현을 마쳤습니다.\n\nPR 상한으로 다음 구현을 **정지**합니다.")]))],
     ["carded", excerpt(page([said("리뷰를 기다립니다.")]))],
@@ -126,6 +129,7 @@ test("스냅숏 꾸미기: 확인 대기 카드에 요약·전체 글·미처리
   expect(by.get("quiet")!.needsCoordinator).toBeUndefined();
   expect(by.get("busy")!.lastSummary).toBeUndefined();
   expect(by.get("busy")!.waitingSince).toBeUndefined();
+  expect(by.get("coord")!.needsCoordinator).toBeUndefined();
 
   const without = [row("stuck")];
   decorateReviewWait(without, evidence, { coordinator: null, now, thresholdHours: 12, covered: new Set(), judgments: {} });
@@ -192,4 +196,12 @@ test("코디네이터 목록 도구는 기다린 시간과 미처리 여부를 �
   expect(by.get("fresh")).toMatchObject({ lane: "review", waitedHours: 2 });
   expect(by.get("fresh")!.needsCoordinator).toBeUndefined();
   expect(by.get("coord")!.lane).toBeUndefined();
+});
+
+test("정기 점검 요청은 미처리 표시 세션을 먼저 분류하게 하고 전송은 맡기지 않는다", async () => {
+  const { digestPrompt, englishDigestPrompt } = await import("../server/digest");
+  expect(digestPrompt).toContain("needsCoordinator");
+  expect(englishDigestPrompt).toContain("needsCoordinator");
+  expect(digestPrompt.endsWith("이번 요청은 조회와 분류만 맡깁니다.")).toBe(true);
+  expect(englishDigestPrompt.endsWith("Limit this request to reading and classification.")).toBe(true);
 });

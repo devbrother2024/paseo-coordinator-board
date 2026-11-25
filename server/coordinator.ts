@@ -46,7 +46,7 @@ export function attachCoordinatorTools(server: Pick<PluginServerContext, "addHoo
           let waiting = {};
           if (r.waitingSince && (r.lane === "review" || r.lane === "idle")) {
             const waited = waitedFor(r.waitingSince, now);
-            let flagged = !!review && r.lane === "review" && needsCoordinator({ coordinator: agent.id, waitingSince: r.waitingSince, now,
+            let flagged = !!review && r.lane === "review" && needsCoordinator({ coordinator: agent.id, sessionId: r.id, waitingSince: r.waitingSince, now,
               thresholdHours: review.thresholdHours, covered: review.covered.has(r.id), coordinatorTouched: false });
             if (flagged) {
               const evidence = await reader.read(paseo, r).catch(() => null);

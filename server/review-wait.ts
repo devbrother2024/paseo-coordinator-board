@@ -41,7 +41,7 @@ export function decorateReviewWait(rows: SessionRow[], evidence: ReadonlyMap<str
         if (last.truncated) row.lastMessageTruncated = true;
       }
     }
-    if (row.lane === "review" && needsCoordinator({ coordinator: context.coordinator, waitingSince: row.waitingSince, now: context.now,
+    if (row.lane === "review" && needsCoordinator({ coordinator: context.coordinator, sessionId: row.id, waitingSince: row.waitingSince, now: context.now,
       thresholdHours: context.thresholdHours, covered: context.covered.has(row.id),
       coordinatorTouched: coordinatorHandled(row, observed, context) })) {
       row.needsCoordinator = true;
