@@ -175,3 +175,4 @@ Spec: [spec.md](spec.md)
 | [stable-coordinator-tools](stable-coordinator-tools/intent.md) | 구현됨 (PR #62) | 세션 | 코디네이터 도구를 계약으로 고정하고, 새 기능은 안내 도구와 범용 도구로 내어 운영 중인 대화를 그대로 쓴다 |
 | [single-card-input](single-card-input/intent.md) | 승인 | 세션 | 카드마다 입력창 하나로 답·질문·수정 요청을 보내고, 병합 카드 수정 요청과 세션 글의 질문 블록을 더한다 |
 | [sticky-conversation-question](sticky-conversation-question/intent.md) | 승인 | 세션 | 보드가 대화에서 찾은 질문을 기록해, 처리됐다는 근거(보드 답 도착, 결정 반영 줄, 원장 이전, 처리됨으로 닫기, 맞는 답) 없이는 카드를 내리지 않는다 |
+| [coordinator-judges-open-questions](coordinator-judges-open-questions/intent.md) | 승인 | 세션 | 남은 질문이 처리됐는지 애매하면 코디네이터가 board_action 으로 판단(처리됨은 근거 필수)하고, 카드 앞면의 애매한 문구와 질문별 닫기 버튼을 없앤다 |
