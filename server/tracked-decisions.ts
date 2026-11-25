@@ -245,6 +245,8 @@ export class TrackedDecisionStore {
         recipientId:receipt.recipientId, messageId:receipt.messageId, response:receipt.response,
         ...(receipt.photos?.length ? {imageCount:receipt.photos.length, localPhotos:!receipt.recipientId} : {}),
         ...(receipt.reviewedBy ? {reviewedBy:receipt.reviewedBy, reviewReason:receipt.reviewReason} : {}),
+        // An answered card leaves the list but stays in the ledger. Only a full read can tell that it was taken down.
+        ...((status==="ok" || status==="absent") && !source ? {cardRemoved:true as const} : {}),
         status:receipt.queue ? "unsent" : receipt.pending ? "pending" : receipt.recipientId ? "sent" : (receipt.answer || receipt.photos?.length) ? "recorded" : "closed"});
     }
     if (updated) this.save(resolved);

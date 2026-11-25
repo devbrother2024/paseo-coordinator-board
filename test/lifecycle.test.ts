@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { attachCoordinatorTools } from "../server/coordinator";
+import { attachCoordinatorTools, notDesignatedYet } from "../server/coordinator";
 import { ConversationReader } from "../server/conversation";
 import { CoordinatorLifecycle } from "../server/lifecycle";
 import { isManagedCoordinator, PreferenceStore, setCoordinator } from "../server/preferences";
@@ -121,7 +121,8 @@ test("교체 승인 전에는 새 세션이 판단할 수 없고, 성공 뒤에�
   let stagedTool;
   f.effects.beforeCreate = async id => {
     stagedTool = await open(id);
-    await expect(call(stagedTool, id)).rejects.toThrow("해제");
+    // Still refused while staged; the message tells a session started with a first prompt to call again.
+    await expect(call(stagedTool, id)).rejects.toThrow(notDesignatedYet);
     expect(await call(original, "original")).toHaveLength(1);
   };
   const replacement = { ...start, expectedCoordinator: "original", replace: true };

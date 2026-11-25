@@ -24,6 +24,8 @@ export const replyEntry = replyDetails.extend({
   messageId: z.string().optional(), response: z.string().optional(),
   recipientTitle: z.string().optional(), recipientState: z.enum(["running","idle","closed","error","unknown"]).optional(),
   canOpen: z.boolean().optional(),
+  // A ledger reply whose card is no longer in the fully read ledger (taken down, not just answered).
+  cardRemoved: z.literal(true).optional(),
 });
 export type ReplyEntry = z.output<typeof replyEntry>;
 
