@@ -146,3 +146,57 @@ export function stepText(line: string, index: number) {
   const match = /^\s*(\d+)[.)]?\s+/.exec(line);
   return match && Number(match[1]) === index + 1 ? line.slice(match[0].length) : line;
 }
+
+// Each question's draft: the chosen options, a typed answer, a skip, and whether the field for one's own words is open.
+// One question holds one kind of answer at a time.
+export type AnswerDrafts = {
+  selected: Readonly<Record<number, string[]>>; typed: Readonly<Record<number, string | undefined>>;
+  skipped: Readonly<Record<number, boolean>>; writing: Readonly<Record<number, boolean>>;
+};
+export const emptyAnswers: AnswerDrafts = { selected: {}, typed: {}, skipped: {}, writing: {} };
+
+export function chooseAnswer(draft: AnswerDrafts, index: number, id: string, multi: boolean): AnswerDrafts {
+  const group = draft.selected[index] ?? [];
+  const next = multi ? group.includes(id) ? group.filter(value => value !== id) : [...group, id] : [id];
+  return { selected: { ...draft.selected, [index]: next }, typed: { ...draft.typed, [index]: undefined },
+    skipped: { ...draft.skipped, [index]: false }, writing: { ...draft.writing, [index]: false } };
+}
+
+export function typeAnswer(draft: AnswerDrafts, index: number, text: string): AnswerDrafts {
+  return { ...draft, typed: { ...draft.typed, [index]: text }, selected: { ...draft.selected, [index]: [] } };
+}
+
+// "Something else": opens an empty field in place of the options' answer, keeping anything already typed.
+export function startWriting(draft: AnswerDrafts, index: number): AnswerDrafts {
+  return { ...draft, writing: { ...draft.writing, [index]: true }, typed: { ...draft.typed, [index]: draft.typed[index] ?? "" },
+    selected: { ...draft.selected, [index]: [] } };
+}
+
+// A skip clears the question's answer. Pressing again undoes it.
+export function skipQuestion(draft: AnswerDrafts, index: number): AnswerDrafts {
+  return { ...draft, skipped: { ...draft.skipped, [index]: !draft.skipped[index] }, selected: { ...draft.selected, [index]: [] },
+    typed: { ...draft.typed, [index]: undefined } };
+}
+
+// Recommended picks replace the questions they fill, including a typed answer or a skip there, and nothing else.
+export function applyPicks(draft: AnswerDrafts, picks: Readonly<Record<number, string[]>>): AnswerDrafts {
+  const indexes = Object.keys(picks);
+  return { ...draft, selected: { ...draft.selected, ...picks },
+    typed: { ...draft.typed, ...Object.fromEntries(indexes.map(index => [index, undefined])) },
+    skipped: { ...draft.skipped, ...Object.fromEntries(indexes.map(index => [index, false])) } };
+}
+
+// Where a one-at-a-time card goes after an answer: on to the next open question after a single choice or a skip,
+// or nowhere (null) when the person moves on with Next. `answered` is what was on screen before this answer.
+export function stepAfterAnswer(stepped: boolean, question: Question, answered: readonly boolean[], index: number,
+  action: "choose" | "skip" | "unskip"): Step | null {
+  if (!stepped || action === "unskip" || (action === "choose" && !advancesOnChoice(question))) return null;
+  return nextOpenStep(answered.map((done, position) => position === index || done), index);
+}
+
+// Paste and drop reach photos only through the wrapper around a field, so a question's field stays wrapped. The
+// attach button folds under More on a one-at-a-time card; with no field on screen, More holds the button alone.
+export function photoPlacement(stepped: boolean, fieldShown: boolean, extrasOpen: boolean) {
+  if (!stepped) return { wrapField: fieldShown, fieldControls: fieldShown, extrasComposer: false };
+  return { wrapField: fieldShown, fieldControls: fieldShown && extrasOpen, extrasComposer: !fieldShown && extrasOpen };
+}

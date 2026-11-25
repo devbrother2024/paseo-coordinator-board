@@ -3,7 +3,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   advancesOnChoice, answerSummary, clampStep, firstOpenStep, foldsAsk, foldsCard, isHumanCheck, nextOpenStep, recommendAllPicks,
-  recordHeaderParts, stepText, trackedChipSide, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps,
+  applyPicks, chooseAnswer, emptyAnswers, photoPlacement, recordHeaderParts, skipQuestion, startWriting, stepAfterAnswer, stepText, typeAnswer,
+  trackedChipSide, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps,
 } from "../client/card-steps";
 import { optionId } from "../client/tracked-reply-draft";
 import { trackedDecisionSchema, type TrackedDecision } from "../shared/tracked-decisions";
@@ -217,4 +218,66 @@ test("a step that numbers itself shows its number once", () => {
   expect(stepText("10개 파일 확인", 9)).toBe("10개 파일 확인");
   expect(stepText("1.5배로 늘리기", 0)).toBe("1.5배로 늘리기");
   expect(stepText("`npm test` 실행", 0)).toBe("`npm test` 실행");
+});
+
+test("answer drafts: choosing, typing, writing, skipping and recommended picks keep one answer per question", () => {
+  const a = optionId(option("A", "a")), b = optionId(option("B", "b")), c = optionId(option("C", "c"));
+  let draft = emptyAnswers;
+  // A single choice replaces the earlier one and clears a typed answer, a skip and the open writing field.
+  draft = typeAnswer(draft, 0, "own words");
+  draft = skipQuestion(draft, 1);
+  draft = startWriting(draft, 2);
+  draft = chooseAnswer(draft, 0, a, false);
+  draft = chooseAnswer(draft, 0, b, false);
+  expect(draft.selected[0]).toEqual([b]);
+  expect(draft.typed[0]).toBeUndefined();
+  // Multi-choice toggles.
+  draft = chooseAnswer(draft, 3, a, true);
+  draft = chooseAnswer(draft, 3, c, true);
+  draft = chooseAnswer(draft, 3, a, true);
+  expect(draft.selected[3]).toEqual([c]);
+  // Choosing on a skipped question undoes the skip; choosing closes the writing field.
+  expect(chooseAnswer(draft, 1, a, false).skipped[1]).toBe(false);
+  expect(draft.writing[2]).toBe(true);
+  expect(chooseAnswer(draft, 2, a, false).writing[2]).toBe(false);
+  // Typing clears the choice.
+  expect(typeAnswer(draft, 0, "x").selected[0]).toEqual([]);
+  // Writing opens an empty field without dropping what was typed.
+  expect(startWriting(typeAnswer(draft, 4, "kept"), 4).typed[4]).toBe("kept");
+  expect(startWriting(draft, 5)).toMatchObject({ typed: { 5: "" }, selected: { 5: [] }, writing: { 5: true } });
+  // A skip clears the answer; a second press undoes it.
+  const skipped = skipQuestion(draft, 0);
+  expect(skipped).toMatchObject({ skipped: { 0: true }, selected: { 0: [] } });
+  expect(skipped.typed[0]).toBeUndefined();
+  expect(skipQuestion(skipped, 0).skipped[0]).toBe(false);
+  // Recommended picks overwrite only the questions they fill, and undo their typed answers and skips.
+  const picked = applyPicks(typeAnswer(skipQuestion(draft, 6), 7, "mine"), { 6: [a] });
+  expect(picked.selected[6]).toEqual([a]);
+  expect(picked.skipped[6]).toBe(false);
+  expect(picked.typed[7]).toBe("mine");
+  expect(picked.selected[0]).toEqual([b]);
+});
+
+test("the step after an answer: a single choice or a skip moves on, other answers wait for Next", () => {
+  const single = question("one", [option("A", "a")]);
+  const multi = question("many", [option("A", "a")], true);
+  // The question just answered counts as answered, even before the new draft is on screen.
+  expect(stepAfterAnswer(true, single, [false, false, false], 0, "choose")).toBe(1);
+  expect(stepAfterAnswer(true, single, [false, true, true], 0, "choose")).toBe("summary");
+  expect(stepAfterAnswer(true, multi, [false, false], 0, "choose")).toBeNull();
+  expect(stepAfterAnswer(true, single, [false, false], 0, "skip")).toBe(1);
+  expect(stepAfterAnswer(true, single, [true, false], 0, "unskip")).toBeNull();
+  // A card that shows all questions at once never moves.
+  expect(stepAfterAnswer(false, single, [false, false], 0, "choose")).toBeNull();
+});
+
+test("a stepped question field stays inside the photo wrapper so paste and drop attach photos", () => {
+  // With a field on screen, it is wrapped and the attach button follows More.
+  expect(photoPlacement(true, true, false)).toEqual({ wrapField: true, fieldControls: false, extrasComposer: false });
+  expect(photoPlacement(true, true, true)).toEqual({ wrapField: true, fieldControls: true, extrasComposer: false });
+  // With no field, More holds the attach button on its own.
+  expect(photoPlacement(true, false, true)).toEqual({ wrapField: false, fieldControls: false, extrasComposer: true });
+  expect(photoPlacement(true, false, false)).toEqual({ wrapField: false, fieldControls: false, extrasComposer: false });
+  // The one-question form keeps its field and attach button together.
+  expect(photoPlacement(false, true, false)).toEqual({ wrapField: true, fieldControls: true, extrasComposer: false });
 });

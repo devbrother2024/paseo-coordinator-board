@@ -19,7 +19,8 @@ import {
   trackedRecovery, trackedReplyBasis, trackedRetryFingerprint, type FailureStreak,
 } from "./tracked-reply-draft";
 import {
-  advancesOnChoice, answerSummary, clampStep, firstOpenStep, foldsAsk, foldsCard, nextOpenStep, recommendAllPicks, trackedChipSide,
+  advancesOnChoice, answerSummary, applyPicks, chooseAnswer, emptyAnswers, photoPlacement, skipQuestion, startWriting, stepAfterAnswer, typeAnswer,
+  type AnswerDrafts, clampStep, firstOpenStep, foldsAsk, foldsCard, nextOpenStep, recommendAllPicks, trackedChipSide,
   recordHeaderParts, stepText, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps, type Step,
 } from "./card-steps";
 import { ledgerChoiceGaps } from "../shared/choice-gaps";
@@ -120,11 +121,10 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const [askOpen, setAskOpen] = useState(false);
   const [stepsOpen, setStepsOpen] = useState(false);
   const [confirmedOwner, setConfirmedOwner] = useState(item.sourceCoordinatorId);
-  const [skipped, setSkipped] = useState<Record<number, boolean>>({});
+  // One draft for every question, changed only through the helpers in card-steps.ts.
+  const [answers, setAnswers] = useState<AnswerDrafts>(emptyAnswers);
+  const { selected, typed, skipped, writing } = answers;
   const [editedReply, setEditedReply] = useState<string | null>(null);
-  const [typed, setTyped] = useState<Record<number, string | undefined>>({});
-  const [selected, setSelected] = useState<Record<number, string[]>>({});
-  const [writing, setWriting] = useState<Record<number, boolean>>({});
   const [more, setMore] = useState<Record<number, boolean>>({});
   const [opened, setOpened] = useState(false);
   const [rawStep, setStep] = useState<Step>(0);
@@ -227,34 +227,26 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   useEffect(() => { if (moves) focusNode(questionHead.current); }, [moves]);
 
   function go(next: Step) { setStep(next); setOpened(true); setMoves(count => count + 1); }
+  function moveAfter(index: number, action: "choose" | "skip" | "unskip") {
+    const next = stepAfterAnswer(stepped, item.questions[index], answered, index, action);
+    if (next !== null) go(next);
+  }
   function choose(index: number, choice: number, multi: boolean) {
-    const question = item.questions[index];
-    const id = optionId(question.options[choice]);
-    setSkipped(previous => ({ ...previous, [index]: false }));
-    setTyped(previous => ({...previous,[index]:undefined}));
-    setWriting(previous => ({ ...previous, [index]: false }));
-    setSelected(previous => {
-      const group = previous[index] ?? [];
-      const next = multi ? group.includes(id) ? group.filter(value => value !== id) : [...group, id] : [id];
-      return { ...previous, [index]: next };
-    });
-    if (stepped && advancesOnChoice(question)) go(nextOpenStep(answered.map((done, position) => position === index || done), index));
+    const id = optionId(item.questions[index].options[choice]);
+    setAnswers(draft => chooseAnswer(draft, index, id, multi));
+    moveAfter(index, "choose");
   }
   function skip(index: number) {
     const skipping = !skipped[index];
-    setSkipped(previous => ({ ...previous, [index]: skipping }));
-    setSelected(previous => ({ ...previous, [index]: [] }));
-    setTyped(previous => ({ ...previous, [index]: undefined }));
-    if (stepped && skipping) go(nextOpenStep(answered.map((done, position) => position === index || done), index));
+    setAnswers(draft => skipQuestion(draft, index));
+    moveAfter(index, skipping ? "skip" : "unskip");
   }
   function chooseRecommended(fill: Record<number, string[]>, toSummary: boolean) {
-    setTyped(previous => ({ ...previous, ...Object.fromEntries(Object.keys(fill).map(index => [index, undefined])) }));
-    setSkipped(previous => ({ ...previous, ...Object.fromEntries(Object.keys(fill).map(index => [index, false])) }));
-    setSelected(previous => ({ ...previous, ...fill }));
+    setAnswers(draft => applyPicks(draft, fill));
     if (toSummary) go("summary");
   }
   function clearDraft() {
-    attachments.clear(); setEditedReply(null); setTyped({}); setSelected({}); setSkipped({}); setWriting({}); setMore({}); setLeadRemoved(false);
+    attachments.clear(); setEditedReply(null); setAnswers(emptyAnswers); setMore({}); setLeadRemoved(false);
     setStep(0); setOpened(false);
   }
   async function refreshRecord() {
@@ -356,11 +348,12 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
     // Photos or a skip keep the extras open, so what the reply carries stays in view.
     const extrasHeld = photoCount(index) > 0 || !!skipped[index];
     const extrasOpen = !!more[index] || extrasHeld;
+    const photo = photoPlacement(stepped, showInput, extrasOpen);
     // While answering one question at a time, the send shortcut moves to the next question. Sending waits for the summary.
     const input = <DecisionReplyInput {...inputFocus} send={stepping ? { disabled: busy || !answered[index], onPress: () => go(nextOpenStep(answered, index)) } : sendReply}
       theme={theme} value={questionText[index]} disabled={busy} maxLength={4000}
       accessibilityLabel={item.title + " · " + question.text + " · " + t("답장 내용", "Reply text")}
-      onChangeText={text => { setTyped(previous => ({...previous,[index]:text})); setSelected(previous => ({...previous,[index]:[]})); }}
+      onChangeText={text => setAnswers(draft => typeAnswer(draft, index, text))}
       placeholder={hasOptions ? t("선택하거나 직접 답을 입력하세요", "Choose an option or write your reply") : t("내 답을 입력하세요", "Write your reply")} />;
     const skipButton = canReply && <View style={wrap}><Button theme={theme} label={skipped[index] ? t("건너뛰기 취소", "Undo skip") : t("이 질문 건너뛰기", "Skip this question")}
       accessibilityLabel={item.title + " · " + question.text + " · " + t("건너뛰기", "Skip")} selected={!!skipped[index]}
@@ -393,8 +386,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
       })}
       {stepped && canReply && hasOptions && !showInput && !skipped[index] && <Pressable accessibilityRole="button"
         accessibilityLabel={item.title + " · " + question.text + " · " + t("다르게(직접 적기)", "Something else (write it)")}
-        disabled={busy} onPress={() => { setWriting(previous => ({ ...previous, [index]: true })); setTyped(previous => ({ ...previous, [index]: previous[index] ?? "" }));
-          setSelected(previous => ({ ...previous, [index]: [] })); }}
+        disabled={busy} onPress={() => setAnswers(draft => startWriting(draft, index))}
         style={{ padding: 8, borderWidth: 1, borderStyle: "dashed", borderRadius: 7, borderColor: c.border }}>
         <Text style={{ color: c.foregroundMuted }}>{t("다르게(직접 적기)", "Something else (write it)")}</Text>
       </Pressable>}
@@ -403,12 +395,12 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
         {skipButton}
       </>}
       {stepped && <>
-        {showInput && input}
+        {photo.wrapField && <PhotoComposer theme={theme} disabled={busy} draft={attachments} questionIndex={index} controls={photo.fieldControls}>{input}</PhotoComposer>}
         {canReply && !extrasHeld && <TextButton theme={theme} expanded={extrasOpen} label={extrasOpen ? t("접기", "Less") : t("더 보기", "More")}
           accessibilityLabel={item.title + " · " + question.text + " · " + (extrasOpen ? t("사진·건너뛰기 접기", "Hide photos and skip") : t("사진·건너뛰기 더 보기", "Photos and skip"))}
           onPress={() => setMore(previous => ({ ...previous, [index]: !extrasOpen }))} />}
         {canReply && extrasOpen && <View style={{ ...wrap, alignItems: "flex-start" }}>
-          {!skipped[index] && <PhotoComposer theme={theme} disabled={busy} draft={attachments} questionIndex={index}><></></PhotoComposer>}
+          {photo.extrasComposer && !skipped[index] && <PhotoComposer theme={theme} disabled={busy} draft={attachments} questionIndex={index}><></></PhotoComposer>}
           {skipButton}
         </View>}
         <View style={{ ...wrap, alignItems: "center" }}>
