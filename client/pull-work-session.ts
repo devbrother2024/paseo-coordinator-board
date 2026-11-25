@@ -34,14 +34,23 @@ export function mergeGate(localRunning: boolean, remote: { pending: boolean; run
   return localRunning || remote?.running ? "confirm" : "open";
 }
 
-// A remote lookup answer belongs to the lookup that produced it. A board refresh starts a new lookup:
-// the old answer still shows the chip, but the safety check waits for the new one.
-export type RemoteAnswer<S, L> = { key: string; lookup: L; state: S | null };
-export function remoteSessionView<S, L>(answer: RemoteAnswer<S, L> | undefined, key: string, lookup: L) {
+// A remote lookup answer belongs to the lookup that produced it, and to the time it arrived.
+// A board refresh starts a new lookup. Until it answers, a recent answer for the same session and hosts
+// keeps the merge button usable; an old or missing one holds it. The press itself still waits for the newest answer.
+export const remoteAnswerMaxAgeMs = 90_000;
+export type RemoteAnswer<S, L> = { key: string; lookup: L; at: number; state: S | null };
+export function remoteSessionView<S, L>(answer: RemoteAnswer<S, L> | undefined, key: string, lookup: L, now: number) {
   const same = !!answer && answer.key === key;
+  const current = same && answer!.lookup === lookup;
   return {
     // undefined: nothing known yet for this session.
     shown: same ? answer!.state : undefined,
-    pending: !same || answer!.lookup !== lookup,
+    pending: !same || (!current && now - answer!.at > remoteAnswerMaxAgeMs),
   };
+}
+
+// At Confirm merge the board waits for the newest remote answer. A session that turned running since the
+// preview opened asks once more, unless the person already chose to go ahead while it was running.
+export function confirmAfterLookup(fresh: { running: boolean } | null | undefined, acknowledgedRunning: boolean): "merge" | "ask" {
+  return fresh?.running && !acknowledgedRunning ? "ask" : "merge";
 }

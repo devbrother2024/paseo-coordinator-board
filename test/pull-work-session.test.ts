@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ledgerPullSession, mergeGate, pullSessionNote, remoteSessionView } from "../client/pull-work-session";
+import { confirmAfterLookup, ledgerPullSession, mergeGate, pullSessionNote, remoteAnswerMaxAgeMs, remoteSessionView } from "../client/pull-work-session";
 import { createRemoteWorkSessionLookup, createRemoteWorkSessionStates, findRemoteWorkSessionState, workSessionPresence } from "../client/tracked-session-targets";
 import { trackedDecisionSchema } from "../shared/tracked-decisions";
 
@@ -69,18 +69,30 @@ test("the merge button waits for a remote work session lookup before it can skip
   expect(mergeGate(false, undefined)).toBe("open");
 });
 
-test("after a board refresh the old remote answer still shows, but merge review waits for the new lookup", () => {
+test("after a board refresh a recent answer keeps the merge button usable; an old or missing one holds it", () => {
   const before = {}, after = {};
-  const idle = { key: "worker", lookup: before, state: { running: false } };
-  expect(remoteSessionView(idle, "worker", before)).toEqual({ shown: { running: false }, pending: false });
-  // The refresh replaced the lookup: the chip stays, the safety check is pending again.
-  const refreshed = remoteSessionView(idle, "worker", after);
-  expect(refreshed).toEqual({ shown: { running: false }, pending: true });
-  expect(mergeGate(false, { pending: refreshed.pending, running: !!refreshed.shown?.running })).toBe("wait");
-  // The new answer says it is running now, so merging asks once more.
-  const running = remoteSessionView({ key: "worker", lookup: after, state: { running: true } }, "worker", after);
+  const idle = { key: "worker", lookup: before, at: 1_000, state: { running: false } };
+  expect(remoteSessionView(idle, "worker", before, 500_000)).toEqual({ shown: { running: false }, pending: false });
+  // A refresh replaced the lookup within 90 seconds: the last answer still counts.
+  const recent = remoteSessionView(idle, "worker", after, 1_000 + remoteAnswerMaxAgeMs);
+  expect(recent).toEqual({ shown: { running: false }, pending: false });
+  expect(mergeGate(false, { pending: recent.pending, running: !!recent.shown?.running })).toBe("open");
+  // Older than that, the button waits for the new lookup.
+  const old = remoteSessionView(idle, "worker", after, 1_001 + remoteAnswerMaxAgeMs);
+  expect(old.pending).toBe(true);
+  expect(mergeGate(false, { pending: old.pending, running: !!old.shown?.running })).toBe("wait");
+  // When the new answer says running, merging asks again.
+  const running = remoteSessionView({ key: "worker", lookup: after, at: 2_000, state: { running: true } }, "worker", after, 2_000);
   expect(mergeGate(false, { pending: running.pending, running: !!running.shown?.running })).toBe("confirm");
-  // Another session, or nothing yet, is unknown and pending.
-  expect(remoteSessionView(idle, "other", before)).toEqual({ shown: undefined, pending: true });
-  expect(remoteSessionView(undefined, "worker", before)).toEqual({ shown: undefined, pending: true });
+  // Another session or host set, or nothing yet, holds the button.
+  expect(remoteSessionView(idle, "other", before, 1_000)).toEqual({ shown: undefined, pending: true });
+  expect(remoteSessionView(undefined, "worker", before, 1_000)).toEqual({ shown: undefined, pending: true });
+});
+
+test("Confirm merge waits for the newest answer and asks again only for a session that turned running", () => {
+  expect(confirmAfterLookup({ running: true }, false)).toBe("ask");
+  expect(confirmAfterLookup({ running: true }, true)).toBe("merge");
+  expect(confirmAfterLookup({ running: false }, false)).toBe("merge");
+  expect(confirmAfterLookup(null, false)).toBe("merge");
+  expect(confirmAfterLookup(undefined, false)).toBe("merge");
 });

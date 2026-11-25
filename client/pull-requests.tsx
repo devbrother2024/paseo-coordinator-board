@@ -9,7 +9,7 @@ import { mergeNotificationLabel } from "./merge-notification";
 import { useBoardLanguage, type Translate } from "./language";
 import { githubStatusWords, needsRunningConfirmation, pullStatusWords, unknownStatusWords } from "../shared/pull-judgments";
 import { findRemoteWorkSessionState, type RemoteWorkSession, type WorkSessionHost, type WorkSessionStates } from "./tracked-session-targets";
-import { mergeGate, pullSessionNote, remoteSessionView, type RemoteAnswer } from "./pull-work-session";
+import { confirmAfterLookup, mergeGate, pullSessionNote, remoteSessionView, type RemoteAnswer } from "./pull-work-session";
 import { afterConfirm, announceBoardMerge, onBoardMerge, reopenPreview, reopensAfterMerge } from "./merge-flow";
 import type { MergeWaitReason } from "../shared/merge-card-place";
 
@@ -70,11 +70,13 @@ function useRemotePullSession(source: RemotePullSession | undefined) {
     if (!source || !key) return;
     let active = true;
     const lookup = source.states;
-    void findRemoteWorkSessionState(source, lookup).then(state => { if (active) setFound({ key, lookup, state: state ?? null }); });
+    void findRemoteWorkSessionState(source, lookup).then(state => { if (active) setFound({ key, lookup, at: Date.now(), state: state ?? null }); });
     return () => { active = false; };
   }, [key, source?.states]);
   if (!source || !key) return null;
-  return remoteSessionView(found, key, source.states);
+  // The lookup caches its answer, so waiting for the newest one adds no remote call.
+  const latest = () => findRemoteWorkSessionState(source, source.states).then(state => state ?? null);
+  return { ...remoteSessionView(found, key, source.states, Date.now()), latest };
 }
 
 type Lifecycle = ReturnType<typeof readPullLifecycle.output.parse>["state"];
@@ -150,6 +152,8 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   const [reopened, setReopened] = useState<readonly [string, string] | null>(null);
   const [recheck, setRecheck] = useState(false);
   const locked = useRef(false);
+  // The person chose to review the merge while a work session was running.
+  const acknowledgedRunning = useRef(false);
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
   const target = pr.repo + " #" + pr.number;
@@ -170,6 +174,7 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
     if (locked.current || !ready || gate === "wait") return;
     // A running work session may still push. Ask once more before showing the merge preview.
     if (working && !confirmedRunning) { setRunningPrompt(true); return; }
+    acknowledgedRunning.current = working && confirmedRunning;
     setRunningPrompt(false);
     locked.current = true; setBusy("read"); setNotice(null); setLookupError(false); setRecheck(false); setReopened(null);
     try {
@@ -219,6 +224,11 @@ export function PullRequestCard({ pr, projectId, theme, decision = false, showDi
   async function confirm() {
     if (locked.current || !ready || !preview?.token || !method || !preview.methods.includes(method)) return;
     locked.current = true; setBusy("merge"); setReopened(null);
+    // A remote work session may have started running since the preview opened. Wait for its newest answer.
+    if (lookup && confirmAfterLookup(await lookup.latest(), acknowledgedRunning.current) === "ask") {
+      locked.current = false; setBusy(null); setPreview(null); setMethod(null); setRunningPrompt(true);
+      return;
+    }
     const previousBase = preview.baseSha;
     let feedback: MergeNotice;
     try {
