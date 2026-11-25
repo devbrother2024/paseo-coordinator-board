@@ -212,18 +212,18 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     setInlineReceipts(previous => previous.some(entry => entry.actionKey === action.actionKey && entry.rowKey === action.rowKey)
       ? previous : [...previous, { ...action, order: orderedKeys }]);
   }
-  function questionFor(card: ClarificationCard | null, title: string, prior?: TrackedDecision["qa"], onDraftChange?: (active:boolean) => void, ownerId?: string | null, notice?: ChoiceNotice | null, showHistory = true) {
+  function questionFor(card: ClarificationCard | null, title: string, prior?: TrackedDecision["qa"], onDraftChange?: (active:boolean) => void, ownerId?: string | null, notice?: ChoiceNotice | null, part: "all" | "ask" | "history" = "all") {
     if (!snapshot) return null;
     const recipientId = card ? clarificationRecipient(card, snapshot) : null;
     const recipientTitle = ownerId && ownerId === recipientId ? t("운영 코디네이터", "Ledger owner") + " · " + ownerId
       : snapshot.sessions.find(row => row.id === recipientId)?.title;
     const toCoordinator = !!recipientId && (recipientId === snapshot.coordinator || recipientId === ownerId);
     return <Clarification key={card ? clarificationKey(card) : title} title={title} card={card} theme={theme} suggestion={choiceRequest(notice ?? null, toCoordinator)}
-      recipientId={recipientId} recipientTitle={recipientTitle} entries={snapshot.clarifications ?? []} prior={prior} onRefresh={onRefresh} onDraftChange={onDraftChange} showHistory={showHistory} />;
+      recipientId={recipientId} recipientTitle={recipientTitle} entries={snapshot.clarifications ?? []} prior={prior} onRefresh={onRefresh} onDraftChange={onDraftChange} part={part} />;
   }
   const renderDecision = (card: Card, embedded = false, rowKey?: string, priority?: string) => <DecisionActions key={JSON.stringify([card.session.projectId, card.session.id, card.session.decision?.version])}
-          clarification={embedded ? undefined : showHistory => questionFor(sessionClarificationCard(card.session,card.note),card.session.title,undefined,undefined,undefined,
-            card.session.decision?.source === "conversation" ? decisionChoiceNotice(card.session.decision) : null, showHistory)}
+          clarification={embedded ? undefined : part => questionFor(sessionClarificationCard(card.session,card.note),card.session.title,undefined,undefined,undefined,
+            card.session.decision?.source === "conversation" ? decisionChoiceNotice(card.session.decision) : null, part)}
           embedded={embedded} priorityLabel={priority} card={card} hostLabel={card.session.assignment?.label ?? hostLabel} theme={theme} coordinator={snapshot!.coordinator} coordinatorTitle={snapshot!.sessions.find(s => s.id === snapshot!.coordinator)?.title}
           open={actions.onOpen} receipt={receipts.find(r => matches(r, card))}
           pendingRequests={card.session.nativePending && !card.session.serverId && hostId ? <PendingRequests key={JSON.stringify([hostId, card.session.id])} hostId={hostId}
@@ -240,9 +240,11 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             setReceipts(prior => [result, ...prior.filter(r => !(r.projectId === result.projectId && r.sessionId === result.sessionId))].slice(0, 20));
             onRefresh();
           }} />;
-  function recordLinks(item: TrackedDecision, showSource = true): TrackedSessionLinks {
+  // `fallbackId` is the coordinator a work session card's reply goes to instead. With no ledger owner, its chip is the
+  // owner link, so a card whose work session ended can still open the session that would take the reply.
+  function recordLinks(item: TrackedDecision, showSource = true, fallbackId?: string | null): TrackedSessionLinks {
     if (!snapshot) return {};
-    const ownerId = trackedSessionOwner(item, snapshot.coordinator);
+    const ownerId = trackedSessionOwner(item, snapshot.coordinator) ?? fallbackId ?? undefined;
     const open = actions.onOpen;
     const listed = snapshot.sessions.some(session => session.id === ownerId);
     const owner = ownerId && open && (ownerId === snapshot.coordinator || listed || hostId) ? {
@@ -302,9 +304,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           const route = native && !item.questions.length ? undefined : trackedReplyRoute(item,snapshot!.coordinator,snapshot!.sessions,folders);
           // A card offers its fallback only when it has no recipient.
           const reaches = route?.recipientId ?? route?.fallbackId;
-          return <TrackedDecisionCard links={recordLinks(item, !native)} key={item.key} item={item} theme={theme} priorityLabel={priority}
-            renderClarification={(onDraftChange, showHistory) => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined,
-              item.kind === "merge" ? null : cardChoiceNotice(ledgerChoiceGaps(item)), showHistory)}
+          return <TrackedDecisionCard links={recordLinks(item, !native, route?.fallbackId)} key={item.key} item={item} theme={theme}
+            renderClarification={(onDraftChange, part) => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined,
+              item.kind === "merge" ? null : cardChoiceNotice(ledgerChoiceGaps(item)), part)}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
               : pr && renderPull(pr, pr.projectIds.includes(item.projectId ?? "") ? item.projectId! : pr.projectIds[0], true, mentionsSecurityGate(item), true, rowKey, [item.projectId])}
             route={route} keepsUnsent={!!rowKey}

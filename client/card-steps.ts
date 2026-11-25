@@ -1,4 +1,5 @@
 import type { TrackedDecision, TrackedReplyRoute } from "../shared/tracked-decisions";
+import { dueTime, waitStart } from "../shared/decision-priority";
 import { optionId, recommendedChoices, recommendedTrackedReply } from "./tracked-reply-draft";
 
 type Translate = (korean: string, english: string) => string;
@@ -84,19 +85,18 @@ type Sources = { owner: boolean; source: "local" | "remote" | "unavailable" | un
 // A blocked work session that is still alive elsewhere can be opened to answer there.
 const reachable = new Set(["other-host", "other-project"]);
 
-// Which session the card's one chip opens. It is the session that takes the reply. When that session cannot,
-// the chip opens the one that still can: the coordinator a fallback goes to, or a live session elsewhere.
+// Which session the card's one chip opens. It is the session that takes the reply. When that session cannot, its chip
+// is hidden and the chip opens the one that still can: the coordinator a redirected reply goes to (the owner link), or
+// a live work session on another host or project. With neither, the card shows only the reason.
 export function trackedChipSide(where: TrackedDecision["where"], route: TrackedReplyRoute | undefined, links: Sources): "owner" | "source" | null {
-  const source = links.source && links.source !== "unavailable";
-  const pick = (first: "owner" | "source") => {
-    const available = { owner: links.owner, source };
-    const other = first === "owner" ? "source" : "owner";
-    return available[first] ? first : available[other] ? other : null;
-  };
-  if (where === "manager" || where === "human") return pick("owner");
+  const source = !!links.source && links.source !== "unavailable";
   const blocked = route?.blocked;
-  if (!blocked || reachable.has(blocked)) return pick("source");
-  return pick("owner");
+  if (where === "manager" || where === "human") {
+    if (!blocked) return links.owner ? "owner" : source ? "source" : null;
+    return source ? "source" : null;
+  }
+  if (!blocked || reachable.has(blocked)) return source ? "source" : links.owner ? "owner" : null;
+  return links.owner ? "owner" : null;
 }
 
 // What a card offers for its reply. The board only sends: to the session that takes the reply, or, when that session
@@ -112,4 +112,29 @@ export function trackedReplyOffer(route: Pick<TrackedReplyRoute, "recipientId" |
 export function visibleSteps(steps: readonly string[], expanded: boolean) {
   if (expanded || steps.length <= 5) return { shown: [...steps], more: 0 };
   return { shown: steps.slice(0, 3), more: steps.length };
+}
+
+const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function waitText(minutes: number, t: Translate) {
+  if (minutes < 1) return t("1분 미만 대기", "waiting <1m");
+  if (minutes < 60) return t(`${minutes}분 대기`, `waiting ${minutes}m`);
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return t(`${hours}시간 대기`, `waiting ${hours}h`);
+  return t(`${Math.floor(hours / 24)}일 대기`, `waiting ${Math.floor(hours / 24)}d`);
+}
+
+// The card header after the project: how long the card has waited, then its due date when it has one, as a date.
+export function recordHeaderParts(item: Pick<TrackedDecision, "since" | "dueAt">, t: Translate, now = Date.now()) {
+  const parts: string[] = [];
+  const since = waitStart(item.since, now);
+  if (since !== null && Number.isFinite(since)) parts.push(waitText(Math.floor((now - since) / 60_000), t));
+  const due = dueTime(item.dueAt);
+  if (due) {
+    const day = new Date(due.at);
+    const clock = due.timed ? " " + String(day.getHours()).padStart(2, "0") + ":" + String(day.getMinutes()).padStart(2, "0") : "";
+    const ko = `${day.getMonth() + 1}월 ${day.getDate()}일${clock}`, en = `${months[day.getMonth()]} ${day.getDate()}${clock}`;
+    const end = due.timed ? due.at : new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 59, 999).getTime();
+    parts.push(end <= now ? t(`기한 지남 · ${ko}`, `Overdue · ${en}`) : t(`기한 ${ko}`, `Due ${en}`));
+  }
+  return parts;
 }

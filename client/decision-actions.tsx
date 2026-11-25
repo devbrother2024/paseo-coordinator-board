@@ -37,7 +37,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   card: Card; theme: Theme; hostLabel?: string; coordinator: string | null; coordinatorTitle?: string; open?: (id: string) => void;
   onSent: (result: DecisionReceipt) => void; receipt?: DecisionReceipt; pendingRequests?: ReactNode; priorityLabel?: string; embedded?: boolean;
   // The question box. Its earlier questions and answers show with the card's evidence.
-  clarification?: (showHistory: boolean) => ReactNode;
+  clarification?: (part: "ask" | "history") => ReactNode;
 }) {
   const { t, language } = useBoardLanguage();
   const { session } = card;
@@ -72,7 +72,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   // The header keeps the project and how long the card has waited. The session and host move to the evidence.
   const marker = [session.projectTitle, priorityLabel].filter(Boolean).join(" · ");
   const origin = [session.title, hostLabel && t(`실행 호스트 · ${hostLabel}`, `Host · ${hostLabel}`), session.sourceProjectTitle && t(`원래 소속 ${session.sourceProjectTitle}`, `From ${session.sourceProjectTitle}`)].filter(Boolean).join(" · ");
-  const clarification = renderClarification?.(showEvidence);
+  const clarification = renderClarification?.("ask");
   const named = (label: string) => ({ label, accessibilityLabel: `${session.title} · ${label}` });
 
   function selectReply(index: number | null) {
@@ -208,6 +208,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
         <HistoryMarkdown theme={theme} source={decision.recommendationReason} />
       </View>}
       {showEvidence && sourceExcerpts.map(text => <HistoryMarkdown key={text} theme={theme} source={text} muted />)}
+      {showEvidence && renderClarification?.("history")}
     </View>
     {receipt && <ReceiptText receipt={receipt} theme={theme} />}
     {!!error && <Text accessibilityLiveRegion="polite" selectable style={{ color: c.statusDanger }}>{t(...error)}</Text>}

@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   advancesOnChoice, answerSummary, clampStep, firstOpenStep, foldsAsk, foldsCard, isHumanCheck, nextOpenStep, recommendAllPicks,
-  trackedChipSide, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps,
+  recordHeaderParts, trackedChipSide, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps,
 } from "../client/card-steps";
 import { optionId } from "../client/tracked-reply-draft";
 import { trackedDecisionSchema, type TrackedDecision } from "../shared/tracked-decisions";
@@ -115,7 +115,10 @@ test("the card shows one chip: the session that takes the reply, or the one that
     ({ targetId: recipientId, recipientId, fallbackId, ...(blocked ? { blocked } : {}) }) as Parameters<typeof trackedChipSide>[1];
   // A coordinator card opens the coordinator. The work session moves to the evidence.
   expect(trackedChipSide("manager", route("owner"), both)).toBe("owner");
-  expect(trackedChipSide("human", route(null, "closed"), both)).toBe("owner");
+  // A coordinator that cannot take the reply loses its chip. The work session can still be opened.
+  expect(trackedChipSide("human", route(null, "closed"), both)).toBe("source");
+  expect(trackedChipSide("manager", route(null, "error"), { owner: true, source: undefined })).toBeNull();
+  expect(trackedChipSide("manager", route(null, "error"), { owner: true, source: "unavailable" })).toBeNull();
   expect(trackedChipSide("human", route(null, "owner-unverified"), { owner: false, source: "local" })).toBe("source");
   // A work session card opens the work session.
   expect(trackedChipSide("session", route("worker"), both)).toBe("source");
@@ -126,7 +129,9 @@ test("the card shows one chip: the session that takes the reply, or the one that
   expect(trackedChipSide("session", route(null, "other-host", "owner"), { owner: true, source: "remote" })).toBe("source");
   expect(trackedChipSide("session", route(null, "other-project", "owner"), both)).toBe("source");
   expect(trackedChipSide("session", route(null, "other-host", "owner"), { owner: true, source: "unavailable" })).toBe("owner");
-  expect(trackedChipSide("session", route(null, "closed"), { owner: false, source: "local" })).toBe("source");
+  // An ended work session keeps no chip of its own. With no coordinator to open, only the reason shows.
+  expect(trackedChipSide("session", route(null, "closed"), { owner: false, source: "local" })).toBeNull();
+  expect(trackedChipSide("session", route(null, "error", "owner"), { owner: true, source: "local" })).toBe("owner");
   expect(trackedChipSide("session", undefined, { owner: false, source: undefined })).toBeNull();
 });
 
@@ -176,4 +181,21 @@ test("steps sit under the recommendation and leave the folded evidence", () => {
   // Rendered right after the one-line recommendation, before the reply form.
   expect(face.indexOf("steps.shown.map")).toBeGreaterThan(face.indexOf('t("추천", "Recommendation")'));
   expect(face.indexOf("steps.shown.map")).toBeLessThan(face.indexOf("{queue && <View"));
+});
+
+test("the header shows how long the card waited and its due date only when it has one", () => {
+  const now = new Date(2026, 10, 25, 12, 0).getTime();
+  const at = (days: number, hours = 0) => new Date(2026, 10, 25 + days, 12 + hours).toISOString();
+  expect(recordHeaderParts({ since: at(0, -3), dueAt: null }, ko, now)).toEqual(["3시간 대기"]);
+  expect(recordHeaderParts({ since: at(0, -3), dueAt: null }, en, now)).toEqual(["waiting 3h"]);
+  // No due date: no "No deadline" text.
+  expect(recordHeaderParts({ since: undefined, dueAt: undefined }, ko, now)).toEqual([]);
+  expect(recordHeaderParts({ since: undefined, dueAt: "2026-11-27" }, ko, now)).toEqual(["기한 11월 27일"]);
+  expect(recordHeaderParts({ since: undefined, dueAt: "2026-11-27" }, en, now)).toEqual(["Due Nov 27"]);
+  // A date-only due day is not overdue until the day ends.
+  expect(recordHeaderParts({ since: undefined, dueAt: "2026-11-25" }, ko, now)).toEqual(["기한 11월 25일"]);
+  expect(recordHeaderParts({ since: undefined, dueAt: "2026-11-24" }, en, now)).toEqual(["Overdue · Nov 24"]);
+  const timed = new Date(2026, 10, 25, 15, 30).toISOString();
+  expect(recordHeaderParts({ since: undefined, dueAt: timed }, ko, now)).toEqual(["기한 11월 25일 15:30"]);
+  expect(recordHeaderParts({ since: at(-2), dueAt: "not a date" }, ko, now)).toEqual(["2일 대기"]);
 });

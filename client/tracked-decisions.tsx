@@ -3,7 +3,7 @@ import { DecisionReplyInput } from "./decision-reply";
 import { SendButton } from "./send-input";
 import { useRpc } from "@getpaseo/plugin/client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AccessibilityInfo, findNodeHandle, Platform, Pressable, Text, View } from "react-native";
+import { AccessibilityInfo, Platform, Pressable, Text, View } from "react-native";
 import {
   cancelQueuedReply, resolveTrackedDecision, mentionsSecurityGate, trackedAnswerLead, trackedAnswerText, trackedPullTarget, trackedReplyExample, usesSourceCoordinator,
   type TrackedDecision, type TrackedReplyBlock, type TrackedReplyReason, type TrackedReplyRoute,
@@ -20,7 +20,7 @@ import {
 } from "./tracked-reply-draft";
 import {
   advancesOnChoice, answerSummary, clampStep, firstOpenStep, foldsAsk, foldsCard, nextOpenStep, recommendAllPicks, trackedChipSide,
-  trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps, type Step,
+  recordHeaderParts, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps, type Step,
 } from "./card-steps";
 import { ledgerChoiceGaps } from "../shared/choice-gaps";
 import { cardChoiceNotice } from "./choice-display";
@@ -37,8 +37,9 @@ export type TrackedOutcome = {
 // `fingerprint` is the revision on screen at the attempt.
 type Outcome = TrackedOutcome & { fingerprint: string };
 type Props = {
-  item: TrackedDecision; theme: Theme; priorityLabel?: string; route?: TrackedReplyRoute; blockedNote?: string; links: TrackedSessionLinks; children?: ReactNode; pull?: ReactNode;
-  renderClarification?: (onDraftChange:(active:boolean) => void, showHistory: boolean) => ReactNode;
+  item: TrackedDecision; theme: Theme; route?: TrackedReplyRoute; blockedNote?: string; links: TrackedSessionLinks; children?: ReactNode; pull?: ReactNode;
+  // "ask" is the question box beside the reply; "history" is the earlier questions and answers inside the evidence.
+  renderClarification?: (onDraftChange:((active:boolean) => void) | undefined, part: "ask" | "history") => ReactNode;
   // The digest row keeps an unsent reply as a receipt after the card leaves the list.
   keepsUnsent?: boolean;
   onResolved: (outcome: TrackedOutcome) => Promise<void> | void;
@@ -100,16 +101,16 @@ function TextButton({ label, accessibilityLabel, onPress, theme, expanded, disab
   </Pressable>;
 }
 
-// Moves screen reader and keyboard focus to a new question.
-function focusNode(node: unknown) {
+// Moves screen reader and keyboard focus to a new question. On the apps the screen reader is told after the new
+// question has laid out, since focus sent to a view that is still mounting is dropped.
+function focusNode(node: View | null) {
   if (!node) return;
-  if (Platform.OS === "web") { (node as { focus?: () => void }).focus?.(); return; }
-  const handle = findNodeHandle(node as Parameters<typeof findNodeHandle>[0]);
-  if (handle) AccessibilityInfo.setAccessibilityFocus(handle);
+  if (Platform.OS === "web") { (node as unknown as { focus?: () => void }).focus?.(); return; }
+  setTimeout(() => AccessibilityInfo.sendAccessibilityEvent(node, "focus"), 60);
 }
 
 // Keyed by card, not revision, so a display-only update keeps the draft, photos, current question and focus.
-export function TrackedDecisionCard({ item, theme, links, route, blockedNote, onResolved, children, pull, renderClarification, priorityLabel, keepsUnsent }: Props) {
+export function TrackedDecisionCard({ item, theme, links, route, blockedNote, onResolved, children, pull, renderClarification, keepsUnsent }: Props) {
   const { t } = useBoardLanguage();
   const resolve = useRpc(resolveTrackedDecision);
   const cancel = useRpc(cancelQueuedReply);
@@ -208,6 +209,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const unreachable = !offer.form;
   const stepped = usesSteps(item.questions);
   const step = clampStep(rawStep, item.questions.length);
+  const stepping = stepped && step !== "summary";
   const folded = foldsCard(item) && !opened && !hasAnswerDraft && !hasQuestionDraft;
   const inputFocus = useDecisionInteraction(canReply && !queue && !isClosed && !needsRefresh &&
     (hasDraft || editedReply !== null || Object.values(typed).some(value => value !== undefined) ||
@@ -218,7 +220,9 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   const askFolds = foldsAsk(askLines);
   const steps = visibleSteps(item.steps, stepsOpen);
   const otherSide = trackedChipSide(item.where, route, { owner: !!links.owner, source: links.source?.kind });
+  // The evidence keeps the session links the header does not show, including one that can no longer take replies.
   const evidenceSide = otherSide === "owner" ? "source" : otherSide === "source" ? "owner" : undefined;
+  const evidenceLinks = !!(evidenceSide ? (evidenceSide === "owner" ? links.owner : links.source) : links.owner || links.source);
 
   useEffect(() => { if (moves) focusNode(questionHead.current); }, [moves]);
 
@@ -352,7 +356,9 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
     // Photos or a skip keep the extras open, so what the reply carries stays in view.
     const extrasHeld = photoCount(index) > 0 || !!skipped[index];
     const extrasOpen = !!more[index] || extrasHeld;
-    const input = <DecisionReplyInput {...inputFocus} send={sendReply} theme={theme} value={questionText[index]} disabled={busy} maxLength={4000}
+    // While answering one question at a time, the send shortcut moves to the next question. Sending waits for the summary.
+    const input = <DecisionReplyInput {...inputFocus} send={stepping ? { disabled: busy || !answered[index], onPress: () => go(nextOpenStep(answered, index)) } : sendReply}
+      theme={theme} value={questionText[index]} disabled={busy} maxLength={4000}
       accessibilityLabel={item.title + " · " + question.text + " · " + t("답장 내용", "Reply text")}
       onChangeText={text => { setTyped(previous => ({...previous,[index]:text})); setSelected(previous => ({...previous,[index]:[]})); }}
       placeholder={hasOptions ? t("선택하거나 직접 답을 입력하세요", "Choose an option or write your reply") : t("내 답을 입력하세요", "Write your reply")} />;
@@ -430,7 +436,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
 
   return <View style={{ gap: 7 }}>
     <View style={{ ...wrap, alignItems: "center" }}>
-      <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[source || t("보드 공통", "Board-wide"), priorityLabel].filter(Boolean).join(" · ")}</Text>
+      <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[source || t("보드 공통", "Board-wide"), ...recordHeaderParts(item, t)].join(" · ")}</Text>
       {otherSide && <TrackedSessionChips title={item.title} theme={theme} links={links} side={otherSide} role />}
     </View>
     <HistoryMarkdown theme={theme} source={isMerge ? t("PR 병합", "PR merge") : item.title} pullRepository={pullRepository} heading />
@@ -503,7 +509,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
           {t("질문이 생기기 전에 쓴 답입니다. 질문의 답과 함께 보내니 고치거나 빼 주세요.", "You wrote this before the card had questions. It is sent with your answers, so edit or remove it.")}
         </Text>}
         <PhotoComposer theme={theme} disabled={busy} draft={attachments}>
-          <DecisionReplyInput {...inputFocus} send={sendReply} theme={theme}
+          <DecisionReplyInput {...inputFocus} send={stepping ? { disabled: true, onPress: () => {} } : sendReply} theme={theme}
             accessibilityLabel={item.title + " · " + (carried ? t("질문이 생기기 전에 쓴 답", "Reply written before the questions") : t("답장 내용", "Reply text"))}
             value={freeReply} disabled={busy} maxLength={4000} onChangeText={value => setEditedReply(value)}
             placeholder={example ? t("예시 · ", "Example · ") + example : t("내 답을 입력하세요", "Write your reply")} />
@@ -562,12 +568,12 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
         </View>}
       </View>}
     </View>}
-    {canReply && showForm && renderClarification && <View style={{ ...wrap, alignItems: "center" }}>{renderClarification(setHasQuestionDraft, expanded)}</View>}
+    {canReply && showForm && renderClarification && <View style={{ ...wrap, alignItems: "center" }}>{renderClarification(setHasQuestionDraft, "ask")}</View>}
     <TextButton theme={theme} expanded={expanded} label={expanded ? t("근거·이력 접기", "Hide evidence and history") : t("근거·이력 보기", "Evidence and history")}
       accessibilityLabel={named(expanded ? t("결정 상세 접기", "Hide decision details") : t("결정 상세 보기", "View decision details")).accessibilityLabel}
       onPress={() => setExpanded(value => !value)} />
     {expanded && <View style={{ gap: 8, padding: 8, borderRadius: 7, backgroundColor: c.surface0 }}>
-      {evidenceSide && <View style={{ ...wrap, alignItems: "center" }}><TrackedSessionChips title={item.title} theme={theme} links={links} side={evidenceSide} /></View>}
+      {evidenceLinks && <View style={{ ...wrap, alignItems: "center" }}><TrackedSessionChips title={item.title} theme={theme} links={links} side={evidenceSide} /></View>}
       {links.owner && item.sourceCoordinatorId && <Text selectable style={{color:c.foregroundMuted,fontSize:12}}>
         {t("운영 코디네이터 세션 ID","Operating coordinator session ID")} · {item.sourceCoordinatorId}
       </Text>}
@@ -590,6 +596,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
           <Text selectable style={{ color: c.foregroundMuted }}>{entry.a ? [t("답", "Answer"), entry.answeredAt, entry.a].filter(Boolean).join(" · ") : t("답변 대기", "Awaiting reply")}</Text>
         </View>)}
       </View>}
+      {canReply && showForm && renderClarification?.(undefined, "history")}
       <Lines theme={theme} pullRepository={pullRepository} title={t("이전 답변", "Previous replies")} lines={item.replyHistory.map(entry => [entry.at, entry.text].filter(Boolean).join(" · "))} />
     </View>}
     {notice && <Text accessibilityLiveRegion="polite" style={{ color: isClosed ? c.statusSuccess : c.statusWarning }}>{notice}</Text>}
