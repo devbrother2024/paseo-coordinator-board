@@ -1,12 +1,14 @@
-import { useState } from "react";
-import { Switch, Text, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { AppState, Switch, Text, View } from "react-native";
 import type { ProviderEntry } from "../shared/dispatch";
 import { recentUsage, type AccountUsage } from "../shared/usage-routing";
 import { accountCards, type AccountCard as AccountCardData } from "./account-cards";
 import type { Theme } from "./controls";
 import { useBoardLanguage } from "./language";
+import { countdownClock, type ClockHost } from "./countdown-clock";
+import { resetCountdown } from "./reset-countdown";
 
-function AccountCard({label,report,supplemental,issue,provider,busy,onInclude,theme}: AccountCardData & {busy:boolean;onInclude:(provider:string,included:boolean)=>void;theme:Theme}) {
+function AccountCard({label,report,supplemental,issue,provider,busy,now,onInclude,theme}: AccountCardData & {busy:boolean;now:number;onInclude:(provider:string,included:boolean)=>void;theme:Theme}) {
   const {t,language} = useBoardLanguage();
   const c = theme.colors;
   const locale = language === "ko" ? "ko-KR" : "en-US";
@@ -35,7 +37,8 @@ function AccountCard({label,report,supplemental,issue,provider,busy,onInclude,th
         `Accounts under ${provider.label} turn on and off together. The board assigns to the provider, and the provider decides which account runs.`)}</Text>}
     </View>}
     {rows.map((row,i) => {
-      const expired = !!row.reset && Date.parse(row.reset) <= Date.now();
+      const expired = !!row.reset && Date.parse(row.reset) <= now;
+      const left = expired ? null : resetCountdown(row.reset, now, language);
       const pct = expired ? null : row.pct;
       const value = expired ? t("초기화 후 조회 대기","Awaiting new reading") : row.value ?? t("미확인","Unknown");
       return <View key={i} style={{gap:4}}>
@@ -47,7 +50,7 @@ function AccountCard({label,report,supplemental,issue,provider,busy,onInclude,th
           aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-valuetext={value} style={{height:6,overflow:"hidden",borderRadius:3,backgroundColor:c.surface2}}>
           <View style={{height:"100%",width:`${pct}%`,borderRadius:3,backgroundColor:stale ? c.foregroundMuted : pct<=10 ? c.statusWarning : c.accent}} />
         </View>}
-        {row.reset && !expired && <Text style={{fontSize:12,color:c.foregroundMuted}}>{t(date(row.reset)+" 초기화","Resets "+date(row.reset))}</Text>}
+        {row.reset && !expired && <Text style={{fontSize:12,color:c.foregroundMuted}}>{[t(date(row.reset)+" 초기화","Resets "+date(row.reset)), left].filter(Boolean).join(" · ")}</Text>}
       </View>;
     })}
     {!rows.length && <Text style={{fontSize:13,color:c.foregroundMuted}}>{!report ? t("연결된 사용량 보고서가 없습니다.","No connected usage report.")
@@ -62,6 +65,28 @@ function AccountCard({label,report,supplemental,issue,provider,busy,onInclude,th
   </View>;
 }
 
+// The current time for the reset countdowns, kept while the settings screen is mounted.
+// The timing rules live in countdown-clock.ts; this only connects them to React Native.
+const appClock:ClockHost = {
+  now:() => Date.now(),
+  appState:() => AppState.currentState,
+  setTimer:(run,wait) => setTimeout(run,wait),
+  clearTimer:timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
+  onAppState:listener => { const subscription = AppState.addEventListener("change", listener); return () => subscription.remove(); },
+};
+function useCountdownClock(resets:(string|null)[]) {
+  const [now,setNow] = useState(Date.now);
+  const clock = useRef<ReturnType<typeof countdownClock>|null>(null);
+  useEffect(() => {
+    const created = countdownClock(appClock, setNow);
+    clock.current = created;
+    return () => { created.stop(); clock.current = null; };
+  }, []);
+  // The clock ignores reset lists it already has, so handing it the list after every render is enough.
+  useEffect(() => { clock.current?.setResets(resets); });
+  return now;
+}
+
 // Accounts with their remaining usage. Each account's switch decides whether the board assigns work to it,
 // and the switch above them decides whether remaining usage orders the accounts that are on.
 export function UsageRouting({providers,reports,supplemental=[],busy,usage,onInclude,theme}:{
@@ -72,6 +97,8 @@ export function UsageRouting({providers,reports,supplemental=[],busy,usage,onInc
   const c = theme.colors;
   const [width,setWidth] = useState(0);
   const {cards,allOff} = accountCards(providers,reports,supplemental);
+  const now = useCountdownClock(cards.flatMap(card => card.report?.status === "available"
+    ? [...card.report.windows.map(w => w.resetsAt), ...card.report.balances.map(b => b.resetsAt)] : []));
   const ordering = t("사용량으로 순서 정하기","Order by remaining usage");
   return <View style={{gap:9,padding:12,borderRadius:8,backgroundColor:c.surface1}}>
     <Text accessibilityRole="header" style={{color:c.foreground,fontWeight:"600"}}>{t("계정과 사용량","Accounts and usage")}</Text>
@@ -88,7 +115,7 @@ export function UsageRouting({providers,reports,supplemental=[],busy,usage,onInc
       "Every account is turned off for automatic assignment, so the board cannot assign work. Turn on at least one account.")}</Text>}
     <View onLayout={e=>setWidth(e.nativeEvent.layout.width)} style={{flexDirection:"row",flexWrap:"wrap",gap:8,alignItems:"flex-start"}}>
       {cards.map((card,i)=><View key={card.id+":"+i} style={{width:width>=580 ? Math.floor((width-8)/2) : "100%"}}>
-        <AccountCard {...card} theme={theme} busy={busy} onInclude={onInclude} />
+        <AccountCard {...card} theme={theme} busy={busy} now={now} onInclude={onInclude} />
       </View>)}
     </View>
     {!cards.length && <Text style={{color:c.foregroundMuted}}>{t("호스트에 사용량 보고서가 없습니다.","This host has no usage reports.")}</Text>}

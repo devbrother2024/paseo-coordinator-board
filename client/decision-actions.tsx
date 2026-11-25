@@ -15,6 +15,7 @@ import type { Card } from "./model";
 import { PhotoComposer, usePhotoDraft } from "./photo-composer";
 import { QuestionContext } from "./question-context";
 import { choiceRequest, decisionChoiceNotice } from "./choice-display";
+import { foldsAsk } from "./card-steps";
 
 type Action = DecisionInput["action"];
 type CoordinationDraft = { text: string; recipientId: string };
@@ -32,9 +33,11 @@ export function ReceiptText({ receipt, theme }: { receipt: DecisionReceipt; them
   </Text>;
 }
 
-export function DecisionActions({ card, theme, hostLabel, coordinator, coordinatorTitle, open, onSent, receipt, clarification, pendingRequests, priorityLabel, embedded = false }: {
+export function DecisionActions({ card, theme, hostLabel, coordinator, coordinatorTitle, open, onSent, receipt, clarification: renderClarification, pendingRequests, priorityLabel, embedded = false }: {
   card: Card; theme: Theme; hostLabel?: string; coordinator: string | null; coordinatorTitle?: string; open?: (id: string) => void;
-  onSent: (result: DecisionReceipt) => void; receipt?: DecisionReceipt; clarification?: ReactNode; pendingRequests?: ReactNode; priorityLabel?: string; embedded?: boolean;
+  onSent: (result: DecisionReceipt) => void; receipt?: DecisionReceipt; pendingRequests?: ReactNode; priorityLabel?: string; embedded?: boolean;
+  // The question box. Its earlier questions and answers show with the card's evidence.
+  clarification?: (part: "ask" | "history") => ReactNode;
 }) {
   const { t, language } = useBoardLanguage();
   const { session } = card;
@@ -45,6 +48,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   const [showMethods, setShowMethods] = useState(false);
   const [reviewedReply, setReviewedReply] = useState<string | null>(null);
   const [showEvidence, setShowEvidence] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
   const [requestedFrom, setRequestedFrom] = useState<string | null>(null);
   const recommendationKey = useRef({ recipient: "", key: "" });
   const [selection, setSelection] = useState<number | null>(null);
@@ -65,7 +69,10 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
     selection !== null || !!reviewedReply || busy || replyPhotos.blocked || !!replyPhotos.photos.length ||
     editorPhotos.blocked || !!editorPhotos.photos.length);
   const { headline, formal, evidence } = decisionSummary(card, t);
-  const marker = [session.projectTitle, session.title, hostLabel && t(`실행 호스트 · ${hostLabel}`, `Host · ${hostLabel}`), session.sourceProjectTitle && t(`원래 소속 ${session.sourceProjectTitle}`, `From ${session.sourceProjectTitle}`)].filter(Boolean).join(" · ");
+  // The header keeps the project and how long the card has waited. The session and host move to the evidence.
+  const marker = [session.projectTitle, priorityLabel].filter(Boolean).join(" · ");
+  const origin = [session.title, hostLabel && t(`실행 호스트 · ${hostLabel}`, `Host · ${hostLabel}`), session.sourceProjectTitle && t(`원래 소속 ${session.sourceProjectTitle}`, `From ${session.sourceProjectTitle}`)].filter(Boolean).join(" · ");
+  const clarification = renderClarification?.("ask");
   const named = (label: string) => ({ label, accessibilityLabel: `${session.title} · ${label}` });
 
   function selectReply(index: number | null) {
@@ -124,7 +131,8 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   const completion = decision?.source === "coordinator" && canCoordinate ? choiceRequest(choiceNotice, true) : null;
   const canRestore = !!decision?.recommendation && !decision.needsInput && (selection !== null || draft !== null);
   const sourceExcerpts = evidence.filter(text => text !== headline);
-  const hasEvidence = !!decision?.recommendationReason || sourceExcerpts.length > 0;
+  const needsInputText = !proposed && !!decision?.needsInput && decision.needsInput !== headline ? decision.needsInput : "";
+  const needsInputFolds = foldsAsk([needsInputText]);
   const adviceSent = !!coordinator && requestedFrom === coordinator;
   const disclose = (label: string, expanded: boolean, onPress: () => void) =>
     <Pressable accessibilityRole="button" accessibilityLabel={named(label).accessibilityLabel} accessibilityState={{ expanded }}
@@ -134,8 +142,8 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   return <View style={{ gap: 7, ...(embedded && { paddingTop: 10, borderTopWidth: 1, borderColor: c.border }) }}>
     <HistoryMarkdown theme={theme} source={headline} heading />
     <View style={{ ...wrap, alignItems: "center" }}>
-      <Text selectable style={{ color: c.foregroundMuted, fontSize: 12, flexShrink: 1 }}>{[marker, priorityLabel].filter(Boolean).join(" · ")}</Text>
-      {open && <SessionChip theme={theme} label={t("작업 세션", "Work session")} accessibilityLabel={named(t("작업 세션 열기", "Open work session")).accessibilityLabel} onPress={() => open(session.id)} />}
+      <Text selectable style={{ color: c.foregroundMuted, fontSize: 12, flexShrink: 1 }}>{marker}</Text>
+      {open && <SessionChip theme={theme} label={t("작업 세션 열기", "Open work session")} accessibilityLabel={named(t("작업 세션 열기", "Open work session")).accessibilityLabel} onPress={() => open(session.id)} />}
     </View>
     {!formal && decision && <QuestionContext theme={theme} title={session.title} choices={decision.choices} context={decision.contextMarkdown} notice={choiceNotice} />}
     {completion && !coordination && <View style={wrap}>
@@ -147,7 +155,10 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
     </Text>) : <>
 
       {!coordination && <>
-        {!proposed && !!decision.needsInput && decision.needsInput !== headline && <HistoryMarkdown theme={theme} source={decision.needsInput} />}
+        {!!needsInputText && <View style={{ alignItems: "flex-start", gap: 2 }}>
+          <HistoryMarkdown theme={theme} source={needsInputText} preview={needsInputFolds && !askOpen} />
+          {needsInputFolds && disclose(askOpen ? t("접기", "Less") : t("더 보기", "More"), askOpen, () => setAskOpen(v => !v))}
+        </View>}
         {!!decision.options?.length && <View style={wrap}>{decision.options.map((option, index) =>
           <Button key={index} theme={theme} label={option.label} selected={selection === index}
             accessibilityLabel={named(t("선택", "Choose") + " · " + option.label).accessibilityLabel} disabled={busy}
@@ -189,14 +200,16 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
       </View>}
     </>}
     {(formal || !decision || coordination) && clarification}
-    {hasEvidence && <View style={{ alignItems: "flex-start", gap: 4 }}>
-      {disclose(showEvidence ? t("근거 접기", "Hide source") : t("근거 보기", "View source"), showEvidence, () => setShowEvidence(v => !v))}
+    <View style={{ alignItems: "flex-start", gap: 4 }}>
+      {disclose(showEvidence ? t("근거·이력 접기", "Hide evidence and history") : t("근거·이력 보기", "Evidence and history"), showEvidence, () => setShowEvidence(v => !v))}
+      {showEvidence && !!origin && <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{t("작업 세션", "Work session")} · {origin}</Text>}
       {showEvidence && decision?.recommendationReason && <View style={{ gap: 3 }}>
         <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{t("추천 이유", "Reason for recommendation")}</Text>
         <HistoryMarkdown theme={theme} source={decision.recommendationReason} />
       </View>}
       {showEvidence && sourceExcerpts.map(text => <HistoryMarkdown key={text} theme={theme} source={text} muted />)}
-    </View>}
+      {showEvidence && renderClarification?.("history")}
+    </View>
     {receipt && <ReceiptText receipt={receipt} theme={theme} />}
     {!!error && <Text accessibilityLiveRegion="polite" selectable style={{ color: c.statusDanger }}>{t(...error)}</Text>}
   </View>;

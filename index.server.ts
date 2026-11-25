@@ -4,7 +4,8 @@ import { boardReadiness } from "./shared/readiness";
 import { SnapshotReads } from "./server/snapshot-reads";
 import { readProjectDecisionSources } from "./server/project-decision-sources";
 import { TrackedDecisionStore } from "./server/tracked-decisions";
-import { MergeNotifications } from "./server/merge-notifications";
+import { MergeNotifications, mergeHistoryKey } from "./server/merge-notifications";
+import { closedMergeTarget, settledKey, settleMergeCards } from "./shared/merge-card-place";
 import { ProjectPullRequests } from "./server/prs";
 import { decisionCount } from "./shared/decision-count";
 import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
@@ -36,14 +37,18 @@ import { withAssignmentHost } from "./server/host-assignment";
 import { judgedMergeCardOptions, judgePullTool, registerMergeJudgmentSettings } from "./server/pull-judgments";
 import { applyPullJudgments } from "./shared/pull-judgments";
 import { operatingDirectories, operatingDirectory } from "./server/operating-folders";
+import { CoordinatorToolStamps, readCoordinatorTools } from "./server/coordinator-tools";
+import { coveredSessionIds, decorateReviewWait, reviewWaitThreshold } from "./server/review-wait";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(hostVisibility);
+  const staleHours = reviewWaitThreshold(server);
   const home = process.env.PASEO_HOME || join(homedir(), ".paseo");
   const dataDir = join(home, "plugin-data", "coordinator-board");
   const notes = new NoteStore(join(dataDir, "notes.json"));
 
   const prefs = new PreferenceStore(join(dataDir, "scope.json"));
+  const toolStamps = new CoordinatorToolStamps(prefs);
   const reader = new ConversationReader();
   const projectRoots = new ProjectRootReader();
   const facts = new BoardFacts(prefs, notes, reader);
@@ -103,6 +108,18 @@ export default function contribute(server: PluginServerContext) {
     if (coordinatorRow && coordinatorRow.id === latest.coordinator) targets.set(coordinatorRow.id, coordinatorRow);
     for (const id of evidence.keys()) if (!targets.has(id)) evidence.delete(id);
     const {history = [], ...trackedDecisions} = tracked.read(selected, visible, pullRequests, evidence);
+    // A merge card whose PR is confirmed merged or closed leaves My decisions at once. The ledger is not touched.
+    const boardMerge = (repo: string, number: number) => {
+      const entry = Object.hasOwn(latest.pullMergeHistory, mergeHistoryKey(repo, number)) ? latest.pullMergeHistory[mergeHistoryKey(repo, number)] : undefined;
+      return entry ? { state: "MERGED" as const, at: entry.at } : undefined;
+    };
+    const closedTargets = trackedDecisions.items.flatMap(item => { const target = closedMergeTarget(item, pullRequests); return target ? [target] : []; });
+    const settledCards = settleMergeCards(trackedDecisions.items, pullRequests,
+      closedTargets.length ? prs.settledStates(paseo, closedTargets, boardMerge) : new Map());
+    trackedDecisions.items = settledCards.items;
+    // Review waits see only the cards that stay after settlement.
+    decorateReviewWait(visible, evidence, { coordinator: latest.coordinator, now: Date.now(), thresholdHours: await staleHours(),
+      covered: coveredSessionIds(trackedDecisions.items), judgments: latest.judgments });
     // Ledger matching above sees GitHub readiness. Only then may coordinator verdicts move merge cards.
     pullRequests.items = applyPullJudgments(pullRequests.items, {
       ...judgedMergeCardOptions(latest), judgments: latest.pullJudgments,
@@ -112,8 +129,22 @@ export default function contribute(server: PluginServerContext) {
       void resumeReplies({paseo}).catch(()=>console.warn("Could not check waiting board replies."));
     }
     const activity: ReplyEntry[] = [...history];
+    const settledByPull = new Map<string, typeof settledCards.settled>();
+    for (const card of settledCards.settled) {
+      const pull = settledKey(card.repo, card.number);
+      settledByPull.set(pull, [...settledByPull.get(pull) ?? [], card]);
+    }
     for (const [key, receipt] of Object.entries(latest.pullMergeHistory)) {
-      if (selected.has(receipt.projectId)) activity.push({...receipt, key, status:"recorded"});
+      if (!selected.has(receipt.projectId)) continue;
+      const pull = settledKey(receipt.pullMerge.repo, receipt.pullMerge.number);
+      const card = settledByPull.get(pull)?.[0];
+      // The board merged it, so its own record says that the ledger card is waiting to be cleared.
+      if (card) settledByPull.delete(pull);
+      activity.push({...receipt, key, status:"recorded", ...(card ? {pullSettled:{repo:card.repo, number:card.number, state:card.state}} : {})});
+    }
+    for (const card of [...settledByPull.values()].flat()) {
+      activity.push({key:"settled:" + card.item.key, title:card.item.title, projectId:card.item.projectId, at:card.at, status:"recorded",
+        pullSettled:{repo:card.repo, number:card.number, state:card.state}});
     }
     const updates = new Map<string,string>();
     for (const [id, receipt] of Object.entries(latest.decisionReceipts)) {
@@ -139,6 +170,7 @@ export default function contribute(server: PluginServerContext) {
     const listedCoordinator = coordinatorRow?.id === latest.coordinator ? coordinatorRow : undefined;
     const projects = [...choices.values()];
     const reach = await coordinatorReach(paseo, latest, listedCoordinator, operatingRoot, projects, projectRoots);
+    const coordinatorTools = await readCoordinatorTools(paseo, toolStamps, listedCoordinator);
     const inUseFolders = [latest.createdCoordinator?.id === latest.coordinator ? latest.createdCoordinator : undefined, latest.pendingCoordinator]
       .flatMap(record => record ? [operatingDirectory(operatingRoot, record.language)] : []);
     const operating = await operatingProjects(projects, operatingFolders, latest, listedCoordinator, projectRoots, inUseFolders);
@@ -150,7 +182,8 @@ export default function contribute(server: PluginServerContext) {
     const notice = latest.assignmentNotice;
     return { sessions: visible, notes: visibleNotes, pullRequests, trackedDecisions, replyHistory, ...(clarifications.length ? { clarifications } : {}),
       ...(notice && selected.has(notice.projectId) && { assignmentNotice: notice }),
-      projects: [...knownProjects, ...missingProjects], coordinator: latest.coordinator, lastDigestAt: latest.lastDigest?.at, ...(reach ? { coordinatorReach: reach } : {}) };
+      projects: [...knownProjects, ...missingProjects], coordinator: latest.coordinator, lastDigestAt: latest.lastDigest?.at, ...(reach ? { coordinatorReach: reach } : {}),
+      ...(coordinatorTools ? { coordinatorTools } : {}) };
   }
   async function buildSessionView(paseo: PluginHandlerContext["paseo"],
     catalog: Awaited<ReturnType<PluginHandlerContext["paseo"]["projects"]["list"]>>,
@@ -374,6 +407,8 @@ export default function contribute(server: PluginServerContext) {
     return { ok: true };
   });
   const removeReport = attachReportTool(server, notes);
-  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount), judgePullTool(prefs, prs, invalidateCount)]);
+  const reviewContext = async () => ({ thresholdHours: await staleHours(),
+    covered: coveredSessionIds(tracked.read(new Set(prefs.read().projects), [], { items: [], projects: [] }).items) });
+  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount), judgePullTool(prefs, prs, invalidateCount, undefined, {hints:(selected, id) => tracked.ownerHints(selected, id)})], toolStamps, reviewContext);
   return () => { removeMergeTurn(); removeMergePermission(); removeReplyClose(); removeReplyArchive(); removeCoordinator(); removeReport(); };
 }

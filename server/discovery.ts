@@ -53,6 +53,9 @@ function observedState(agent: Entry["agent"]): Pick<SessionRow, "lane" | "detail
 export function sessionRow(agent: Entry["agent"], project: Entry["project"] | null, workspace?: Workspace): SessionRow {
   const work = workspace && !workspace.internal ? workspacePull(workspace) : undefined;
   const permission = permissionVersion(agent);
+  const state = observedState(agent);
+  const waitingSince = state.lane === "review" ? agent.attentionTimestamp || agent.updatedAt
+    : state.lane === "idle" ? agent.updatedAt : undefined;
   return {
     ...(work ? { workspacePull: work } : {}),
     id: agent.id,
@@ -64,7 +67,8 @@ export function sessionRow(agent: Entry["agent"], project: Entry["project"] | nu
     model: agent.model?.trim() || null,
     ...(agent.metadata?.[reportingKey] === true ? { reporting: true } : {}),
     status: agent.status, activityAt: agent.updatedAt,
-    ...observedState(agent),
+    ...state,
+    ...(waitingSince ? { waitingSince } : {}),
     ...(agent.attentionReason === "permission" && agent.attentionTimestamp ? {decisionRequestedAt:agent.attentionTimestamp} : {}),
     ...(permission ? { permissionVersion: permission } : {}),
   };

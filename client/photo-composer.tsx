@@ -76,9 +76,11 @@ export function usePhotoDraft() {
 type Props = {
   children: ReactNode; theme: Theme; disabled: boolean; draft: ReturnType<typeof usePhotoDraft>;
   text?: string; openSession?: () => void; questionIndex?: number; showHint?: boolean;
+  // Without controls, the attach button is folded away while paste and drop into the field still attach photos.
+  controls?: boolean;
 };
 
-export function PhotoComposer({ children, theme, disabled, draft, text = "", openSession, questionIndex, showHint }: Props) {
+export function PhotoComposer({ children, theme, disabled, draft, text = "", openSession, questionIndex, showHint, controls = true }: Props) {
   const { t } = useBoardLanguage();
   const fileInput = useRef<HTMLInputElement>(null);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -157,20 +159,20 @@ export function PhotoComposer({ children, theme, disabled, draft, text = "", ope
         event.currentTarget.value = "";
         if (files.length) void draft.add(files, questionIndex);
       }} />
-    <View style={{ ...wrap, alignItems: "center" }}>
-      <button type="button" aria-label={attachLabel} title={attachLabel} disabled={locked || atLimit}
+    {(controls || readingHere || dragging) && <View style={{ ...wrap, alignItems: "center" }}>
+      {controls && <button type="button" aria-label={attachLabel} title={attachLabel} disabled={locked || atLimit}
         style={{ display: "inline-grid", placeItems: "center", width: 34, height: 34, borderRadius: 7, color: colors.foreground,
           background: colors.surface0, border: `1px solid ${colors.border}`, opacity: locked || atLimit ? 0.6 : 1, cursor: locked || atLimit ? "default" : "pointer" }}
         onClick={() => fileInput.current?.click()}>
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true" focusable="false">
           <path d="m20.5 11.3-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8L14 2.2a3.8 3.8 0 0 1 5.4 5.4l-10 10a2.1 2.1 0 0 1-3-3l9.1-9.1" />
         </svg>
-      </button>
+      </button>}
       {(readingHere || photos.length > 0 || dragging || showHint) && <Text accessibilityLiveRegion="polite" style={{ color: colors.foregroundMuted }}>{readingHere ? t("사진 준비 중…", "Preparing photos…")
         : dragging ? t("여기에 사진 놓기", "Drop photos here")
         : photos.length ? t(`사진 ${photos.length}장`, `${photos.length} photo${photos.length === 1 ? "" : "s"}`)
         : t("입력창에 사진을 끌어 놓거나 붙여넣으세요.", "Drop or paste photos into the input.")}</Text>}
-    </View>
+    </View>}
     {photos.map(photo => {
       const name = photo.name || t(`사진 ${photo.id}`, `Photo ${photo.id}`);
       const ordinal = draft.photos.indexOf(photo) + 1;

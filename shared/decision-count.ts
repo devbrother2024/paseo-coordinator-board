@@ -1,6 +1,7 @@
 import type { Note, SessionRow } from "./contract";
 import { trackedCoverage, pullKey, type TrackedDecisionView } from "./tracked-decisions";
 import type { PullRequestView } from "./prs";
+import { decidesNow } from "./merge-card-place";
 
 export function displayLane(session: SessionRow, note: Note | undefined): SessionRow["lane"] | "done" {
   if (session.nativePending) return "human";
@@ -21,7 +22,8 @@ export function displayLane(session: SessionRow, note: Note | undefined): Sessio
 
 export function decisionCount(view: {sessions: SessionRow[]; notes: Record<string, Note>; pullRequests?: PullRequestView; trackedDecisions?: TrackedDecisionView}) {
   const sessions = view.sessions.filter(row => displayLane(row, view.notes[row.id]) === "human");
-  const records = view.trackedDecisions?.items ?? [];
+  // A merge card waits in project progress until GitHub confirms its PR is ready.
+  const records = (view.trackedDecisions?.items ?? []).filter(item => decidesNow(item, view.pullRequests));
   const covered = trackedCoverage(records);
   return records.length + sessions.filter(s => !covered.sessionIds.has(s.id)).length +
     (view.pullRequests?.items.filter(pr => pr.lane === "review" && !covered.pullKeys.has(pullKey(pr.repo, pr.number))).length ?? 0);

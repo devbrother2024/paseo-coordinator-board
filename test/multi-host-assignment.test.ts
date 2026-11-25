@@ -27,6 +27,7 @@ const winProjectId = "alpha-win";
 const local = { serverId: "mac-host", label: "Mac" };
 const remote = { serverId: "win-host", label: "Windows", status: "online", enabled: true, metadata: {}, registrationId: "host-registration" };
 const modeId = "auto-review";
+const unsupportedSteer = "Update the Paseo host to steer a running turn from an agent. Leave the behavior out to queue the message, or use interrupt.";
 
 type Agent = {
   id: string; workspaceId: string; title: string; status: string; pendingPermissions: { id: string; title: string }[];
@@ -34,7 +35,7 @@ type Agent = {
 };
 type Create = { agentId: string; config: { provider: string; modeId?: string }; title: string;
   idempotencyKey: string; parent: unknown; prompt?: string; metadata: Record<string, unknown> };
-type Send = { sourceAgentId?: string; sourceAgentServerId?: string; messageId: string };
+type Send = { sourceAgentId?: string; sourceAgentServerId?: string; messageId: string; activeTurnBehavior?: "steer" | "interrupt" };
 type TimelineItem =
   | { type: "tool_call"; callId: string; name: string; status: string; agentMessage: { event: "message"; sender: { id: string }; text: string } }
   | { type: "assistant_message" | "user_message"; text: string; messageId?: string };
@@ -46,10 +47,12 @@ function daemon(projectId: string, path: string, remoteUrl: string) {
   const agents = new Map<string, Agent>();
   const creates = new Map<string, Create>();
   const sends: { id: string; text: string; options: Send }[] = [];
+  const sendAttempts: Send[] = [];
   const timelines = new Map<string, TimelineItem[]>();
   const state = { loseNextSendAck: false, permissionsOnCreate: false, disposals: 0,
     failLoad: false, failRef: false, workingReads: 0, mostReads: 0, readIds: [] as string[],
-    pauseReads: new Map<string, Promise<void>>() };
+    pauseReads: new Map<string, Promise<void>>(), agentSteerUnsupported: false,
+    rejectNextSend: undefined as ((agent: Agent) => Error) | undefined };
   function add(id: string, status = "idle", more: Partial<Agent> = {}) {
     const agent = { id, workspaceId: workspace.id, title: id, status, pendingPermissions: [], updatedAt: "2026-01-01T00:00:00Z", ...more };
     agents.set(id, agent);
@@ -93,6 +96,13 @@ function daemon(projectId: string, path: string, remoteUrl: string) {
           epoch: "fixture", entries: (timelines.get(id) ?? []).map((item, seqEnd) => ({ item, seqEnd })),
         }) },
         send: async (text: string, options: Send) => {
+          sendAttempts.push(options);
+          if (state.agentSteerUnsupported && options.sourceAgentId && options.activeTurnBehavior === "steer") throw Error(unsupportedSteer);
+          if (state.rejectNextSend) {
+            const reject = state.rejectNextSend;
+            state.rejectNextSend = undefined;
+            throw reject(agents.get(id)!);
+          }
           sends.push({ id, text, options });
           const item: TimelineItem = options.sourceAgentId
             ? { type: "tool_call", name: "agent_message", status: "completed", callId: "paseo-agent-message:" + options.messageId,
@@ -113,7 +123,7 @@ function daemon(projectId: string, path: string, remoteUrl: string) {
     },
     dispose: async () => { state.disposals++; },
   };
-  return { sdk, workspace, projects, agents, creates, sends, timelines, state, add };
+  return { sdk, workspace, projects, agents, creates, sends, sendAttempts, timelines, state, add };
 }
 
 function scenario() {
@@ -198,13 +208,14 @@ test("settings can pin a project pair, cap a host, and explain unavailable place
 test("remote assignments keep their location on replay and won't repeat an accepted attributed prompt", async () => {
   const s = scenario();
   s.win.state.loseNextSendAck = true;
-  await expect(s.assign(s.job)).rejects.toThrow(/Connection lost/);
+  await expect(s.assign(s.job)).rejects.toThrow(/Could not confirm delivery/);
+  expect(s.win.sendAttempts).toHaveLength(1);
   const [child] = s.win.creates.keys();
   expect(s.win.creates.get(child)).toMatchObject({ parent: { agentId: coordinator, serverId: local.serverId } });
   expect(s.win.creates.get(child)?.prompt).toBeUndefined();
   expect(s.win.sends).toEqual([{
     id: child, text: s.job.prompt, options: { sourceAgentId: coordinator, sourceAgentServerId: local.serverId,
-      messageId: expect.any(String), activeTurnBehavior: "steer" },
+      messageId: expect.any(String) },
   }]);
   s.win.agents.get(child)!.pendingPermissions = [{ id: "permission-1", title: "Confirm permission" }];
   s.win.add("win-load-one", "running");
@@ -219,6 +230,63 @@ test("remote assignments keep their location on replay and won't repeat an accep
   expect(s.mac.creates.size).toBe(0);
   expect(s.win.state.disposals).toBeGreaterThan(0);
   await expect(s.assign({ ...s.job, expectedHostId: local.serverId })).rejects.toThrow(/다른 작업/);
+});
+
+test("remote first instructions work without agent steering and replay only once", async () => {
+  const s = scenario();
+  s.win.state.agentSteerUnsupported = true;
+  const receipt = await s.assign(s.job);
+  expect(await s.assign(s.job)).toEqual(receipt);
+  expect(s.win.creates.size).toBe(1);
+  expect(s.win.sends).toEqual([{
+    id: receipt.sessionId, text: s.job.prompt,
+    options: { sourceAgentId: coordinator, sourceAgentServerId: local.serverId, messageId: creationUuid(s.job.requestKey, "prompt") },
+  }]);
+  expect(s.win.sendAttempts).toHaveLength(1);
+  expect(s.mac.sends).toBeEmpty();
+});
+
+test("a steering compatibility rejection waits for explicit replay with the same attributed message ID", async () => {
+  const s = scenario();
+  s.win.state.rejectNextSend = () => Error(unsupportedSteer);
+  const options = { sourceAgentId: coordinator, sourceAgentServerId: local.serverId, messageId: creationUuid(s.job.requestKey, "prompt") };
+  await expect(s.assign(s.job)).rejects.toThrow(/같은 요청 키.*Retry with the same request key/);
+  expect(s.win.sendAttempts).toEqual([options]);
+  expect(s.win.sends).toBeEmpty();
+  const [sessionId] = s.win.creates.keys();
+  const receipt = await s.assign(s.job);
+  expect(receipt.sessionId).toBe(sessionId);
+  expect(await s.assign(s.job)).toEqual(receipt);
+  expect(s.win.sendAttempts).toEqual([options, options]);
+  expect(s.win.sends).toHaveLength(1);
+  expect(s.win.creates.size).toBe(1);
+});
+
+test("the same request key recovers a created worker that never got its first instruction", async () => {
+  const s = scenario();
+  s.win.state.rejectNextSend = () => Error("Connection closed before acceptance");
+  await expect(s.assign(s.job)).rejects.toThrow(/Could not confirm delivery/);
+  expect(s.win.sends).toBeEmpty();
+  const [sessionId] = s.win.creates.keys();
+  expect(s.store.read().dispatchReceipts[sessionId].delivered).toBeUndefined();
+
+  const receipt = await s.assign(s.job);
+  expect(receipt.sessionId).toBe(sessionId);
+  expect(s.win.creates.size).toBe(1);
+  expect(s.win.sendAttempts).toEqual([s.win.sends[0].options, s.win.sends[0].options]);
+  expect(s.win.sends).toHaveLength(1);
+});
+
+test("a permission request that appears before explicit replay stops delivery", async () => {
+  const s = scenario();
+  s.win.state.rejectNextSend = agent => {
+    agent.pendingPermissions = [{ id: "permission-1", title: "Confirm permission" }];
+    return Error(unsupportedSteer);
+  };
+  await expect(s.assign(s.job)).rejects.toThrow(/Could not confirm delivery/);
+  await expect(s.assign(s.job)).rejects.toThrow(/Check whether the remote session is ready/);
+  expect(s.win.sendAttempts).toHaveLength(1);
+  expect(s.win.sends).toBeEmpty();
 });
 
 test("a new remote worker that asks for permission does not receive a work prompt", async () => {

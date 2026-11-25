@@ -2,14 +2,16 @@ import type { BoardReadiness } from "../shared/readiness";
 import { historySessionLinks, type HistoryLinks } from "./history-sessions";
 import { ReplyHistory } from "./reply-history";
 import { followupKind, hostWideVisible } from "./reply-followup";
-import { createRemoteWorkSessionLookup, trackedSessionOwner, trackedWorkSession } from "./tracked-session-targets";
+import { createRemoteWorkSessionStates, trackedSessionOwner, trackedWorkSession, workSessionPresence } from "./tracked-session-targets";
+import { judgedOwnerSession, ledgerPullSession } from "./pull-work-session";
 import type { TrackedSessionLinks } from "./tracked-session-chips";
 import { TrackedDecisionCard } from "./tracked-decisions";
 import { closedRevision } from "./tracked-reply-draft";
 import { mentionsSecurityGate, trackedCoverage, trackedReplyRoute, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
 import { projectFolderMap } from "../shared/project-folders";
-import { MergeFeedback, PullRequestCard, PullRequestSettings, type MergeNotice, type WorkSessionLink } from "./pull-requests";
-import { pullRowKey, recordActionKey, sessionRowKey, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
+import { MergeFeedback, PullRequestCard, PullRequestSettings, WaitingMergeRow, type MergeNotice, type WorkSessionLink } from "./pull-requests";
+import { ownKanbanEntry, waitingMergeCard } from "../shared/merge-card-place";
+import { foldReceipts, pullRowKey, receiptsToFold, recordActionKey, RECEIPT_FOLD_MS, sessionRowKey, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
 import { rankDecisionRows, priorityLabel } from "./decision-priority";
 import { DecisionEditingRow, keepEditingPositions, useDecisionEditing } from "./decision-editing";
 import { InlineDecisionReceipt } from "./inline-receipt";
@@ -31,8 +33,10 @@ import { clarificationKey, clarificationRecipient, sessionClarificationCard, tra
 import { SessionLinks } from "./session-links";
 import { useRemoteRunning, RemoteRunning } from "./remote-running";
 import { BoardHosts } from "./hosts";
+import { ReviewWaitSetting } from "./review-wait-setting";
 import { OperationsPanel } from "./operations";
 import { ReachExplanation } from "./reach-explanation";
+import { StaleCoordinatorTools } from "./stale-coordinator-tools";
 import { CoordinatorReplaceLoader } from "./coordinator-replace";
 import { blocksReplies, opensSession, readSessionReach } from "../shared/coordinator-reach";
 import { Button, type Theme } from "./controls";
@@ -69,6 +73,14 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     return [...snapshot?.trackedDecisions?.items ?? []].sort((a,b) => priority(a.urgency) - priority(b.urgency) ||
       (a.where === "human" ? 0 : 1) - (b.where === "human" ? 0 : 1) || (a.since ?? "~").localeCompare(b.since ?? "~"));
   }, [snapshot?.trackedDecisions]);
+  // A merge card waits in project progress until GitHub confirms its PR is ready.
+  const waitingMerges = new Map(records.flatMap(item => {
+    const wait = waitingMergeCard(item, pullRequests);
+    return wait ? [[item.key, wait] as const] : [];
+  }));
+  const deciding = records.filter(item => !waitingMerges.has(item.key));
+  // Cards whose PR row cannot show in the kanban (no readable PR) keep a small row with the reason.
+  const unlisted = (item: TrackedDecision) => { const wait = waitingMerges.get(item.key); return !!wait && !wait.pr; };
   const folders = useMemo(() => projectFolderMap(snapshot?.projects ?? []), [snapshot?.projects]);
   const [inlineReceipts, setInlineReceipts] = useState<InlineReceipt[]>([]);
   const completed = new Set(inlineReceipts.map(receipt => receipt.actionKey));
@@ -78,7 +90,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     if (!displayed.has(id)) displayed.set(id, {id,title:names.get(id) ?? id,cards:[]});
   }
   function decisionsFor(inScope:(id:string|null)=>boolean) {
-    const visibleRecords=records.filter(item=>inScope(item.projectId) && !completed.has(recordActionKey(item)));
+    const visibleRecords=deciding.filter(item=>inScope(item.projectId) && !completed.has(recordActionKey(item)));
     const covered=trackedCoverage(visibleRecords);
     return {
       records:visibleRecords,
@@ -97,7 +109,10 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const [settings, setSettings] = useState(false);
   const {groups: peers, hosts: peerHosts, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
   const peerKey = JSON.stringify(peerHosts.map(host => host.serverId));
-  const lookupWorkSession = useMemo(() => createRemoteWorkSessionLookup(getPaseoClient), [hostId, updatedAt, peerKey]);
+  // One read per remote session and refresh, shared by ledger card chips and PR rows.
+  const workSessionStates = useMemo(() => createRemoteWorkSessionStates(getPaseoClient), [hostId, updatedAt, peerKey]);
+  const lookupWorkSession = useMemo(() => workSessionPresence(workSessionStates), [workSessionStates]);
+  const freshWorkSessionStates = useMemo(() => createRemoteWorkSessionStates(getPaseoClient, false), []);
   const historyRepos = useMemo(() => new Map(pullRequests?.projects.flatMap(p =>
     p.repo && p.mode !== "off" ? [[p.projectId,p.repo] as const] : [])), [pullRequests?.projects]);
   const historyScope = useMemo(() => remoteScope(activeProjects,pullRequests?.projects ?? []), [activeProjects,pullRequests?.projects]);
@@ -122,6 +137,12 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       return next.some((receipt, index) => receipt !== previous[index]) ? next : previous;
     });
   }, [snapshot?.replyHistory, inlineReceipts.length]);
+  useEffect(() => {
+    const fold = receiptsToFold(inlineReceipts);
+    if (!fold.length) return;
+    const timer = setTimeout(() => setInlineReceipts(previous => foldReceipts(previous, fold)), RECEIPT_FOLD_MS);
+    return () => clearTimeout(timer);
+  }, [inlineReceipts]);
   const now = Date.now();
   // Only replies still waiting on a session's result appear in the project kanban.
   const followups = history.flatMap(entry => {
@@ -148,8 +169,15 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const inFilter = (id: string | null) => !filters.size || filters.has(id);
   const visibleProjects = [...displayed.values()].filter(project => inFilter(project.id));
   const hostWideRecords = records.filter(item=>item.projectId === null);
+  const renderWaitingMerge = (item: TrackedDecision) => {
+    const wait = waitingMerges.get(item.key);
+    return item.mergeTarget && wait && !wait.pr ? <WaitingMergeRow key={item.key} repo={item.mergeTarget.repo} number={item.mergeTarget.number}
+      title={item.title} why={wait.why} theme={theme} /> : null;
+  };
   const hostWideFollowups = followups.filter(item=>item.entry.projectId === null);
-  const showHostWide = inFilter(null) && hostWideVisible({records:hostWideRecords.length, followups:hostWideFollowups.length});
+  // A host-wide merge card waiting as a PR row shows in its project, not here. Count only what this section shows.
+  const hostWideShown = hostWideRecords.filter(item => ownKanbanEntry(waitingMerges.get(item.key)));
+  const showHostWide = inFilter(null) && hostWideVisible({records:hostWideShown.length, followups:hostWideFollowups.length});
   const {records:filteredRecords,sessions:filteredSessions,prs:filteredPrs}=decisionsFor(inFilter);
   const filteredTotal=filteredRecords.length+filteredSessions.length+filteredPrs.length;
   const filteredHistory=history.filter(entry=>inFilter(entry.projectId));
@@ -207,18 +235,18 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     setInlineReceipts(previous => previous.some(entry => entry.actionKey === action.actionKey && entry.rowKey === action.rowKey)
       ? previous : [...previous, { ...action, order: orderedKeys }]);
   }
-  function questionFor(card: ClarificationCard | null, title: string, prior?: TrackedDecision["qa"], onDraftChange?: (active:boolean) => void, ownerId?: string | null, notice?: ChoiceNotice | null) {
+  function questionFor(card: ClarificationCard | null, title: string, prior?: TrackedDecision["qa"], onDraftChange?: (active:boolean) => void, ownerId?: string | null, notice?: ChoiceNotice | null, part: "all" | "ask" | "history" = "all") {
     if (!snapshot) return null;
     const recipientId = card ? clarificationRecipient(card, snapshot) : null;
     const recipientTitle = ownerId && ownerId === recipientId ? t("운영 코디네이터", "Ledger owner") + " · " + ownerId
       : snapshot.sessions.find(row => row.id === recipientId)?.title;
     const toCoordinator = !!recipientId && (recipientId === snapshot.coordinator || recipientId === ownerId);
     return <Clarification key={card ? clarificationKey(card) : title} title={title} card={card} theme={theme} suggestion={choiceRequest(notice ?? null, toCoordinator)}
-      recipientId={recipientId} recipientTitle={recipientTitle} entries={snapshot.clarifications ?? []} prior={prior} onRefresh={onRefresh} onDraftChange={onDraftChange} />;
+      recipientId={recipientId} recipientTitle={recipientTitle} entries={snapshot.clarifications ?? []} prior={prior} onRefresh={onRefresh} onDraftChange={onDraftChange} part={part} />;
   }
   const renderDecision = (card: Card, embedded = false, rowKey?: string, priority?: string) => <DecisionActions key={JSON.stringify([card.session.projectId, card.session.id, card.session.decision?.version])}
-          clarification={!embedded && questionFor(sessionClarificationCard(card.session,card.note),card.session.title,undefined,undefined,undefined,
-            card.session.decision?.source === "conversation" ? decisionChoiceNotice(card.session.decision) : null)}
+          clarification={embedded ? undefined : part => questionFor(sessionClarificationCard(card.session,card.note),card.session.title,undefined,undefined,undefined,
+            card.session.decision?.source === "conversation" ? decisionChoiceNotice(card.session.decision) : null, part)}
           embedded={embedded} priorityLabel={priority} card={card} hostLabel={card.session.assignment?.label ?? hostLabel} theme={theme} coordinator={snapshot!.coordinator} coordinatorTitle={snapshot!.sessions.find(s => s.id === snapshot!.coordinator)?.title}
           open={actions.onOpen} receipt={receipts.find(r => matches(r, card))}
           pendingRequests={card.session.nativePending && !card.session.serverId && hostId ? <PendingRequests key={JSON.stringify([hostId, card.session.id])} hostId={hostId}
@@ -235,9 +263,11 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
             setReceipts(prior => [result, ...prior.filter(r => !(r.projectId === result.projectId && r.sessionId === result.sessionId))].slice(0, 20));
             onRefresh();
           }} />;
-  function recordLinks(item: TrackedDecision, showSource = true): TrackedSessionLinks {
+  // `fallbackId` is the coordinator a work session card's reply goes to instead. With no ledger owner, its chip is the
+  // owner link, so a card whose work session ended can still open the session that would take the reply.
+  function recordLinks(item: TrackedDecision, showSource = true, fallbackId?: string | null): TrackedSessionLinks {
     if (!snapshot) return {};
-    const ownerId = trackedSessionOwner(item, snapshot.coordinator);
+    const ownerId = trackedSessionOwner(item, snapshot.coordinator) ?? fallbackId ?? undefined;
     const open = actions.onOpen;
     const listed = snapshot.sessions.some(session => session.id === ownerId);
     const owner = ownerId && open && (ownerId === snapshot.coordinator || listed || hostId) ? {
@@ -260,23 +290,35 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   }
   function renderPull(pr:PullRequestItem, projectId:string, decision=false, securityGate=false, embedded=false, rowKey?: string, scope: (string | null)[] = pr.projectIds, priority?: string) {
     const workSessions:WorkSessionLink[] = [];
+    const localLink = (s:NonNullable<typeof snapshot>["sessions"][number]) => {
+      const state = s.status === "closed" ? t("대화 종료","Closed") : s.lane === "running" ? t("진행 중","Running") : s.status === "idle" ? t("대기","Idle") : t("상태 확인 필요","Check status");
+      workSessions.push({id:s.id,key:JSON.stringify([s.serverId ?? hostId,s.id]),label:[s.title,s.assignment?.label ?? hostLabel,state].join(" · "),open:()=>actions.onOpen!(s.id),running:s.lane === "running"});
+    };
     for (const s of snapshot?.sessions ?? []) {
       if (!inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !actions.onOpen || !matchesWorkspace(pr,s.workspacePull)) continue;
-      const state = s.status === "closed" ? t("대화 종료","Closed") : s.lane === "running" ? t("진행 중","Running") : s.status === "idle" ? t("대기","Idle") : t("상태 확인 필요","Check status");
-      workSessions.push({key:JSON.stringify([s.serverId ?? hostId,s.id]),label:[s.title,s.assignment?.label ?? hostLabel,state].join(" · "),open:()=>actions.onOpen!(s.id),running:s.lane === "running"});
+      localLink(s);
     }
     if (onOpenHostSession) for (const {host,rows} of peers) for (const s of rows) {
       if (assigned.has(JSON.stringify([host.serverId, s.sessionId])) || !inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !matchesWorkspace(pr,s.workspacePull)) continue;
-      workSessions.push({key:JSON.stringify([host.serverId,s.sessionId]),label:[s.title || t("작업 세션","Work session"),host.label,t("진행 중","Running")].join(" · "),open:()=>onOpenHostSession(host.serverId,s.sessionId),running:true});
+      workSessions.push({id:s.sessionId,key:JSON.stringify([host.serverId,s.sessionId]),label:[s.title || t("작업 세션","Work session"),host.label,t("진행 중","Running")].join(" · "),open:()=>onOpenHostSession(host.serverId,s.sessionId),running:true});
     }
     // The coordinator can name the work session that owns the PR when no workspace matches it.
     const owner = pr.judgment?.ownerSessionId && snapshot?.sessions.find(s => s.id === pr.judgment?.ownerSessionId);
     if (owner && actions.onOpen && !workSessions.some(link => link.key === JSON.stringify([owner.serverId ?? hostId,owner.id]))) {
       const running = ownerRunning(pr, [owner]);
-      workSessions.push({key:JSON.stringify([owner.serverId ?? hostId,owner.id]),label:[owner.title,owner.assignment?.label ?? hostLabel,running ? t("진행 중","Running") : t("작업 세션","Work session")].join(" · "),
+      workSessions.push({id:owner.id,key:JSON.stringify([owner.serverId ?? hostId,owner.id]),label:[owner.title,owner.assignment?.label ?? hostLabel,running ? t("진행 중","Running") : t("작업 세션","Work session")].join(" · "),
         open:()=>actions.onOpen!(owner.id),running});
     }
-    return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions}
+    // A ledger card for this PR can name its work session, also one on another host.
+    const linkedIds = new Set(workSessions.map(link => link.id));
+    const fromLedger = snapshot ? ledgerPullSession(pr, snapshot.trackedDecisions?.items ?? [],
+      {hostId, hostLabel, sessions: snapshot.sessions, hosts: peerHosts, folders}, linkedIds) : undefined;
+    const ledgerLocal = fromLedger?.kind === "local" && actions.onOpen ? snapshot?.sessions.find(s => s.id === fromLedger.id) : undefined;
+    if (ledgerLocal) localLink(ledgerLocal);
+    // The owner the coordinator named on another host comes first; otherwise the ledger card's remote session.
+    const remoteTarget = judgedOwnerSession(pr, peerHosts, linkedIds) ?? (fromLedger?.kind === "remote" ? fromLedger : undefined);
+    const remoteSession = remoteTarget && onOpenHostSession ? {...remoteTarget, states: workSessionStates, fresh: freshWorkSessionStates, open: onOpenHostSession} : undefined;
+    return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions} remoteSession={remoteSession}
       clarification={decision && !embedded && questionFor({kind:"pull",projectId,repo:pr.repo,number:pr.number,updatedAt:pr.updatedAt},pr.repo + " #" + pr.number)}
       decision={decision} showDivider={!decision || embedded} securityGate={securityGate} openCoordinator={openCoordinator} onResult={notice => {
         const { status } = notice;
@@ -297,9 +339,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           const route = native && !item.questions.length ? undefined : trackedReplyRoute(item,snapshot!.coordinator,snapshot!.sessions,folders);
           // A card offers its fallback only when it has no recipient.
           const reaches = route?.recipientId ?? route?.fallbackId;
-          return <TrackedDecisionCard links={recordLinks(item, !native)} key={item.key} item={item} theme={theme} priorityLabel={priority}
-            renderClarification={onDraftChange => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined,
-              item.kind === "merge" ? null : cardChoiceNotice(ledgerChoiceGaps(item)))}
+          return <TrackedDecisionCard links={recordLinks(item, !native, route?.fallbackId)} key={item.key} item={item} theme={theme}
+            renderClarification={(onDraftChange, part) => questionFor(trackedClarificationCard(item,snapshot!.sessions),item.title,item.qa,onDraftChange,usesSourceCoordinator(item) ? item.sourceCoordinatorId : undefined,
+              item.kind === "merge" ? null : cardChoiceNotice(ledgerChoiceGaps(item)), part)}
             pull={rowKey && item.mergeTarget && scopedReceipts.some(receipt => receipt.rowKey === rowKey && receipt.actionKey === pullRowKey(item.mergeTarget!)) ? <></>
               : pr && renderPull(pr, pr.projectIds.includes(item.projectId ?? "") ? item.projectId! : pr.projectIds[0], true, mentionsSecurityGate(item), true, rowKey, [item.projectId])}
             route={route} keepsUnsent={!!rowKey}
@@ -308,7 +350,8 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
               const {status,reason,mode,answer,recipientId}=outcome;
               if (rowKey && mode && (status === "sent" || status === "closed" || status === "already-closed")) {
                 remember({ rowKey, actionKey: recordActionKey({key: item.key, fingerprint: closedRevision(outcome) ?? item.fingerprint}), projectIds: [item.projectId],
-                  status: status === "closed" ? (mode === "save" ? "saved" : "reviewed") : status,
+                  // The board only sends now. A record closed without a recipient shows as already handled.
+                  status: status === "closed" ? "already-closed" : status,
                   recipientId: status === "sent" ? recipientId : undefined,
                   title: item.title, detail: answer || item.projectTitle || projectName(item.projectId) });
               }
@@ -359,12 +402,14 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         }} />
       </View>
       {configured && <ReachExplanation banner reach={reach} theme={theme} onReplace={startReplace} />}
+      {configured && <StaleCoordinatorTools tools={snapshot?.coordinatorTools} theme={theme} onReplace={startReplace} onOpen={openCoordinator} />}
       {replaceOpen && !settings && configured && coordinatorId && <CoordinatorReplaceLoader theme={theme} coordinator={coordinatorId} disabled={busy}
         onReplaced={onRefresh} onClose={() => setReplaceOpen(false)} />}
       {!settings && configured && <ProjectFilterBar theme={theme} groups={filterGroups} selected={filters} total={total}
         clear={() => setChosenProjects([])} toggle={group => setChosenProjects(previous => toggleProjectFilter(filterGroups, previous, group))} />}
       {!!error && showError && <Text selectable style={{ color: c.statusDanger }}>{error}</Text>}
       {settings && <BoardLanguageSetting theme={theme} />}
+      {settings && configured && <ReviewWaitSetting theme={theme} onSaved={onRefresh} />}
       {!!error && settings && <Button theme={theme} label={t("세션 다시 조회", "Retry session lookup")} disabled={loading} onPress={onRefresh} />}
       {snapshot && onProject && (pickingProjects || settings) && <View style={{ gap: 7 }}>
         {!pickingProjects
@@ -430,9 +475,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           {showDigestRefresh && <Button theme={theme}
             label={digest.waiting ? t("요청함", "Requested") : t("다시 모으기", "Refresh digest")}
             disabled={busy || digest.waiting} onPress={() => void digest.request(true)} />}
+          {incomplete && <LedgerWarnings diagnostics={snapshot.trackedDecisions?.diagnostics} theme={theme} />}
         </View>
         {showDigestRefresh && <DigestFeedback theme={theme} feedback={digest.feedback} />}
-        {incomplete && <LedgerWarnings diagnostics={snapshot.trackedDecisions?.diagnostics} theme={theme} />}
         {filters.size > 0 && !filteredTotal && total > 0 && !incomplete && <Text style={{color:c.foregroundMuted}}>{t("선택한 프로젝트에 결정할 일이 없습니다.","No decisions in the selected projects.")}</Text>}
         {total === 0 && !incomplete && <Text style={{ color: c.foregroundMuted }}>{t("지금 결정할 일이 없습니다.", "No decisions are waiting for you.")}</Text>}
         {mergeNotice && inFilter(mergeNotice.projectId) && snapshot.projects.some(p => p.selected && p.id === mergeNotice.projectId) && (mergeNotice.status === "merged" || mergeNotice.status === "already-merged" ||
@@ -453,9 +498,10 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         peers={visiblePeers} peersLoading={peersLoading} hostLabel={hostLabel} projectName={projectName} open={actions.onOpen} openRemote={onOpenHostSession}>
         {!visibleProjects.length && !showHostWide && <Text style={{ color: c.foregroundMuted }}>{t("표시할 세션이 없습니다.", "No sessions to show.")}</Text>}
         {showHostWide && <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId="" title={t("공통","Host-wide")} cards={[]} requests={[]} followups={hostWideFollowups} now={now}
-          records={hostWideRecords} decisions={byProject.get(null) ?? 0} renderRecord={renderRecord} renderPull={renderPull}
+          records={hostWideRecords.filter(item => !waitingMerges.has(item.key))} waiting={hostWideRecords.filter(unlisted)} renderWaiting={renderWaitingMerge}
+          decisions={byProject.get(null) ?? 0} renderRecord={renderRecord} renderPull={renderPull}
           recordLinks={recordLinks} compact={layout.compact} theme={theme} {...actions} />}
-        {visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} followups={followups.filter(item=>item.entry.projectId===p.id)} now={now} records={records.filter(r => r.projectId === p.id)} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={pullRequests?.items.filter(pr => pr.projectIds.includes(p.id)) ?? []} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
+        {visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} followups={followups.filter(item=>item.entry.projectId===p.id)} now={now} records={deciding.filter(r => r.projectId === p.id)} waiting={records.filter(r => r.projectId === p.id && unlisted(r))} renderWaiting={renderWaitingMerge} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={pullRequests?.items.filter(pr => pr.projectIds.includes(p.id)) ?? []} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
         <RemoteRunning groups={visiblePeers} projects={activeProjects} open={onOpenHostSession} theme={theme} />
       </SessionProgress>}
     </ScrollView>

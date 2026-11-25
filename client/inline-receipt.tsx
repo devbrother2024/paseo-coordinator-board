@@ -8,8 +8,6 @@ const statusLabel = {
   merged: ["병합 완료", "Merged"],
   "already-merged": ["이미 병합됨", "Already merged"],
   sent: ["답장 보냄", "Reply sent"],
-  saved: ["보드에 저장함", "Saved on board"],
-  reviewed: ["확인했어요", "Reviewed"],
   "already-closed": ["이미 처리됨", "Already handled"],
   unsent: ["보내지 못한 답", "Reply not sent"],
 } as const;

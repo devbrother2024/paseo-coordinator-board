@@ -248,16 +248,23 @@ export async function dispatchWorker(paseo: Pick<Sdk, "agents" | "workspaces" | 
 export async function sendRemoteAssignment(paseo: Pick<Sdk, "agents">, sessionId: string, sourceAgentId: string,
   sourceAgentServerId: string, messageId: string, text: string, checkScope: () => void) {
   const worker = paseo.agents.ref(sessionId);
-  const timeline = await worker.timeline.refetch({ direction: "tail", projection: "projected", limit: 48 });
-  if (timeline.error || timeline.gap || timeline.staleCursor)
-    throw new Error("원격 작업 지시의 전송 여부를 확인하지 못했습니다. / Could not confirm delivery of the remote work request.");
+  const options = { sourceAgentId, sourceAgentServerId, messageId };
+  const unconfirmed = (cause?: unknown) => Object.assign(new Error(
+    "원격 작업 지시의 전송 여부를 확인하지 못했습니다. 같은 요청 키로 다시 확인해 주세요. / Could not confirm delivery of the remote work request. Retry with the same request key.",
+    { cause },
+  ), { code: (cause as { code?: string } | null)?.code });
+
+  const timeline = await worker.timeline.refetch({ direction: "tail", projection: "projected", limit: 48 })
+    .catch(cause => { throw unconfirmed(cause); });
+  if (timeline.error || timeline.gap || timeline.staleCursor) throw unconfirmed();
   if (timeline.entries.some(({ item }) => item.type === "tool_call" &&
     item.callId === "paseo-agent-message:" + messageId && item.agentMessage?.event === "message" &&
     item.agentMessage.sender.id === sourceAgentId && item.agentMessage.text === text)) return;
-  const agent = (await worker.refresh())?.agent;
+  const agent = (await worker.refresh().catch(cause => { throw unconfirmed(cause); }))?.agent;
   if (!agent || agent.id !== sessionId || agent.archivedAt || agent.internal || !canReceiveBoardInput(agent, false)) {
     throw new Error("원격 세션이 작업 지시를 받을 수 있는 상태인지 확인해 주세요. / Check whether the remote session is ready for a work request.");
   }
   checkScope();
-  await worker.send(text, { sourceAgentId, sourceAgentServerId, messageId, activeTurnBehavior: "steer" });
+  // Use the host's queue. A failed send can only be checked again by an explicit same-key replay.
+  await worker.send(text, options).catch(cause => { throw unconfirmed(cause); });
 }
