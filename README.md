@@ -91,10 +91,12 @@ paseo plugin ls coordinator-board
 Paseo가 잔여 수치를 제공하지 않는 실행기는 호스트 관리자가 플러그인 데이터 폴더(`$PASEO_HOME/plugin-data/coordinator-board`, 기본 `~/.paseo/plugin-data/coordinator-board`)에 `account-usage.json`을 제공할 수 있습니다. 파일은 설정을 열거나 **실행기·모델 새로 고침**을 누를 때 읽습니다. `providerId`에는 실행기 ID, `fetchedAt`에는 원래 측정 시각을 씁니다. 다음은 형식 예시입니다.
 
 ```json
-{"version":1,"reports":[{"providerId":"studio-runner","label":"Studio · 편집 계정","plan":null,"status":"available","fetchedAt":"2026-11-22T10:00:00Z","windows":[{"id":"weekly","label":"주간","remainingPct":72,"resetsAt":"2026-11-28T10:00:00Z","summary":true}],"balances":[]}]}
+{"version":1,"reports":[{"providerId":"studio-runner","label":"Studio · 편집 계정","plan":null,"status":"available","fetchedAt":"2026-11-22T10:00:00Z","windows":[{"id":"weekly","label":"주간","remainingPct":72,"resetsAt":"2026-11-28T10:00:00Z","summary":true}],"balances":[],"resetPasses":[{"id":"weekly","label":"주간 초기화","left":2,"expiresAt":["2026-12-11T07:00:00Z","2026-12-20T07:00:00Z"],"note":"주간 한도를 처음으로 되돌림"}]}]}
 ```
 
-호스트 추가 보고는 설정에 표시하는 용도입니다. 자동 배정은 Paseo의 사용량 보고서를 사용합니다. 실행기가 같은 구독을 공유할 때도 계정별 비율을 합산하지 않습니다.
+보고마다 선택 칸 `resetPasses`로 구독이 주는 사용량 초기화권을 적을 수 있습니다. 항목마다 `id`와 `label`(64자 이내), 남은 장수 `left`(0 이상 정수), 만료 시각 목록 `expiresAt`(16개 이내), 짧은 설명 `note`(선택, 200자 이내, 비었거나 공백뿐이면 생략)를 씁니다. 형식이 틀린 항목만 버리고 나머지 보고는 그대로 씁니다. 계정 카드는 초기화권마다 남은 장수와 아직 지나지 않은 가장 가까운 만료일, 그때까지 남은 시간을 보이고, 0장이면 **없음**을 흐리게 보입니다. 남은 장수는 파일 값을 그대로 따르고, 지난 만료일은 표시에서만 뺍니다. Paseo가 사용량을 직접 주는 실행기도 같은 `providerId`의 보고가 있으면 Paseo 측정값은 그대로 두고 초기화권만 덧붙입니다. 이 경우 파일의 `windows`와 `balances`는 쓰지 않습니다. 실행기에 계정이 하나면 `label`과 무관하게 붙이고, 여럿이면 `label`이 정확히 같은 계정에만 붙입니다. 이렇게 붙인 초기화권에는 파일 보고의 `fetchedAt`을 따로 보이고, 계정 측정과 같은 기준으로 오래되면 **이전 보고**로 흐리게 보입니다.
+
+호스트 추가 보고는 설정에 표시하는 용도입니다. 초기화권을 포함해 자동 배정에는 쓰지 않고, 자동 배정은 Paseo의 사용량 보고서를 사용합니다. 실행기가 같은 구독을 공유할 때도 계정별 비율을 합산하지 않습니다.
 
 처음 만든 운영 워크스페이스는 이 호스트의 Paseo 사이드바에 자동으로 고정됩니다. **설정 → 사이드바 고정**에서 자동 고정을 끌 수 있습니다. 같은 워크스페이스에서 세션을 교체하면 사용자가 정한 고정 상태가 유지됩니다. 이미 쓰던 코디네이터를 고정하려면 **현재 운영 워크스페이스 고정**을 누르세요.
 
