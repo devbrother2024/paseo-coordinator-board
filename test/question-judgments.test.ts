@@ -88,7 +88,7 @@ test("notice: the coordinator hears once about each question to judge, and never
   expect(sent).toHaveLength(1);
   // A new coordinator hears again.
   prefs.change(scope => { scope.coordinator = "coord-2"; });
-  expect(await notices.deliver(sdk as any)).toBe("unavailable");
+  expect(await notices.deliver(sdk as any, NOW + 31 * 60_000)).toBe("unavailable");
   // The coordinator's own questions are not sent to it.
   const own = store("worker");
   snapshot(own, evidence(older, ask));
@@ -172,8 +172,12 @@ test("questions not judged yet stay visible with or without a coordinator, also 
 
 test("notice policy: a failed send is not retried, one message per round at least 5 minutes apart, reminders back off", async () => {
   const prefs = store();
-  const asks = Array.from({ length: 25 }, (_, i): Step => ["assistant", `Shall I publish build ${i}?`, 2]);
-  snapshot(prefs, evidence(...asks, report, reply));
+  const question = (session: string, i: number) => ({ key: `${session}-${i}`, epoch: "e1", seq: i, question: `${session} question ${i}?`, raisedAt: at(3), later: 1, judge: "spoke-after" as const });
+  prefs.change(scope => {
+    for (const session of ["s1", "s2", "s3", "s4", "s5"]) {
+      scope.raisedQuestions[session] = { projectId: "p", title: session, projectTitle: "Project", workspaceTitle: "w", questions: [question(session, 0)] };
+    }
+  });
   const sent: any[] = [];
   let failing = true;
   const coordinator = { id: "coord", status: "idle", pendingPermissions: [] as unknown[], activeTurn: null };
@@ -182,31 +186,33 @@ test("notice policy: a failed send is not retried, one message per round at leas
   const notices = new QuestionNotices(prefs);
   const lines = (message: any) => message.text.split("\n").length - 3;
   const minutes = (n: number) => NOW + n * 60_000;
-  // The first message (20 questions) fails. It is on record and is not sent again.
+  // The first message fails. It is on record and is not sent again.
   await expect(notices.deliver(sdk as any, NOW)).rejects.toThrow("lost");
-  expect(sent.map(lines)).toEqual([20]);
+  expect(sent.map(lines)).toEqual([5]);
   failing = false;
-  // One message per round, and not within 5 minutes of the last one.
-  expect(await notices.deliver(sdk as any, minutes(1))).toBe("spaced");
-  expect(await notices.deliver(sdk as any, minutes(5))).toBe("sent");
-  expect(sent.map(lines)).toEqual([20, 5]);
-  expect(sent[1].text.startsWith("[Coordinator Board · 판단 필요 / Judgment needed]")).toBe(true);
+  expect(await notices.deliver(sdk as any, minutes(1))).toBe("nothing");
   expect(await notices.deliver(sdk as any, minutes(29))).toBe("nothing");
   // Reminders: 30 minutes after the first attempt, then twice as long each time.
   expect(await notices.deliver(sdk as any, minutes(30))).toBe("sent");
-  expect(await notices.deliver(sdk as any, minutes(35))).toBe("sent");
-  expect(sent.map(lines)).toEqual([20, 5, 20, 5]);
-  expect(sent.slice(2).every(message => message.text.startsWith("[Coordinator Board · 아직 판단 안 됨 / Still not judged]"))).toBe(true);
+  expect(sent[1].text.startsWith("[Coordinator Board · 아직 판단 안 됨 / Still not judged]")).toBe(true);
   expect(await notices.deliver(sdk as any, minutes(80))).toBe("nothing");
   expect(await notices.deliver(sdk as any, minutes(90))).toBe("sent");
-  expect(sent.map(lines)).toEqual([20, 5, 20, 5, 20]);
-  expect(new Set(sent.map(message => message.options.messageId)).size).toBe(5);
+  expect(sent.map(lines)).toEqual([5, 5, 5]);
+  // A question that came up meanwhile goes out at least 5 minutes after the last message.
+  prefs.change(scope => { scope.raisedQuestions.s6 = { projectId: "p", title: "s6", projectTitle: "Project", workspaceTitle: "w", questions: [question("s6", 0)] }; });
+  expect(await notices.deliver(sdk as any, minutes(93))).toBe("spaced");
+  expect(await notices.deliver(sdk as any, minutes(95))).toBe("sent");
+  expect(new Set(sent.map(message => message.options.messageId)).size).toBe(4);
 });
 
 test("notice policy: each message checks the coordinator again, so a permission request that appears is never steered over", async () => {
   const prefs = store();
-  const asks = Array.from({ length: 21 }, (_, i): Step => ["assistant", `Shall I publish build ${i}?`, 2]);
-  snapshot(prefs, evidence(...asks, report, reply));
+  const question = (session: string, i: number) => ({ key: `${session}-${i}`, epoch: "e1", seq: i, question: `${session} question ${i}?`, raisedAt: at(3), later: 1, judge: "spoke-after" as const });
+  prefs.change(scope => {
+    for (const session of Array.from({ length: 5 }, (_, i) => "s" + i)) {
+      scope.raisedQuestions[session] = { projectId: "p", title: session, projectTitle: "Project", workspaceTitle: "w", questions: Array.from({ length: 5 }, (_, i) => question(session, i)) };
+    }
+  });
   const sent: any[] = [];
   const coordinator = { id: "coord", status: "idle", pendingPermissions: [] as unknown[], activeTurn: null as unknown };
   const sdk = { agents: { ref: () => ({ refresh: async () => ({ agent: coordinator }),
@@ -214,29 +220,45 @@ test("notice policy: each message checks the coordinator again, so a permission 
   const notices = new QuestionNotices(prefs);
   expect(await notices.deliver(sdk as any, NOW)).toBe("sent");
   expect(sent).toHaveLength(1);
+  expect(sent[0].split("\n").length - 3).toBe(20);
   // The first message started a turn that now waits on a permission: nothing more goes out.
+  prefs.change(scope => { scope.raisedQuestions.s9 = { projectId: "p", title: "s9", projectTitle: "Project", workspaceTitle: "w", questions: [question("s9", 0)] }; });
   expect(await notices.deliver(sdk as any, NOW + 10 * 60_000)).toBe("waiting");
   expect(sent).toHaveLength(1);
   // The question that waited is still due once the coordinator can take it.
   Object.assign(coordinator, { status: "idle", activeTurn: null, pendingPermissions: [] });
   expect(await notices.deliver(sdk as any, NOW + 11 * 60_000)).toBe("sent");
-  expect(sent[1].split("\n").length - 3).toBe(1);
+  expect(sent[1]).toContain("s9 question 0?");
 });
 
-test("notice policy: a message picks questions fairly across sessions", async () => {
+test("notice policy: one session gets at most 5 questions per message and one message per 30 minutes", async () => {
   const prefs = store();
+  const question = (session: string, i: number) => ({ key: `${session}-${i}`, epoch: "e1", seq: i, question: `${session} question ${i}?`, raisedAt: at(3), later: 1, judge: "spoke-after" as const });
   prefs.change(scope => {
-    const question = (session: string, i: number) => ({ key: `${session}-${i}`, epoch: "e1", seq: i, question: `${session} question ${i}?`, raisedAt: at(3), later: 1, judge: "spoke-after" as const });
     scope.raisedQuestions.noisy = { projectId: "p", title: "Noisy", projectTitle: "Project", workspaceTitle: "w", questions: Array.from({ length: 40 }, (_, i) => question("noisy", i)) };
     scope.raisedQuestions.quiet = { projectId: "p", title: "Quiet", projectTitle: "Project", workspaceTitle: "w", questions: [question("quiet", 0), question("quiet", 1)] };
   });
   const sent: string[] = [];
   const coordinator = { id: "coord", status: "idle", pendingPermissions: [], activeTurn: null };
   const sdk = { agents: { ref: () => ({ refresh: async () => ({ agent: coordinator }), send: async (text: string) => { sent.push(text); } }) } };
-  expect(await new QuestionNotices(prefs).deliver(sdk as any, NOW)).toBe("sent");
-  const sessions = sent[0].split("\n").slice(1, -2).map(line => JSON.parse(line).sessionId);
-  expect(sessions).toHaveLength(20);
-  expect(sessions.filter(id => id === "quiet")).toHaveLength(2);
+  const notices = new QuestionNotices(prefs);
+  const sessions = (text: string) => text.split("\n").slice(1, -2).map(line => JSON.parse(line).sessionId);
+  expect(await notices.deliver(sdk as any, NOW)).toBe("sent");
+  expect(sessions(sent[0]).filter(id => id === "noisy")).toHaveLength(5);
+  expect(sessions(sent[0]).filter(id => id === "quiet")).toHaveLength(2);
+  // The noisy session rests 30 minutes before it can be in a message again, so it cannot keep the coordinator busy.
+  expect(await notices.deliver(sdk as any, NOW + 5 * 60_000)).toBe("nothing");
+  expect(await notices.deliver(sdk as any, NOW + 29 * 60_000)).toBe("nothing");
+  expect(await notices.deliver(sdk as any, NOW + 30 * 60_000)).toBe("sent");
+  // First notices go before reminders: the noisy session's next 5, then the quiet session's reminder in the next round.
+  expect(sessions(sent[1])).toEqual(["noisy", "noisy", "noisy", "noisy", "noisy"]);
+  expect(await notices.deliver(sdk as any, NOW + 35 * 60_000)).toBe("sent");
+  expect(sessions(sent[2])).toEqual(["quiet", "quiet"]);
+  expect(sent[2].startsWith("[Coordinator Board · 아직 판단 안 됨 / Still not judged]")).toBe(true);
+  // A board snapshot saving the session again keeps its rest time.
+  const target = row({ id: "noisy" });
+  prefs.change(scope => { saveScan(scope, target, { epoch: "e1", open: [], closed: [] } as any, () => ({}), NOW + 31 * 60_000); });
+  expect(prefs.read().raisedQuestions.noisy?.noticedAt).toBeDefined();
 });
 
 test("judge action: handled needs evidence that names something, and calling it again is fine", async () => {

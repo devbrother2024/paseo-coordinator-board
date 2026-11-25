@@ -17,6 +17,10 @@ const LONGEST_REMINDER_MS = 8 * 60 * 60 * 1000;
 export const QUESTIONS_PER_NOTICE = 20;
 // One message per round, and messages at least this far apart, however many questions wait.
 export const NOTICE_SPACING_MS = 5 * 60 * 1000;
+// One session's share: at most this many questions in a message, and one message per rest period. A session that piles up
+// questions cannot keep the coordinator busy; the other sessions take the rest of the message.
+export const QUESTIONS_PER_SESSION = 5;
+export const SESSION_REST_MS = 30 * 60 * 1000;
 const reminderGap = (notices: number) => Math.min(STILL_NOT_JUDGED_MS * 2 ** Math.max(0, notices - 1), LONGEST_REMINDER_MS);
 // Handled needs evidence that names something: at least this many characters other than spaces.
 export const MIN_EVIDENCE = 10;
@@ -34,6 +38,7 @@ export function questionsToJudge(scope: Pick<Preferences, "coordinator" | "proje
   const due: Due[] = [];
   for (const [sessionId, saved] of Object.entries(scope.raisedQuestions ?? {})) {
     if (sessionId === coordinator || !scope.projects.includes(saved.projectId)) continue;
+    if (saved.noticedAt && now - Date.parse(saved.noticedAt) < SESSION_REST_MS) continue;
     for (const question of saved.questions) {
       if (!question.judge || question.verdict) continue;
       const told = question.notified === coordinator;
@@ -60,12 +65,12 @@ function messageIdFor(coordinator: string, keys: readonly string[], at: string) 
   return [h.slice(0, 8), h.slice(8, 12), "4" + h.slice(13, 16), "8" + h.slice(17, 20), h.slice(20, 32)].join("-");
 }
 
-// Up to `limit` items, taken in turn from each session so one session cannot fill a message.
-function fairly(items: readonly JudgmentItem[], limit: number) {
+// Up to `limit` items, taken in turn from each session and at most `perSession` from one, so one session cannot fill a message.
+function fairly(items: readonly JudgmentItem[], limit: number, perSession: number) {
   const bySession = new Map<string, JudgmentItem[]>();
   for (const item of items) bySession.set(item.sessionId, [...(bySession.get(item.sessionId) ?? []), item]);
   const picked: JudgmentItem[] = [];
-  for (let round = 0; picked.length < limit; round++) {
+  for (let round = 0; round < perSession && picked.length < limit; round++) {
     const before = picked.length;
     for (const queue of bySession.values()) if (round < queue.length && picked.length < limit) picked.push(queue[round]);
     if (picked.length === before) break;
@@ -103,12 +108,14 @@ export class QuestionNotices {
       if (this.store.read().coordinator !== coordinator) return "unavailable";
       const first = due.filter(entry => !entry.again);
       const again = !first.length;
-      const batch = fairly((again ? due : first).map(entry => entry.item), QUESTIONS_PER_NOTICE);
+      const batch = fairly((again ? due : first).map(entry => entry.item), QUESTIONS_PER_NOTICE, QUESTIONS_PER_SESSION);
+      const sessions = new Set(batch.map(item => item.sessionId));
       const keys = new Set(batch.map(item => item.questionKey));
       const at = new Date(now).toISOString();
       // Recorded before the send: if the send fails, the next round does not send it again.
       this.store.change(current => {
         current.judgmentNotice = { coordinator, at };
+        for (const id of sessions) if (current.raisedQuestions[id]) current.raisedQuestions[id].noticedAt = at;
         for (const saved of Object.values(current.raisedQuestions)) {
           for (const question of saved.questions) {
             if (!keys.has(question.key)) continue;

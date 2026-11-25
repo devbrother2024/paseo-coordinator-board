@@ -334,6 +334,7 @@ export function saveScan(scope: Preferences, row: SessionLabel, scan: QuestionSc
   for (const key of [...questions.keys()]) if (Object.hasOwn(scope.closedQuestions, key)) questions.delete(key);
   if (questions.size) {
     scope.raisedQuestions[row.id] = { projectId: row.projectId || saved?.projectId || "", ...(row.serverId ?? saved?.serverId ? { serverId: row.serverId ?? saved?.serverId } : {}),
+      ...(saved?.noticedAt ? { noticedAt: saved.noticedAt } : {}),
       title: (row.title || saved?.title || "").slice(0, 400), projectTitle: (row.projectTitle || saved?.projectTitle || "").slice(0, 400),
       workspaceTitle: (row.workspaceTitle || saved?.workspaceTitle || "").slice(0, 400), questions: [...questions.values()] };
   } else delete scope.raisedQuestions[row.id];

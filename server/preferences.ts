@@ -50,6 +50,8 @@ export const raisedQuestionSchema = z.object({
 export type RaisedQuestion = z.output<typeof raisedQuestionSchema>;
 const raisedSession = z.object({
   projectId: z.string(), serverId: z.string().optional(), title: z.string().max(400), projectTitle: z.string().max(400), workspaceTitle: z.string().max(400),
+  // When the session's questions were last in a judgment notice. A session waits 30 minutes before the next one.
+  noticedAt: z.iso.datetime().optional(),
   // Read question by question: one that cannot be read is left out, the others stay. Open questions are not cut by count.
   questions: z.array(z.unknown()).transform(saved => saved.flatMap(entry => {
     const parsed = raisedQuestionSchema.safeParse(entry);
