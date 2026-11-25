@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppState, Switch, Text, View } from "react-native";
 import type { ProviderEntry } from "../shared/dispatch";
 import { recentUsage, type AccountUsage } from "../shared/usage-routing";
 import { accountCards, type AccountCard as AccountCardData } from "./account-cards";
 import type { Theme } from "./controls";
 import { useBoardLanguage } from "./language";
-import { nextCountdownChange, resetCountdown } from "./reset-countdown";
+import { countdownClock, type ClockHost } from "./countdown-clock";
+import { resetCountdown } from "./reset-countdown";
 
 function AccountCard({label,report,supplemental,issue,provider,busy,now,onInclude,theme}: AccountCardData & {busy:boolean;now:number;onInclude:(provider:string,included:boolean)=>void;theme:Theme}) {
   const {t,language} = useBoardLanguage();
@@ -64,24 +65,25 @@ function AccountCard({label,report,supplemental,issue,provider,busy,now,onInclud
   </View>;
 }
 
-// The current time for the reset countdowns. It moves when a shown minute changes, only while the settings
-// screen is mounted and the app is in the foreground, and catches up at once when the app comes back.
+// The current time for the reset countdowns, kept while the settings screen is mounted.
+// The timing rules live in countdown-clock.ts; this only connects them to React Native.
+const appClock:ClockHost = {
+  now:() => Date.now(),
+  appState:() => AppState.currentState,
+  setTimer:(run,wait) => setTimeout(run,wait),
+  clearTimer:timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
+  onAppState:listener => { const subscription = AppState.addEventListener("change", listener); return () => subscription.remove(); },
+};
 function useCountdownClock(resets:(string|null)[]) {
   const [now,setNow] = useState(Date.now);
-  const [foreground,setForeground] = useState(AppState.currentState !== "background");
+  const clock = useRef<ReturnType<typeof countdownClock>|null>(null);
   useEffect(() => {
-    const subscription = AppState.addEventListener("change", state => {
-      setForeground(state !== "background");
-      if (state === "active") setNow(Date.now());
-    });
-    return () => subscription.remove();
+    const created = countdownClock(appClock, setNow);
+    clock.current = created;
+    return () => { created.stop(); clock.current = null; };
   }, []);
-  const wait = foreground ? nextCountdownChange(resets, now) : null;
-  useEffect(() => {
-    if (wait === null) return;
-    const timer = setTimeout(() => setNow(Date.now()), wait);
-    return () => clearTimeout(timer);
-  }, [wait, now]);
+  // The clock ignores reset lists it already has, so handing it the list after every render is enough.
+  useEffect(() => { clock.current?.setResets(resets); });
   return now;
 }
 
