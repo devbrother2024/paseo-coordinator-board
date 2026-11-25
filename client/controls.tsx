@@ -1,5 +1,6 @@
 import type { PluginScreenProps } from "@getpaseo/plugin/client";
 import { Pressable, Text, View, type TextStyle, type ViewProps } from "react-native";
+import type { ReactNode } from "react";
 
 export type Theme = PluginScreenProps["theme"];
 const buttonFrame = { borderRadius: 7, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1 };
@@ -24,7 +25,15 @@ export function Button({ label, accessibilityLabel, describedBy, onPress, theme,
   );
 }
 
-export type SessionChipProps = { label: string; accessibilityLabel: string; onPress: () => void; theme: Theme };
+/** The first line of a decision card: where it comes from, how long it has waited, and a chip that opens its session. */
+export function CardHeader({ text, theme, children }: { text: string; theme: Theme; children?: ReactNode }) {
+  return <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+    <Text selectable style={{ color: theme.colors.foregroundMuted, fontSize: 12, flexShrink: 1 }}>{text}</Text>
+    {children}
+  </View>;
+}
+
+export type SessionChipProps ={ label: string; accessibilityLabel: string; onPress: () => void; theme: Theme };
 
 export function SessionChip({ label, accessibilityLabel, onPress, theme }: SessionChipProps) {
   const c = theme.colors;

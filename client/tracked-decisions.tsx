@@ -8,7 +8,7 @@ import {
   cancelQueuedReply, resolveTrackedDecision, mentionsSecurityGate, trackedAnswerLead, trackedAnswerText, trackedPullTarget, trackedReplyExample, usesSourceCoordinator,
   type TrackedDecision, type TrackedReplyBlock, type TrackedReplyReason, type TrackedReplyRoute,
 } from "../shared/tracked-decisions";
-import { Button, type Theme } from "./controls";
+import { Button, CardHeader, type Theme } from "./controls";
 import { HistoryMarkdown } from "./history-markdown";
 import { TrackedPullStatus } from "./pull-requests";
 import { useBoardLanguage } from "./language";
@@ -427,10 +427,9 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
   }
 
   return <View style={{ gap: 7 }}>
-    <View style={{ ...wrap, alignItems: "center" }}>
-      <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>{[source || t("보드 공통", "Board-wide"), ...recordHeaderParts(item, t)].join(" · ")}</Text>
+    <CardHeader theme={theme} text={[source || t("보드 공통", "Board-wide"), ...recordHeaderParts(item, t)].join(" · ")}>
       {otherSide && <TrackedSessionChips title={item.title} theme={theme} links={links} side={otherSide} role />}
-    </View>
+    </CardHeader>
     <HistoryMarkdown theme={theme} source={isMerge ? t("PR 병합", "PR merge") : item.title} pullRepository={pullRepository} heading />
     {isMerge && (pull || (target
       ? <TrackedPullStatus repo={target.repo} number={target.number} projectId={item.projectId} theme={theme} securityGate={securityGate} />
