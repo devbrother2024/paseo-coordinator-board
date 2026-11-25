@@ -3,7 +3,8 @@ const request = /확인해\s*주실\s*것|(?:확인|선택|승인|결정|답변|
 const optionalOffer = /(?:궁금|필요|원하).{0,12}(?:시면|시다면|면).{0,25}(?:알려|말씀|도와)|\b(?:if you (?:like|want)|let me know if)\b/i;
 const noQuestion = /(?:확인해\s*주실\s*것|결정해\s*주실\s*것|확인\s*요청)(?:은|이|이란)?\s*(?:없|없습니다|없음)/;
 // A single quote opens only where a word does not continue into it, so "I've" and "it's" are not quotes.
-const quoted = /“[^”\n]*”|"[^"\n]*"|「[^」\n]*」|『[^』\n]*』|‘[^’\n]*’|(?<![\p{L}\p{N}])'[^'\n]+'(?![A-Za-z0-9])/gu;
+// A double quote right after a digit is an inch mark (24"), not an opening quote.
+const quoted = /“[^”\n]*”|(?<!\d)"[^"\n]*"|「[^」\n]*」|『[^』\n]*』|‘[^’\n]*’|(?<![\p{L}\p{N}])'[^'\n]+'(?![A-Za-z0-9])/gu;
 
 /** The line with quoted text blanked out, at the same length so positions still match the original. */
 export function unquoted(line: string) {

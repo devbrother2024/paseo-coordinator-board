@@ -140,7 +140,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
   const bodyFolds = foldsAsk([parts.body]);
   // The title keeps two lines. A longer request sentence opens with the body.
   const questionFolds = bodyFolds || (split && parts.title.length > 60);
-  const context = [decision?.contextMarkdown, parts.lead].filter(Boolean).join("\n\n") || undefined;
+  const context = [parts.lead, decision?.contextMarkdown].filter(Boolean).join("\n\n") || undefined;
   const adviceSent = !!coordinator && requestedFrom === coordinator;
   const disclose = (label: string, expanded: boolean, onPress: () => void) =>
     <Pressable accessibilityRole="button" accessibilityLabel={named(label).accessibilityLabel} accessibilityState={{ expanded }}

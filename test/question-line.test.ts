@@ -29,6 +29,12 @@ test("a request outside the quotes is still a request, and a quote does not hide
   expect(details?.context).toContain("라고 묻습니다");
 });
 
+test("an inch mark is not an opening quote", () => {
+  expect(asksForDecision("24\" 모니터로 할까요? \"27\"은 비쌉니다.")).toBe(true);
+  expect(unquoted("24\" 모니터로 할까요? \"27\"은 비쌉니다.")).toBe("24\" 모니터로 할까요? ____은 비쌉니다.");
+  expect(asksForDecision("Shall I order the 24\" screen? The \"27\" one costs more.")).toBe(true);
+});
+
 test("quote masking keeps the length of the line", () => {
   const line = "진행자가 “합칠까요?”라고 묻고, 'yes'를 기다립니다.";
   expect(unquoted(line)).toHaveLength(line.length);

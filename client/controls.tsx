@@ -33,7 +33,7 @@ export function CardHeader({ text, theme, children }: { text: string; theme: The
   </View>;
 }
 
-export type SessionChipProps ={ label: string; accessibilityLabel: string; onPress: () => void; theme: Theme };
+export type SessionChipProps = { label: string; accessibilityLabel: string; onPress: () => void; theme: Theme };
 
 export function SessionChip({ label, accessibilityLabel, onPress, theme }: SessionChipProps) {
   const c = theme.colors;
