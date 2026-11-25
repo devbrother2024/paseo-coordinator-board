@@ -5,7 +5,9 @@ import {mkdtempSync, readFileSync, rmSync, writeFileSync} from "node:fs";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {TrackedDecisionStore} from "../server/tracked-decisions";
-import {cancelQueuedReply, mentionsSecurityGate, resolveTrackedDecision, trackedReplyExample, trackedAnswerText, trackedPullTarget, trackedRecipient, trackedCoverage, trackedDecisionViewSchema} from "../shared/tracked-decisions";
+import {cancelQueuedReply, mentionsSecurityGate, resolveTrackedDecision, trackedReplyExample, trackedAnswerText, trackedPullTarget, trackedRecipient, trackedCoverage, trackedDecisionInputSchema, trackedDecisionViewSchema} from "../shared/tracked-decisions";
+import {trackedReplyMessage} from "../server/decision-message";
+import {createHash} from "node:crypto";
 import type {SessionRow} from "../shared/contract";
 import type {PullRequestView} from "../shared/prs";
 import {readReplyPhoto} from "../shared/reply-history";
@@ -427,6 +429,59 @@ test("two queued card replies survive a restart with their original photos, reci
   expect(calls.map(c=>c.images)).toEqual([[replyPhoto],[replyPhoto]]);
   expect(new Set(calls.map(c=>c.id)).size).toBe(2);
   expect(f.read().history?.map(r=>r.status)).toEqual(["sent","sent"]);
+});
+
+test("a reply queued before the header change is still delivered as it was written",async()=>{
+  const f=fixture();
+  f.write([row("old",{where:"manager"}),row("new",{where:"manager"})]);
+  const [old,fresh]=f.read().items;
+  const request=(item:typeof old)=>({source:item.source,projectId:item.projectId,id:item.id,fingerprint:item.fingerprint,recipientId:"coord",answer:"Go ahead"});
+  const calls:string[]=[];
+  let ready=false;
+  const prepare=async()=>({ready,stillCurrent:()=>true,accepted:async()=>false,send:async(body:string)=>{calls.push(body);}});
+  expect((await f.service.deliver(request(old),()=>f.selected,prepare)).status).toBe("queued");
+  expect((await f.service.deliver(request(fresh),()=>f.selected,prepare)).status).toBe("queued");
+  // Rewrite the first record as the board wrote it before `mayBe`: no header version, and the hash of the first form.
+  const path=join(f.dir,"tracked-decisions.resolved.json");
+  const saved=JSON.parse(readFileSync(path,"utf8"));
+  expect(saved.items.map(record=>record.headerVersion)).toEqual([2,2]);
+  const legacy=trackedReplyMessage(trackedDecisionInputSchema.parse(row("old",{where:"manager"})),request(old),1);
+  delete saved.items[0].headerVersion;
+  saved.items[0].messageHash=createHash("sha256").update(legacy).digest("hex");
+  writeFileSync(path,JSON.stringify(saved));
+  ready=true;
+  await new TrackedDecisionStore(f.path).resumeQueued(()=>f.selected,prepare,"coord");
+  expect(calls).toHaveLength(2);
+  expect(calls[0]).toBe(legacy);
+  expect(JSON.parse(calls[0].split("\n")[1]).mayBe).toBeUndefined();
+  expect(JSON.parse(calls[1].split("\n")[1]).mayBe).toEqual(["decision","question","change-request"]);
+  expect(f.read().history?.map(entry=>entry.status)).toEqual(["sent","sent"]);
+});
+
+test("a free-text reply to a card with questions hides that revision until the card changes",async()=>{
+  const f=fixture();
+  const card=row("cache",{where:"manager",questions:[{id:"Q1",text:"Where?",options:[{key:"A",text:"Memory"},{key:"B",text:"Disk"}]},{id:"Q2",text:"When?"}]});
+  f.write([card]);
+  const [item]=f.read().items;
+  const calls:string[]=[];
+  const prepare=async()=>({ready:true,stillCurrent:()=>true,accepted:async()=>false,send:async(body:string)=>{calls.push(body);}});
+  // The person asked instead of answering: no question is marked as answered.
+  const asked={source:item.source,projectId:item.projectId,id:item.id,fingerprint:item.fingerprint,recipientId:"coord",answer:"Why not Redis?",questionIndexes:[]};
+  expect((await f.service.deliver(asked,()=>f.selected,prepare)).status).toBe("sent");
+  expect(calls[0].endsWith("\n\nWhy not Redis?")).toBe(true);
+  expect(JSON.parse(calls[0].split("\n")[1])).toMatchObject({questions:[],mayBe:["decision","question","change-request"]});
+  const sent=f.read();
+  expect(sent.items).toHaveLength(0);
+  expect(sent.history?.[0]).toMatchObject({status:"sent",answer:"Why not Redis?",origin:{cardId:"cache",questions:[]}});
+  expect(sent.history?.[0].cardRemoved).toBeUndefined();
+  // The session that took it answers and raises the card again with the answer recorded: a new revision opens.
+  f.write([{...card,qa:[{q:"Why not Redis?",a:"It needs a server we do not run."}]}]);
+  const reopened=f.read();
+  expect(reopened.items.map(entry=>entry.id)).toEqual(["cache"]);
+  expect(reopened.items[0].fingerprint).not.toBe(item.fingerprint);
+  // Taking the card down closes it for good.
+  f.write([]);
+  expect(f.read().history?.[0].cardRemoved).toBe(true);
 });
 
 test("cancel a reservation during recovery without resurrecting it or canceling a replacement",async()=>{

@@ -18,7 +18,15 @@ type ReplyContext = {
   questions: {id:string; text:string; index?:number}[];
   action: string;
   route?: "coordinator";
+  mayBe?: readonly string[];
 };
+
+// A card has one input, so what the person wrote may be any of these. The session that takes it decides which.
+// This is a value in the card's context, never a sentence beside the person's own words.
+export const REPLY_MAY_BE = ["decision", "question", "change-request"] as const;
+// 2 adds `mayBe`. A reply recorded before it is rebuilt in its first form, so its recorded hash still matches.
+export const REPLY_HEADER_VERSION = 2;
+export type ReplyHeaderVersion = 1 | typeof REPLY_HEADER_VERSION;
 
 // The context is board-generated. Keep it separate from the user's verbatim input.
 function message(context: ReplyContext, answer: string) {
@@ -40,13 +48,14 @@ export function trackedReplyOrigin(item:TrackedDecisionInput, input:TrackedResol
     questions:trackedQuestions(item,input).map(({text,...ref})=>ref)};
 }
 
-export function trackedReplyMessage(item: TrackedDecisionInput, input: TrackedResolution) {
+export function trackedReplyMessage(item: TrackedDecisionInput, input: TrackedResolution, headerVersion: ReplyHeaderVersion = REPLY_HEADER_VERSION) {
   return message({
     projectId:item.projectId, projectTitle:item.projectTitle ?? null, source:item.source,
     sourceSessionId:item.sessionId ?? item.sessionMatch?.sessionId ?? null, sourceHost:item.sessionHost ?? null,
     recipientSessionId:input.recipientId!, cardId:item.id, cardTitle:item.title, revision:input.fingerprint,
     recordedAt:item.since ?? undefined, questions:trackedQuestions(item,input), action:"reply",
     ...(input.route ? {route:input.route} : {}),
+    ...(headerVersion >= REPLY_HEADER_VERSION ? {mayBe:REPLY_MAY_BE} : {}),
   }, input.answer ?? "");
 }
 
@@ -57,5 +66,6 @@ export function sessionReplyMessage(row:SessionRow, input:DecisionInput) {
     sourceSessionId:row.id, sourceSessionTitle:row.title, recipientSessionId:input.recipientId,
     cardId:row.id, cardTitle:row.title, revision:decision.version, evidenceId:row.evidenceId,
     questions:[{id:decision.version, text:decision.question}], action:input.action,
+    ...(input.action === "reply" ? {mayBe:REPLY_MAY_BE} : {}),
   }, input.text);
 }

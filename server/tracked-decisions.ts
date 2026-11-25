@@ -12,7 +12,7 @@ import { describePhotos, readLocalPhoto, removeLocalPhotos, saveLocalPhotos, typ
 import { boardPhotoMessageId } from "../shared/session-photos";
 import { SessionPhotoStore } from "./session-photos";
 import { openNoFollowSync } from "./safe-open";
-import { trackedReplyMessage, trackedReplyOrigin } from "./decision-message";
+import { REPLY_HEADER_VERSION, trackedReplyMessage, trackedReplyOrigin } from "./decision-message";
 import type { Evidence } from "./conversation";
 import type { LedgerDiagnostics } from "../shared/ledger-diagnostics";
 import type { MergeTarget, PullRequestView } from "../shared/prs";
@@ -31,6 +31,8 @@ const receipt = z.object({
     questionIndexes:z.array(z.number().int().nonnegative()).max(128).optional(),stopped:z.boolean().default(false)}).optional(),
   legacySession:replyOrigin.pick({sessionId:true,sessionHost:true,sessionProjectId:true}).optional(),
   origin:replyOrigin.optional(), messageHash:sha256.optional(), photos:z.array(photoReference).max(MAX_WORK_IMAGES).optional(),
+  // The form of the card context sent with the reply. Absent on replies recorded before `mayBe` was added.
+  headerVersion:z.literal(REPLY_HEADER_VERSION).optional(),
   reviewedBy:z.string().optional(), reviewReason:z.string().optional(), title:z.string().optional(), coordinator:z.boolean().optional(), response:z.string().optional(),key:z.string(),fingerprint:z.string().regex(/^[a-f0-9]{64}$/),at:z.string().datetime(),answer:z.string().max(4000).optional(), recipientId:z.string().optional(), messageId:z.string().uuid().optional(), pending:z.boolean().optional()});
 const receipts = z.object({version:z.literal(1),items:z.array(receipt)});
 type SourceStatus = TrackedDecisionView["status"];
@@ -374,14 +376,14 @@ export class TrackedDecisionStore {
       if (await holdsCard(earlier,check)) return sameReply(earlier,input,photos,row.item) ? checked : changed("earlier-unconfirmed");
     }
     if (previous && !sameReply(previous,input,photos,row.item)) return changed("conflict");
-    // A retry repeats the recorded reply as it was written then.
-    const text=trackedReplyMessage(row.item,previous ? {...input,answer:previous.answer} : input);
+    // A retry repeats the recorded reply as it was written then, in the form of card context it was recorded with.
+    const text=trackedReplyMessage(row.item,previous ? {...input,answer:previous.answer} : input,previous ? previous.headerVersion ?? 1 : REPLY_HEADER_VERSION);
     const messageHash=createHash("sha256").update(text).digest("hex");
     if (previous?.messageHash && previous.messageHash!==messageHash) return changed("conflict");
     if (previous && !previous.pending && !previous.queue) return {status:"sent"};
     if (previous?.queue && !queuedId) return previous.queue.stopped ? changed("queue-stopped") : {status:"queued",queueId:previous.messageId};
     const messageId=previous?.messageId ?? (photos.length ? boardPhotoMessageId(randomUUID()) : randomUUID());
-    const receipt:Receipt=previous ?? {origin:trackedReplyOrigin(row.item,input),messageHash,...(photos.length ? {photos} : {}),title:row.item.title,coordinator:fallback || row.item.where==="human" || row.item.where==="manager",key,fingerprint:input.fingerprint,at:new Date().toISOString(),answer:input.answer,recipientId:input.recipientId,messageId,pending:true};
+    const receipt:Receipt=previous ?? {origin:trackedReplyOrigin(row.item,input),messageHash,headerVersion:REPLY_HEADER_VERSION,...(photos.length ? {photos} : {}),title:row.item.title,coordinator:fallback || row.item.where==="human" || row.item.where==="manager",key,fingerprint:input.fingerprint,at:new Date().toISOString(),answer:input.answer,recipientId:input.recipientId,messageId,pending:true};
     try {
       if (previous && !previous.queue) {
         if (!(await target.accepted(messageId,sentAs(previous)))) return {status:"unconfirmed"};
