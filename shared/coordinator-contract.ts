@@ -11,3 +11,7 @@ export type CoordinatorContract = { version: number; compatibleFrom: number };
 
 export const boardGuideName = "read_board_guide";
 export const boardActionName = "board_action";
+
+// The contract that first had each tool. A conversation that calls one holds at least that contract:
+// it could not have loaded the tool from an older one. Add a tool here when a contract adds it.
+export const contractToolsSince: Readonly<Record<string, number>> = { [boardGuideName]: 1, [boardActionName]: 1 };

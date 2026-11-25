@@ -15,8 +15,8 @@ export function staleToolsNotice(tools: CoordinatorTools | undefined, t: Transla
     steps: [
       t("그대로 두기. 코디네이터가 다음에 보드 도구를 쓰면 보드가 안내 도구(read_board_guide)를 읽으라고 알리고, 읽으면 이 대화에서 새 기능을 쓰며 이 안내가 사라집니다. 바로 하려면 코디네이터 세션에 「보드 안내 도구를 읽어 줘」라고 직접 입력하세요.",
         "Leave it as it is. The next time the coordinator uses a board tool, the board tells it to read the guide tool (read_board_guide). Once it has, it uses new features in this conversation and this notice goes away. To do it now, type \"Read the board guide tool\" in the coordinator session yourself."),
-      t("그래도 남아 있으면 코디네이터 세션에 /compact 를 직접 입력하세요. 대화 요약은 남고 도구 정의를 새로 받습니다. 보드가 대신 입력하지 않습니다.",
-        "If the notice stays, type /compact in the coordinator session yourself. The conversation keeps a summary and receives the tool definitions again. The board does not type it for you."),
+      t("그래도 남아 있으면 코디네이터 세션에 /compact 를 직접 입력하세요. 대화 요약은 남고, 압축이 끝난 뒤 보드를 새로 고치면 이 안내가 사라집니다. Claude Code 2.1.330 에서는 압축한 대화가 도구 정의를 새로 받는 것을 확인했고, 다른 버전에서는 다를 수 있습니다. 보드가 대신 입력하지 않습니다.",
+        "If the notice stays, type /compact in the coordinator session yourself. The conversation keeps a summary, and this notice goes away when you refresh the board after the compaction ends. With Claude Code 2.1.330 a compacted conversation was seen to receive the tool definitions again; other versions may differ. The board does not type it for you."),
       t("마지막 수단입니다. 새 세션으로 교체하거나 코디네이터 세션에 /clear 를 직접 입력하세요. 이전 대화 내용은 이어지지 않습니다.",
         "As a last resort, replace it with a new session, or type /clear in the coordinator session yourself. The earlier conversation is not carried over."),
     ],

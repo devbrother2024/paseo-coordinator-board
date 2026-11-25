@@ -11,7 +11,7 @@ import { coordinatorTool } from "../server/board-guide";
 import {
   CoordinatorToolStamps, coordinatorToolsView, guideNote, readCoordinatorTools, toolsFingerprint, withGuideNote,
 } from "../server/coordinator-tools";
-import { conversationProvider, guideNoteDue, nextToolStamp, providerKeepsTools, toolStaleness } from "../shared/coordinator-tools";
+import { compactedToolStamp, conversationProvider, guideNoteDue, nextToolStamp, providerKeepsTools, toolStaleness } from "../shared/coordinator-tools";
 import { staleToolsNotice } from "../client/coordinator-tools";
 
 const ko = (korean: string) => korean;
@@ -47,13 +47,18 @@ const listTool = coordinatorTool({ name: "read_board", description: "List.", inp
 
 // A Paseo host where each session runs one provider conversation, which /clear replaces. `kind` is the
 // provider implementation a profile runs on, which Paseo records in the conversation's persistence metadata.
+// `timeline` holds what the coordinator's timeline shows; `fetches` counts how often the board read it.
 function host(provider = "claude", kind?: string) {
   const conversations = new Map<string, string>([["coordinator-1", "conversation-1"], ["coordinator-2", "conversation-9"]]);
+  const state = { timeline: [] as { item: Record<string, unknown>; timestamp: string }[], fetches: 0, timelineFails: false };
   const paseo = { agents: { ref: (id: string) => ({
     refresh: async () => ({ agent: { id, persistence: conversations.has(id)
       ? { provider, sessionId: conversations.get(id), ...(kind ? { metadata: { provider: kind } } : {}) } : null } }),
+    timeline: { refetch: async () => { state.fetches++; if (state.timelineFails) throw new Error("offline"); return { entries: state.timeline }; } },
   }) } } as any;
-  return { paseo, conversations, provider };
+  const compact = (at = new Date(Date.now() + 60_000).toISOString(), status = "completed") =>
+    state.timeline.push({ item: { type: "compaction", status, trigger: "manual" }, timestamp: at });
+  return { paseo, conversations, provider, state, compact };
 }
 
 // One board build: the real coordinator hook, with the tools it hands out wrapped for stamping.
@@ -65,7 +70,7 @@ async function board(prefs: PreferenceStore, extra: any[] = oldBuild, contract?:
   const run = (name: string, input: unknown, h: { paseo: unknown; provider: string }, agentId = "coordinator-1") =>
     opened.tools.find((tool: any) => tool.name === name).execute(input, { paseo: h.paseo, agent: { id: agentId, provider: h.provider } });
   const call = (h: { paseo: unknown; provider: string }, agentId = "coordinator-1") => run("plan_assignment", { needsHooks: false }, h, agentId);
-  const guide = (h: { paseo: unknown; provider: string }, held = 1) => run("read_board_guide", { contract: held }, h);
+  const guide = (h: { paseo: unknown; provider: string }, topic?: string) => run("read_board_guide", topic ? { topic } : {}, h);
   return { stamps, call, run, guide, names: opened.tools.map((tool: any) => tool.name) as string[] };
 }
 
@@ -96,18 +101,25 @@ test("a conversation keeps its first stamp, and a new conversation starts over w
   expect(nextToolStamp(first, undefined, "conversation-2")).toBe(first);
 });
 
-test("a contract tool call tells which contract the conversation holds", () => {
-  // A conversation stamped before the contract learns it on its first contract tool call.
-  expect(nextToolStamp(legacy, served, "conversation-1", { held: 1 })).toEqual({ ...legacy, contract: 1, early: true });
+test("a contract tool call shows the conversation holds the contract that introduced the tool", () => {
+  // A conversation stamped before the contract can only call the guide once it holds contract 1 tools.
+  expect(nextToolStamp(legacy, served, "conversation-1", { since: 1 })).toEqual({ ...legacy, contract: 1, early: true });
   const two = { ...served, contract: 2, compatibleFrom: 2 };
   const one = { ...legacy, contract: 1 };
-  expect(nextToolStamp(one, two, "conversation-1", { held: 1 })).toBe(one);
-  expect(nextToolStamp(one, two, "conversation-1", { held: 2 })).toEqual({ ...one, contract: 2 });
-  // A number the board does not serve, or not a whole number, is ignored. The held contract never goes down.
-  for (const held of [3, 0, -1, 1.5, Number.NaN]) expect(nextToolStamp(one, two, "conversation-1", { held })).toBe(one);
-  expect(nextToolStamp({ ...one, contract: 2 }, two, "conversation-1", { held: 1 })).toEqual({ ...one, contract: 2 });
+  // Calling a tool that contract 1 already had says nothing about contract 2.
+  expect(nextToolStamp(one, two, "conversation-1", { since: 1 })).toBe(one);
+  expect(nextToolStamp(one, two, "conversation-1", { since: 2 })).toEqual({ ...one, contract: 2 });
+  // Never beyond what the board serves, and never down.
+  for (const since of [3, 0, -1, 1.5, Number.NaN]) expect(nextToolStamp(one, two, "conversation-1", { since })).toBe(one);
+  expect(nextToolStamp({ ...one, contract: 2 }, two, "conversation-1", { since: 1 })).toEqual({ ...one, contract: 2 });
   // Reading the guide records the revision read.
   expect(nextToolStamp(one, served, "conversation-1", { readGuide: true })).toEqual({ ...one, guide: "g1" });
+});
+
+test("a compacted conversation starts over with the served definitions", () => {
+  const early = { ...legacy, contract: 1, early: true, guide: "g0", noted: "g0" };
+  expect(compactedToolStamp(early, served)).toEqual({ session: "conversation-1", fingerprint: "new", contract: 1, guide: "" });
+  expect(compactedToolStamp(early, undefined)).toBe(early);
 });
 
 test("the guide note is due until the conversation read or was told about this guide revision", () => {
@@ -188,6 +200,8 @@ test("a conversation from before the contract catches up by reading the guide", 
   expect(b.stamps.staleness("coordinator-1", "conversation-1")).toBe("current");
   expect(await readCoordinatorTools(h.paseo, b.stamps, row)).toBeUndefined();
   expect(prefs.read().toolStamps["coordinator-1"]).toMatchObject({ session: "conversation-1", fingerprint: "f".repeat(64), contract: 1, early: true });
+  // `at` stays the time the conversation was first stamped: later evidence is compared against it.
+  expect(prefs.read().toolStamps["coordinator-1"].at).toBe("2026-01-01T00:00:00.000Z");
   // It keeps saying so in later guide reads: some of its definitions predate the contract.
   expect(JSON.parse((await b.guide(h)).text).conversation.definitions).toBe("older");
   expect((await b.call(h)).text).toBe("planned");
@@ -197,33 +211,80 @@ test("board_action is a contract tool call too", async () => {
   const prefs = store({ session: "conversation-1", fingerprint: "f".repeat(64) });
   const h = host();
   const b = await board(prefs, oldBuild);
-  const result = await b.run("board_action", { contract: 1, action: "plan_assignment", input: { needsHooks: true } }, h);
+  const result = await b.run("board_action", { action: "plan_assignment", input: { needsHooks: true } }, h);
   expect(result.text).toStartWith("planned");
   expect(b.stamps.staleness("coordinator-1", "conversation-1")).toBe("current");
 });
 
-test("a broken contract stays stale until the conversation holds the new one", async () => {
+test("a broken contract stays stale until the conversation is compacted", async () => {
   const prefs = store();
   const h = host();
-  const one = await board(prefs, oldBuild);
-  await one.call(h);
+  const row = { id: "coordinator-1", status: "idle", provider: "claude" };
+  await (await board(prefs, oldBuild)).call(h);
   expect(prefs.read().toolStamps["coordinator-1"]).toMatchObject({ contract: 1 });
 
   const two = await board(prefs, newBuild, { version: 2, compatibleFrom: 2 });
   expect(two.stamps.staleness("coordinator-1", "conversation-1")).toBe("stale");
-  // The conversation still holds contract 1 definitions and says so.
-  await two.guide(h, 1);
+  // Calling a tool it already had shows nothing new, whatever the call says.
+  await two.guide(h);
+  await two.run("board_action", { action: "plan_assignment", input: { needsHooks: false } }, h);
   expect(two.stamps.staleness("coordinator-1", "conversation-1")).toBe("stale");
-  // After the person compacts it, the conversation loads the tools again under the same conversation ID.
-  await two.guide(h, 2);
+  // A compaction from before the stamp, and one still running, are not evidence.
+  h.compact("2020-01-01T00:00:00.000Z");
+  h.compact(undefined, "loading");
+  expect(await readCoordinatorTools(h.paseo, two.stamps, row)).toEqual({ stale: true });
+
+  // The person compacts the conversation. Its ID stays, and it loads the board tools again.
+  h.compact();
+  expect(await readCoordinatorTools(h.paseo, two.stamps, row)).toBeUndefined();
   expect(two.stamps.staleness("coordinator-1", "conversation-1")).toBe("current");
-  expect(prefs.read().toolStamps["coordinator-1"]).toMatchObject({ session: "conversation-1", contract: 2 });
+  expect(prefs.read().toolStamps["coordinator-1"]).toMatchObject({ session: "conversation-1", contract: 2, fingerprint: two.stamps.fingerprint });
 
   // A contract that only grew keeps older conversations current.
   const prefsB = store();
   await (await board(prefsB, oldBuild)).call(h);
   const grown = await board(prefsB, newBuild, { version: 2, compatibleFrom: 1 });
   expect(grown.stamps.staleness("coordinator-1", "conversation-1")).toBe("current");
+});
+
+test("a compaction clears what the board held against an older conversation", async () => {
+  const prefs = store({ session: "conversation-1", fingerprint: "f".repeat(64) });
+  const h = host();
+  const b = await board(prefs, oldBuild);
+  expect(JSON.parse((await b.guide(h)).text).conversation.definitions).toBe("older");
+  expect(prefs.read().toolStamps["coordinator-1"].early).toBe(true);
+  // The next board tool call sees the compaction in the coordinator's timeline.
+  h.compact();
+  await b.call(h);
+  expect(prefs.read().toolStamps["coordinator-1"].early).toBeUndefined();
+  expect(prefs.read().toolStamps["coordinator-1"]).toMatchObject({ contract: 1, fingerprint: b.stamps.fingerprint });
+  expect(JSON.parse((await b.guide(h)).text).conversation.definitions).toBe("current");
+
+  // The turn hook does the same without waiting for a tool call, and only reads a timeline when it could matter.
+  const prefsB = store({ session: "conversation-1", fingerprint: "f".repeat(64) });
+  const hb = host();
+  const c = await board(prefsB, oldBuild);
+  await c.stamps.refresh(hb.paseo, "coordinator-1");
+  expect(hb.state.fetches).toBe(1);
+  expect(c.stamps.staleness("coordinator-1", "conversation-1")).toBe("stale");
+  hb.compact();
+  await c.stamps.refresh(hb.paseo, "coordinator-1");
+  expect(c.stamps.staleness("coordinator-1", "conversation-1")).toBe("current");
+  const before = hb.state.fetches;
+  await c.stamps.refresh(hb.paseo, "coordinator-1");
+  await c.call(hb);
+  await c.stamps.refresh(hb.paseo, "worker-1");
+  expect(hb.state.fetches).toBe(before);
+
+  // A timeline the board cannot read changes nothing, and never the tool's own result.
+  const prefsC = store({ session: "conversation-1", fingerprint: "f".repeat(64) });
+  const hc = host();
+  hc.state.timelineFails = true;
+  hc.compact();
+  const d = await board(prefsC, oldBuild);
+  expect((await d.call(hc)).text).toStartWith("planned");
+  await d.stamps.refresh(hc.paseo, "coordinator-1");
+  expect(d.stamps.staleness("coordinator-1", "conversation-1")).toBe("stale");
 });
 
 test("/clear starts a new conversation, which gets the served contract on its first call", async () => {
@@ -276,32 +337,47 @@ test("the guide note is attached once per guide revision", async () => {
   expect((await d.call(h)).text).toBe("planned");
 });
 
-test("a JSON result does not count as told", async () => {
+test("a JSON result is left alone, and the note waits for a text result", async () => {
   const prefs = store({ session: "conversation-1", fingerprint: "f".repeat(64) });
   const h = host();
   const b = await board(prefs, [...oldBuild, listTool]);
-  const listing = await b.run("read_board", {}, h);
-  expect(JSON.parse(listing.text)).toEqual([{ id: "worker-1" }]);
-  expect(listing.structuredContent.boardToolsNotice).toBe(guideNote);
-  // The conversation may not have seen it, so the next text result still carries it.
+  // However often a JSON tool is called, its result keeps its shape.
+  for (let i = 0; i < 3; i++) {
+    const listing = await b.run("read_board", {}, h);
+    expect(listing).toEqual({ text: JSON.stringify([{ id: "worker-1" }]) });
+  }
+  expect(prefs.read().toolStamps["coordinator-1"].noted).toBeUndefined();
   expect((await b.call(h)).text).toBe(`planned\n\n${guideNote}`);
-  expect((await b.run("read_board", {}, h)).structuredContent).toBeUndefined();
+  expect((await b.call(h)).text).toBe("planned");
+  expect(await b.run("read_board", {}, h)).toEqual({ text: JSON.stringify([{ id: "worker-1" }]) });
+});
+
+test("reading one topic is not reading the guide", async () => {
+  const prefs = store();
+  const h = host();
+  const b = await board(prefs, extended("host"));
+  expect(JSON.parse((await b.guide(h, "plan_assignment")).text).action).toBe("plan_assignment");
+  expect(prefs.read().toolStamps["coordinator-1"].guide).toBe("");
+  expect((await b.call(h)).text).toBe(`planned\n\n${guideNote}`);
+  // The list is what says what was added.
+  const other = store();
+  const c = await board(other, extended("host"));
+  await c.guide(h);
+  expect(other.read().toolStamps["coordinator-1"].guide).toBe(c.stamps.served!.guide);
+  expect((await c.call(h)).text).toBe("planned");
 });
 
 test("the note keeps a result intact", () => {
-  const listing = JSON.stringify([{ id: "worker-1" }]);
-  const json = withGuideNote({ text: listing });
-  expect(json.told).toBe(false);
-  expect(json.result.text).toBe(listing);
-  expect((json.result.structuredContent as any).boardToolsNotice).toBe(guideNote);
-  const object = withGuideNote({ text: "{\"sessionId\":\"worker-1\"}", structuredContent: { kept: true } });
-  expect(JSON.parse(object.result.text!)).toEqual({ sessionId: "worker-1" });
-  expect(object.result.structuredContent).toEqual({ kept: true, boardToolsNotice: guideNote });
-  // Plain text, and text that only looks like JSON, carry the note at the end.
-  expect(withGuideNote({ text: "Recorded." })).toEqual({ told: true, result: { text: `Recorded.\n\n${guideNote}`, structuredContent: { boardToolsNotice: guideNote } } });
+  // A JSON result is returned as it came.
+  const listing = { text: JSON.stringify([{ id: "worker-1" }]) };
+  expect(withGuideNote(listing)).toEqual({ told: false, result: listing });
+  const object = { text: "{\"sessionId\":\"worker-1\"}", structuredContent: { kept: true } };
+  expect(withGuideNote(object)).toEqual({ told: false, result: object });
+  // Plain text, and text that only looks like JSON, carry the note at the end. Structured content is never touched.
+  expect(withGuideNote({ text: "Recorded." })).toEqual({ told: true, result: { text: `Recorded.\n\n${guideNote}` } });
   expect(withGuideNote({ text: "[draft] saved" }).result.text).toEndWith(guideNote);
   expect(withGuideNote({}).result.text).toBe(guideNote);
-  expect(withGuideNote({ text: "x", structuredContent: [1] }).result.structuredContent).toEqual([1]);
+  expect(withGuideNote({ text: "x", structuredContent: [1], isError: true }).result).toEqual({ text: `x\n\n${guideNote}`, structuredContent: [1], isError: true });
 });
 
 test("the note names the guide in both languages and asks for nothing drastic", () => {
@@ -457,12 +533,17 @@ test("notice wording orders the fixes from least to most context lost", () => {
   expect(notice.steps[0]).toContain("read_board_guide");
   expect(notice.steps[1]).toContain("/compact");
   expect(notice.steps[1]).not.toContain("/clear");
+  // The step says what it rests on, and when the notice goes away.
+  expect(notice.steps[1]).toContain("Claude Code 2.1.330");
+  expect(notice.steps[1]).toContain("새로 고치면");
   expect(notice.steps[2]).toContain("/clear");
   for (const step of notice.steps.slice(1)) expect(step).toContain("직접 입력");
   const english = staleToolsNotice({ stale: true }, en)!;
   expect(english.title).toContain("from before the update");
   expect(english.steps[0]).toContain("read_board_guide");
   expect(english.steps[1]).toContain("/compact");
+  expect(english.steps[1]).toContain("Claude Code 2.1.330");
+  expect(english.steps[1]).toContain("refresh the board");
   expect(english.steps[2]).toContain("/clear");
   for (const t of [ko, en]) {
     const view = staleToolsNotice({ stale: true }, t)!;

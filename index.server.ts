@@ -284,6 +284,10 @@ export default function contribute(server: PluginServerContext) {
     await Promise.all([
       onRecipientAvailable(event, context),
       recordDigestCompletion(prefs, context.paseo, event).catch(() => console.warn("Could not record the completed digest.")),
+      // A turn may have compacted the coordinator's conversation, which makes it load the board tools again.
+      (async () => {
+        try { if (event.agent?.id && prefs.read().coordinator === event.agent.id) await toolStamps.refresh(context.paseo, event.agent.id); } catch { /* unknown stays unknown */ }
+      })(),
     ]);
   });
   const removeReplyClose = server.addHook("agent.close.after",async (event,ctx)=>{ if(event.agent?.id) await resumeReplies(ctx,event.agent.id); });

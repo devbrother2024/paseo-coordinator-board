@@ -7,9 +7,9 @@ import { z } from "zod";
 // conversation keeps its ID and makes it load the tools again.
 //
 // The board stamps each coordinator conversation on its first board tool call: the fingerprint of the
-// tool contract it served then, and the contract number. A contract tool call reports the contract
-// number written in the definition the conversation holds, which is how the board learns that an old
-// conversation caught up.
+// tool contract it served then, and the contract number. Later it goes by what it can observe, never by
+// what a call claims: a call to a tool shows the conversation holds the contract that introduced the
+// tool, and a compaction in the coordinator's timeline shows it loads every definition again.
 export type ToolStamp = {
   session: string; fingerprint: string;
   // The contract the conversation holds. Missing on a stamp from before the contract existed.
@@ -24,7 +24,8 @@ export type ToolStaleness = "stale" | "current" | "unknown";
 // What this board build serves: the contract fingerprint and numbers, and the guide revision.
 // The revision is empty while nothing exists beyond the tool definitions.
 export type ServedTools = { fingerprint: string; contract: number; compatibleFrom: number; guide: string };
-export type ToolCall = { held?: number; readGuide?: boolean };
+// `since` is the contract that introduced the called tool, when the tool was not part of every contract.
+export type ToolCall = { since?: number; readGuide?: boolean };
 
 // A provider conversation ID the board is willing to store. Anything longer or stranger is unknown.
 export const conversationIdPattern = /^[A-Za-z0-9._:-]{1,256}$/;
@@ -46,12 +47,24 @@ export function toolStaleness(stamp: ToolStamp | undefined, current: ServedTools
 export function nextToolStamp(previous: ToolStamp | undefined, current: ServedTools | undefined, session: string | null | undefined, call: ToolCall = {}): ToolStamp | undefined {
   if (!current || !validConversationId(session)) return previous;
   let stamp: ToolStamp = previous?.session === session ? previous : { session, fingerprint: current.fingerprint, contract: current.contract, guide: "" };
-  const held = call.held;
-  if (held !== undefined && Number.isInteger(held) && held >= 1 && held <= current.contract && (stamp.contract ?? 0) < held) {
-    stamp = { ...stamp, contract: held, ...(stamp.contract === undefined ? { early: true } : {}) };
+  const since = call.since;
+  if (since !== undefined && Number.isInteger(since) && since >= 1 && since <= current.contract && (stamp.contract ?? 0) < since) {
+    // The other tools it loaded earlier are still the older copies.
+    stamp = { ...stamp, contract: since, ...(stamp.contract === undefined ? { early: true } : {}) };
   }
   if (call.readGuide && stamp.guide !== current.guide) stamp = { ...stamp, guide: current.guide };
   return stamp;
+}
+
+// The stamp of a conversation the board saw compacted: it loads every board tool again, so it holds
+// what the board serves now, like a new conversation under the same ID.
+export function compactedToolStamp(stamp: ToolStamp, current: ServedTools | undefined): ToolStamp {
+  return current ? { session: stamp.session, fingerprint: current.fingerprint, contract: current.contract, guide: "" } : stamp;
+}
+
+// Whether the board still holds something against the conversation that a compaction would clear.
+export function behindServedTools(stamp: ToolStamp | undefined, current: ServedTools | undefined): boolean {
+  return !!stamp && !!current && (!!stamp.early || toolStaleness(stamp, current, stamp.session) === "stale");
 }
 
 // A conversation is told once per guide revision to read the guide, until it has read that revision.

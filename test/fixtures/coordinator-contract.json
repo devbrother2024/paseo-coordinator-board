@@ -160,11 +160,6 @@
           "minLength": 1,
           "type": "string"
         },
-        "contract": {
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991,
-          "type": "integer"
-        },
         "input": {
           "additionalProperties": {},
           "propertyNames": {
@@ -174,8 +169,7 @@
         }
       },
       "required": [
-        "action",
-        "contract"
+        "action"
       ],
       "type": "object"
     },
@@ -339,20 +333,12 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
-        "contract": {
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991,
-          "type": "integer"
-        },
         "topic": {
           "maxLength": 64,
           "minLength": 1,
           "type": "string"
         }
       },
-      "required": [
-        "contract"
-      ],
       "type": "object"
     },
     "review_board_records": {

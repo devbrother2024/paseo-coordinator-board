@@ -2,16 +2,19 @@ import { createHash } from "node:crypto";
 import type { AgentToolDefinition, AgentToolResult, PluginHandlerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
 import type { SessionRow } from "../shared/contract";
-import { boardActionName, boardGuideName, coordinatorContract, type CoordinatorContract } from "../shared/coordinator-contract";
+import { boardActionName, boardGuideName, contractToolsSince, coordinatorContract, type CoordinatorContract } from "../shared/coordinator-contract";
 import {
-  conversationProvider, guideNoteDue, nextToolStamp, providerKeepsTools, toolStaleness, validConversationId,
+  behindServedTools, compactedToolStamp, conversationProvider, guideNoteDue, nextToolStamp, providerKeepsTools, toolStaleness, validConversationId,
   type CoordinatorTools, type ServedTools, type ToolCall, type ToolStamp, type ToolStaleness,
 } from "../shared/coordinator-tools";
-import { heldContract, inputShape, type Definitions } from "./board-guide";
+import { inputShape, type Definitions } from "./board-guide";
 import type { PreferenceStore } from "./preferences";
 
 type Tool = Pick<AgentToolDefinition, "name" | "input">;
 type Sdk = Pick<PluginHandlerContext["paseo"], "agents">;
+// How far back the board looks for a compaction. A stamp that is behind is checked after every
+// coordinator turn, on each board tool call and on each board refresh, so the newest entries suffice.
+const compactionWindow = 200;
 
 // The contract surface: each tool's name and the shape of its input. The code that runs a tool lives
 // in the board and always runs the installed build, and wording is not part of the contract.
@@ -59,17 +62,37 @@ export class CoordinatorToolStamps {
     return stamp;
   }
 
-  private write(agentId: string, change: (stamp: ToolStamp | undefined) => ToolStamp | undefined, now: Date) {
+  // `at` is when the conversation was stamped, or last seen to load its tools again. It does not move
+  // when the board only learns more about the same definitions.
+  private write(agentId: string, change: (stamp: ToolStamp | undefined) => ToolStamp | undefined, now: Date, restart = false) {
+    const saved = this.prefs.read().toolStamps[agentId];
     const previous = this.stamp(agentId);
     const next = change(previous);
     if (next && next !== previous) {
+      const at = saved && saved.session === next.session && !restart ? saved.at : now.toISOString();
       this.prefs.change(value => {
         const keep = new Set([agentId, value.coordinator, value.pendingCoordinator?.id]);
         for (const id of Object.keys(value.toolStamps)) if (!keep.has(id)) delete value.toolStamps[id];
-        value.toolStamps[agentId] = { ...next, at: now.toISOString() };
+        value.toolStamps[agentId] = { ...next, at };
       });
     }
     return next;
+  }
+
+  // Looks for a compaction after the stamp, for a stamp that is behind what the board serves. A
+  // compacted conversation loads its board tools again, so the board holds nothing against it.
+  // Whatever cannot be read leaves the stamp as it is.
+  async refresh(paseo: Sdk, agentId: string, now = new Date()): Promise<void> {
+    const saved = this.prefs.read().toolStamps[agentId];
+    if (!saved || !behindServedTools(this.stamp(agentId), this.current)) return;
+    try {
+      const page = await paseo.agents.ref(agentId).timeline.refetch({ direction: "tail", projection: "projected", limit: compactionWindow });
+      const since = Date.parse(saved.at);
+      const compacted = page.entries.some(({ item, timestamp }) => item.type === "compaction" && item.status === "completed" && Date.parse(timestamp) > since);
+      if (compacted) this.write(agentId, stamp => stamp && stamp.session === saved.session ? compactedToolStamp(stamp, this.current) : stamp, now, true);
+    } catch {
+      // Unknown stays unknown.
+    }
   }
 
   // A board coordinator called a board tool from `session`. Stamps a conversation on its first call,
@@ -95,6 +118,7 @@ export class CoordinatorToolStamps {
   // How the definitions held by the coordinator's current conversation compare with this board.
   async definitions(paseo: Sdk, agent: { id: string }): Promise<Definitions> {
     if (!this.current) return "unknown";
+    await this.refresh(paseo, agent.id);
     const { session, keepsTools } = await providerConversation(paseo, agent.id);
     if (!session || !keepsTools) return "unknown";
     const stamp = this.stamp(agent.id);
@@ -116,15 +140,11 @@ const isJson = (text: string) => {
   try { JSON.parse(text); return true; } catch { return false; }
 };
 
-// Adds the note without breaking the result. Paseo turns `text` into the only content item the
-// conversation reads, so a JSON result keeps its text and carries the note in structured content.
-// `told` says whether the conversation can have read it.
+// Adds the note to a result the conversation reads as text. A JSON result is returned as it came, so
+// its shape never changes; the note waits for the next text result. `told` says whether it was added.
 export function withGuideNote(result: AgentToolResult): { result: AgentToolResult; told: boolean } {
-  const structured = result.structuredContent && typeof result.structuredContent === "object" && !Array.isArray(result.structuredContent)
-    ? result.structuredContent as Record<string, unknown> : result.structuredContent === undefined ? {} : null;
-  const note = structured ? { structuredContent: { ...structured, boardToolsNotice: guideNote } } : {};
-  if (result.text && isJson(result.text)) return { result: { ...result, ...note }, told: false };
-  return { result: { ...result, ...note, text: result.text ? `${result.text}\n\n${guideNote}` : guideNote }, told: true };
+  if (result.text && isJson(result.text)) return { result, told: false };
+  return { result: { ...result, text: result.text ? `${result.text}\n\n${guideNote}` : guideNote }, told: true };
 }
 
 // Every board tool call from a Claude Code coordinator stamps its conversation. A conversation that has
@@ -138,8 +158,12 @@ export function stampingTool<T extends AgentToolDefinition>(tool: T, stamps: Coo
       try {
         const { session, keepsTools } = await providerConversation(context.paseo, context.agent.id);
         if (!keepsTools) return result;
+        await stamps.refresh(context.paseo, context.agent.id);
         const guide = tool.name === boardGuideName;
-        const call: ToolCall = { ...(guide || tool.name === boardActionName ? { held: heldContract(input) } : {}), readGuide: guide && !result.isError };
+        // Only the list of actions says what was added, so only reading the list counts as reading the guide.
+        const overview = guide && !result.isError && (input as { topic?: unknown } | null)?.topic === undefined;
+        const since = Object.hasOwn(contractToolsSince, tool.name) ? contractToolsSince[tool.name] : undefined;
+        const call: ToolCall = { ...(since === undefined ? {} : { since }), readGuide: overview };
         const { noteDue } = stamps.called(context.agent.id, session, call);
         if (!noteDue || guide) return result;
         const noted = withGuideNote(result);
@@ -163,9 +187,13 @@ export function coordinatorToolsView(staleness: ToolStaleness, row: Pick<Session
 
 // Reads the coordinator's conversation only when its stamp would be stale in the same conversation.
 // Only a conversation on a provider that keeps its definitions is ever stamped.
-export async function readCoordinatorTools(paseo: Sdk, stamps: Pick<CoordinatorToolStamps, "stamp" | "served" | "staleness">,
+export async function readCoordinatorTools(paseo: Sdk, stamps: Pick<CoordinatorToolStamps, "stamp" | "served" | "staleness" | "refresh">,
   row: Pick<SessionRow, "id" | "status" | "serverId"> | undefined): Promise<CoordinatorTools | undefined> {
   if (!row || row.serverId) return undefined;
+  const before = stamps.stamp(row.id);
+  if (!before || toolStaleness(before, stamps.served, before.session) !== "stale") return undefined;
+  // The person may have compacted the conversation since.
+  await stamps.refresh(paseo, row.id);
   const stamp = stamps.stamp(row.id);
   if (!stamp || toolStaleness(stamp, stamps.served, stamp.session) !== "stale") return undefined;
   let conversation: Awaited<ReturnType<typeof providerConversation>>;

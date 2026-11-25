@@ -68,13 +68,13 @@ test("every board tool is an action, and the guide repeats the tool's own descri
   const tools = await coordinatorTools();
   const guide = tools.find(tool => tool.name === boardGuideName);
   const context = { agent: { id: "coordinator-1", provider: "codex" }, paseo: {} };
-  const overview = JSON.parse((await guide.execute({ contract: 1 }, context)).text);
+  const overview = JSON.parse((await guide.execute({}, context)).text);
   const named = tools.filter(tool => tool.name !== boardGuideName && tool.name !== boardActionName);
   expect(overview.actions.map((action: any) => action.name)).toEqual(named.map(tool => tool.name));
   // Contract 1 is the installed board: nothing yet exists only through board_action.
   expect(overview.board).toEqual({ contract: coordinatorContract.version, guide: "" });
   for (const tool of named) {
-    const topic = JSON.parse((await guide.execute({ contract: 1, topic: tool.name }, context)).text);
+    const topic = JSON.parse((await guide.execute({ topic: tool.name }, context)).text);
     // The descriptions keep their full guidance, so a new conversation misses no rule.
     expect(tool.description.length).toBeGreaterThan(150);
     expect(topic.usage).toBe(tool.description);
@@ -93,10 +93,10 @@ test("the assignment route fields pass through board_action", async () => {
   };
   // Another session gets the tool's own refusal, which means the input passed the installed checks.
   const outsider = { agent: { id: "worker-1", provider: "codex" }, paseo: {} };
-  expect(action.execute({ contract: 1, action: "assign_board_worker", input: { job } }, outsider))
+  expect(action.execute({ action: "assign_board_worker", input: { job } }, outsider))
     .rejects.toThrow("현재 지정된 코디네이터만 작업을 배정할 수 있습니다.");
   // A value the installed board does not accept is refused before anything runs.
-  const refused = await action.execute({ contract: 1, action: "assign_board_worker", input: { job: { ...job, routeSource: "worker" } } }, outsider);
+  const refused = await action.execute({ action: "assign_board_worker", input: { job: { ...job, routeSource: "worker" } } }, outsider);
   expect(refused.isError).toBe(true);
   expect(refused.text).toContain("job.routeSource");
   expect(refused.text).toContain("\"routeSource\"");

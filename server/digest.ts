@@ -68,12 +68,18 @@ export async function sendCoordinatorRequest(
 
 type TimelineItem = Awaited<ReturnType<ReturnType<PluginHandlerContext["paseo"]["agents"]["ref"]>["timeline"]["refetch"]>>["entries"][number]["item"];
 
+const reportsError = (output: unknown) => !!output && typeof output === "object" &&
+  ((output as { isError?: unknown }).isError === true || (output as { is_error?: unknown }).is_error === true);
+
 // The board tools a completed tool call ran. A tool run through board_action counts as that tool too.
+// A call the board refused ran nothing: Paseo's Claude provider reports a tool error as a failed call,
+// and for a provider that reports it as completed the error flag in its output is checked as well.
 export function completedBoardTools(item: TimelineItem): string[] {
   if (item.type !== "tool_call" || item.status !== "completed") return [];
   const name = item.name.split("__").at(-1) ?? item.name;
-  const detail: unknown = item.detail;
-  const input = name === boardActionName && detail && typeof detail === "object" ? (detail as { input?: unknown }).input : undefined;
+  const detail: { input?: unknown; output?: unknown } | null = item.detail && typeof item.detail === "object" ? item.detail as { input?: unknown; output?: unknown } : null;
+  if (reportsError(detail?.output)) return [];
+  const input = name === boardActionName ? detail?.input : undefined;
   const action = input && typeof input === "object" ? (input as { action?: unknown }).action : undefined;
   return typeof action === "string" ? [name, action] : [name];
 }

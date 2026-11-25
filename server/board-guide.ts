@@ -102,16 +102,7 @@ export function guideRevision(actions: ReadonlyMap<string, BoardAction>): string
   return beyond.length ? createHash("sha256").update(JSON.stringify(beyond)).digest("hex").slice(0, 12) : "";
 }
 
-// The contract number written in the definition the calling conversation holds. The description
-// carries the number, and the format takes any, so a call from an older definition still arrives.
-const contractField = () => z.number().int().positive()
-  .describe(`Always ${coordinatorContract.version}. The contract number of this tool definition, so the board knows which definitions this conversation holds.`);
 const names = (actions: ReadonlyMap<string, BoardAction>) => [...actions.keys()].join(", ");
-
-export function heldContract(input: unknown): number | undefined {
-  const value = input && typeof input === "object" ? (input as { contract?: unknown }).contract : undefined;
-  return typeof value === "number" ? value : undefined;
-}
 
 export function boardActionTool(actions: ReadonlyMap<string, BoardAction>): CoordinatorTool {
   return defineAgentTool({
@@ -119,7 +110,6 @@ export function boardActionTool(actions: ReadonlyMap<string, BoardAction>): Coor
     description: "Run a board action by name with the installed board's own input checks. Use it for an action, or an input field, that the tool definitions in this conversation do not have. "
       + `${boardGuideName} lists the actions and what each accepts now. This grants nothing beyond the board's named tools.`,
     input: z.strictObject({
-      contract: contractField(),
       action: z.string().min(1).max(64).describe(`An action name from ${boardGuideName}.`),
       input: z.record(z.string(), z.unknown()).optional().describe("The action's input. Its fields are checked by the installed board, not by this definition."),
     }),
@@ -153,7 +143,6 @@ export function boardGuideTool(actions: ReadonlyMap<string, BoardAction>, revisi
     description: "Read what the installed board accepts now, and what it added since this conversation received its board tools: actions without a tool of their own, and input fields that the tool definitions here do not list. "
       + `Without a topic, list the actions. With an action name as topic, return that action's usage and current input schema. Read it when a board tool result says so, and before using ${boardActionName}.`,
     input: z.strictObject({
-      contract: contractField(),
       topic: z.string().min(1).max(64).optional().describe("An action name. Omit it for the list."),
     }),
     async execute({ topic }, context) {
@@ -171,8 +160,8 @@ export function boardGuideTool(actions: ReadonlyMap<string, BoardAction>, revisi
         conversation: { definitions: held, note: conversationNotes[held] },
         use: [
           "Call the board's named tools as this conversation defines them.",
-          `${boardActionName}({ contract, action, input }) runs any action below with the installed board's checks. Use it for an action without a tool, or for a field your tool definition lacks.`,
-          `${boardGuideName}({ contract, topic: "<action>" }) returns that action's usage and current input schema. Read it before passing a field under onlyThroughBoardAction or running an action with tool: false.`,
+          `${boardActionName}({ action, input }) runs any action below with the installed board's checks. Use it for an action without a tool, or for a field your tool definition lacks.`,
+          `${boardGuideName}({ topic: "<action>" }) returns that action's usage and current input schema. Read it before passing a field under onlyThroughBoardAction or running an action with tool: false.`,
           "A result and its permission checks are the same through either path.",
         ],
         actions: [...actions.values()].map(action => ({ name: action.name, summary: action.summary, tool: action.tool, onlyThroughBoardAction: action.beyond })),

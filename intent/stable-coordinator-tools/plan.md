@@ -10,10 +10,10 @@ Spec: [spec.md](spec.md)
 
 1. 시험 먼저: `test/coordinator-tools.test.ts`를 계약 기준 판정과 한 번 알림으로 고치고, `test/board-guide.test.ts`와 `test/coordinator-contract.test.ts`를 더한다.
 2. `shared/coordinator-contract.ts`(계약 번호, 도구 이름), `shared/coordinator-tools.ts`(기록 형식, 판정, 알림 조건).
-3. `server/board-guide.ts`(기능 목록, `board_action`, `read_board_guide`, 안내 판본), `server/coordinator-tools.ts`(이름과 입력 형식만 보는 지문, 기록, 알림), `server/coordinator.ts`(두 도구 붙이기), `server/preferences.ts`(기록 항목).
+3. `server/board-guide.ts`(기능 목록, `board_action`, `read_board_guide`, 안내 판본), `server/coordinator-tools.ts`(이름과 입력 형식만 보는 지문, 기록, 알림, 압축 확인), `server/coordinator.ts`(두 도구 붙이기), `server/preferences.ts`(기록 항목), `index.server.ts`(코디네이터 턴이 끝날 때 압축 확인).
 4. 기존 도구 일곱 개는 설명, 입력 형식, 실행 함수를 모두 그대로 둔다(설명을 줄였다가 설계 검토에서 되돌렸다). `server/digest.ts`의 완료 판정이 `board_action` 경유 호출을 세게 한다(구현 중 발견). 실행기 판정을 바탕 구현 기준으로 바꾼다(설계 검토 반영).
 5. `client/coordinator-tools.ts`, `client/stale-coordinator-tools.tsx`의 안내 문구와 버튼 순서.
-6. 계약 스냅샷 `test/fixtures/coordinator-contract.json`.
+6. 계약 스냅샷 `test/fixtures/coordinator-contract.json`. 병합 전에 두 도구의 `contract` 항목을 빼면서 계약 1의 스냅샷을 한 번 다시 만들었다(아직 배포되지 않은 계약이라 번호는 그대로).
 7. 문서: `README.md`, `OVERVIEW.md`, `AGENTS.md`, 코디네이터 헌장과 예시 문서의 안내 한 줄, `intent/README.md` 목록.
 
 ## 순서
