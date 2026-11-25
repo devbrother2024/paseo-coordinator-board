@@ -15,8 +15,14 @@ export function unquoted(line: string) {
   return line.replace(quoted, match => "_".repeat(match.length));
 }
 
-/** A line asks for a decision when its own words, outside any quotes, make the request. */
+// A sentence ends at . ! ? 。 ！ ？ (and any closing mark after it) followed by a space. "3.5GB" and "v1.2" have no space after the dot, and "e.g." / "i.e." / "vs." do not end a sentence.
+const sentenceEnd = /(?<!\be\.g\.|\bi\.e\.|\bvs\.)(?<=[.!?。！？][*_)\]」』”’]*)\s+/u;
+
+/**
+ * A line asks for a decision when one of its sentences, outside any quotes, makes the request.
+ * A negation ("결정할 것은 없습니다") or an offer ("필요하면 알려 주세요") cancels only the sentence it is in, so a request in the next sentence still counts.
+ * Known limit: a request that only the sentences before or after it can negate ("No decision is needed. If this changes, please choose a region.") is judged one sentence at a time. A missed card is caught by the board's check for sessions that stopped without a card.
+ */
 export function asksForDecision(line: string) {
-  const own = unquoted(line);
-  return !noQuestion.test(own) && !optionalOffer.test(own) && request.test(own);
+  return unquoted(line).split(sentenceEnd).some(sentence => !noQuestion.test(sentence) && !optionalOffer.test(sentence) && request.test(sentence));
 }

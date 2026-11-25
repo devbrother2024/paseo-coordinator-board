@@ -170,3 +170,24 @@ test("a list with no request line above it keeps its own start", () => {
   const details = conversationQuestionDetails(evidence(["정리했습니다.", "- 원본 보관", "- **\"옮겨\"**라고 하면 됩니다."].join("\n")));
   expect(details?.markdown.split("\n")[0]).toBe("- **\"옮겨\"**라고 하면 됩니다.");
 });
+
+test("a negation or an offer only cancels the sentence it is in", () => {
+  for (const line of [
+    "No decision needed for the tests. Please choose a deployment region.",
+    "결정할 것은 없습니다. 배포 지역을 골라 주세요.",
+    "**결정할 것:** 없음. 다음 줄은 별개입니다. 배포 지역을 골라 주세요.",
+    "If you like, I can add tests. Shall I merge it?",
+    "A안으로 할까요? 궁금하시면 알려 주세요. 결정이 필요합니다.",
+    "Nothing needs your decision. **Decision needed:** which cut to use.",
+    "Which of e.g. A or B would you prefer?",
+  ]) expect([line, asksForDecision(line)]).toEqual([line, true]);
+  for (const line of [
+    "배포 지역은 정해 두었습니다. 결정할 것은 없습니다.",
+    "Please choose a region if you like. No decision needed.",
+    "결정이 필요하시면 말씀해 주세요. 답을 받고 반영했습니다.",
+    "All done. Nothing needs your decision. Let me know if you want more.",
+  ]) expect([line, asksForDecision(line)]).toEqual([line, false]);
+  // A version number or size is not a sentence end.
+  expect(asksForDecision("v1.2 용량은 3.5GB입니다. 결정할 것은 없습니다.")).toBe(false);
+  expect(asksForDecision("용량은 3.5GB입니다. 이대로 확인해 주세요.")).toBe(true);
+});
