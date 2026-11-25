@@ -39,9 +39,11 @@ import { applyPullJudgments } from "./shared/pull-judgments";
 import { operatingDirectories, operatingDirectory } from "./server/operating-folders";
 import { CoordinatorToolStamps, readCoordinatorTools } from "./server/coordinator-tools";
 import { coveredSessionIds, decorateReviewWait, reviewWaitThreshold } from "./server/review-wait";
+import { answeredRequests } from "./shared/answered-requests";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(hostVisibility);
+  server.registerSettings(answeredRequests);
   const staleHours = reviewWaitThreshold(server);
   const home = process.env.PASEO_HOME || join(homedir(), ".paseo");
   const dataDir = join(home, "plugin-data", "coordinator-board");

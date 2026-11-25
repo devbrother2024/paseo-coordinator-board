@@ -7,12 +7,27 @@ import {
 } from "../client/pending-requests";
 import { wasSent, withSent } from "../shared/answered-requests";
 import { sessionDetail } from "../client/model";
+import contribute from "../index.server";
 
 const ko = (korean: string) => korean;
 const en = (_: string, english: string) => english;
 const request = (value: Record<string, unknown>) => ({ id: "request-1", provider: "claude", name: "Tool", ...value }) as unknown as PendingRequest;
 const claudeQuestion = (value: Record<string, unknown> = {}) => request({ kind: "question", name: "AskUserQuestion", ...value });
 const claudePlan = (value: Record<string, unknown> = {}) => request({ kind: "plan", name: "ExitPlanMode", ...value });
+
+test("the plugin registers a host response record that starts empty and rejects malformed entries", () => {
+  const registered = new Map<string, { scope: string; schema: { parse(value: unknown): unknown; safeParse(value: unknown): { success: boolean } } }>();
+  contribute({
+    handle() {}, addHook: () => () => {},
+    registerSettings(definition: typeof import("../shared/answered-requests").answeredRequests) { registered.set(definition.id, definition); },
+  } as never);
+  const record = registered.get("answered-requests");
+  expect(record?.scope).toBe("host");
+  expect(record?.schema.parse({})).toEqual({ sent: [] });
+  expect(record?.schema.safeParse({ sent: [{ request: "" }] }).success).toBe(false);
+  const sent = [{ session: "worker-1", request: "request-1", at: 123 }];
+  expect(record?.schema.parse({ sent })).toEqual({ sent });
+});
 
 // The shape a Claude AskUserQuestion request carries after the host normalizes it.
 const claudeInput = {

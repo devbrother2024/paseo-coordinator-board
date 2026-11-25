@@ -21,7 +21,9 @@ export function canReceiveBoardInput(agent:Pick<Entry["agent"],"status"|"activeT
 }
 
 export function permissionVersion(agent: Entry["agent"]) {
-  const requests = agent.pendingPermissions.map(p => [p.id, p.title, p.name, p.description]);
+  const requests = agent.pendingPermissions.map(p => [p.id, p.title, p.name, p.description, p.kind,
+    p.detail?.type === "shell" ? [p.detail.command, p.detail.cwd] : p.input?.command,
+    p.detail && "filePath" in p.detail ? p.detail.filePath : p.input?.file_path ?? p.input?.path]);
   if (!requests.length && (agent.attentionReason !== "permission" || !agent.updatedAt)) return undefined;
   return createHash("sha256").update(JSON.stringify(requests.length ? requests : agent.updatedAt)).digest("hex");
 }
@@ -29,7 +31,9 @@ export function permissionVersion(agent: Entry["agent"]) {
 function observedState(agent: Entry["agent"]): Pick<SessionRow, "lane" | "detail" | "nativePending"> {
   const pending = agent.pendingPermissions.length;
   if (pending) {
-    const labels = agent.pendingPermissions.map(p => p.title || p.name).filter(Boolean);
+    // Providers may put the full command in a tool request's title. The card reads the
+    // request itself to show the summary and keeps the original out of the headline.
+    const labels = agent.pendingPermissions.filter(p => p.kind !== "tool").map(p => p.title || p.name).filter(Boolean);
     const detail = [`응답을 기다리는 요청 ${pending}건`, ...labels].join(" · ").slice(0, 2000);
     return { lane: "human", nativePending: true, detail };
   }
