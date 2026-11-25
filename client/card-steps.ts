@@ -96,7 +96,8 @@ export function trackedChipSide(where: TrackedDecision["where"], route: TrackedR
     return source ? "source" : null;
   }
   if (!blocked || reachable.has(blocked)) return source ? "source" : links.owner ? "owner" : null;
-  return links.owner ? "owner" : null;
+  // The coordinator chip stands in only when it takes the redirected reply. A closed one is no way forward.
+  return links.owner && route?.fallbackId ? "owner" : null;
 }
 
 // What a card offers for its reply. The board only sends: to the session that takes the reply, or, when that session
@@ -137,4 +138,11 @@ export function recordHeaderParts(item: Pick<TrackedDecision, "since" | "dueAt">
     parts.push(end <= now ? t(`기한 지남 · ${ko}`, `Overdue · ${en}`) : t(`기한 ${ko}`, `Due ${en}`));
   }
   return parts;
+}
+
+// A step that already starts with its own number ("1.", "1)", "1 ") shows it once in the numbered list. A number that
+// is not the step's place is part of what the step says.
+export function stepText(line: string, index: number) {
+  const match = /^\s*(\d+)[.)]?\s+/.exec(line);
+  return match && Number(match[1]) === index + 1 ? line.slice(match[0].length) : line;
 }

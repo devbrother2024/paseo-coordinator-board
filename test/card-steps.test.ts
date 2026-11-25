@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   advancesOnChoice, answerSummary, clampStep, firstOpenStep, foldsAsk, foldsCard, isHumanCheck, nextOpenStep, recommendAllPicks,
-  recordHeaderParts, trackedChipSide, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps,
+  recordHeaderParts, stepText, trackedChipSide, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps,
 } from "../client/card-steps";
 import { optionId } from "../client/tracked-reply-draft";
 import { trackedDecisionSchema, type TrackedDecision } from "../shared/tracked-decisions";
@@ -132,6 +132,9 @@ test("the card shows one chip: the session that takes the reply, or the one that
   // An ended work session keeps no chip of its own. With no coordinator to open, only the reason shows.
   expect(trackedChipSide("session", route(null, "closed"), { owner: false, source: "local" })).toBeNull();
   expect(trackedChipSide("session", route(null, "error", "owner"), { owner: true, source: "local" })).toBe("owner");
+  // The ledger owner is closed too, so nothing takes a redirected reply: no coordinator chip either.
+  expect(trackedChipSide("session", route(null, "closed", null), { owner: true, source: "local" })).toBeNull();
+  expect(trackedChipSide("session", route(null, "no-session", null), { owner: true, source: undefined })).toBeNull();
   expect(trackedChipSide("session", undefined, { owner: false, source: undefined })).toBeNull();
 });
 
@@ -198,4 +201,17 @@ test("the header shows how long the card waited and its due date only when it ha
   const timed = new Date(2026, 10, 25, 15, 30).toISOString();
   expect(recordHeaderParts({ since: undefined, dueAt: timed }, ko, now)).toEqual(["기한 11월 25일 15:30"]);
   expect(recordHeaderParts({ since: at(-2), dueAt: "not a date" }, ko, now)).toEqual(["2일 대기"]);
+});
+
+test("a step that numbers itself shows its number once", () => {
+  expect(stepText("1. Sign in", 0)).toBe("Sign in");
+  expect(stepText("2) 도메인 열기", 1)).toBe("도메인 열기");
+  expect(stepText("3 터미널에서 실행", 2)).toBe("터미널에서 실행");
+  expect(stepText("  4.  Check expiry", 3)).toBe("Check expiry");
+  // A number that is not this step's place is part of the text.
+  expect(stepText("3. Go back to step 3", 0)).toBe("3. Go back to step 3");
+  expect(stepText("2026년 설정 확인", 0)).toBe("2026년 설정 확인");
+  expect(stepText("10개 파일 확인", 9)).toBe("10개 파일 확인");
+  expect(stepText("1.5배로 늘리기", 0)).toBe("1.5배로 늘리기");
+  expect(stepText("`npm test` 실행", 0)).toBe("`npm test` 실행");
 });

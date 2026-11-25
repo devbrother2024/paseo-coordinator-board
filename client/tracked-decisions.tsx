@@ -20,7 +20,7 @@ import {
 } from "./tracked-reply-draft";
 import {
   advancesOnChoice, answerSummary, clampStep, firstOpenStep, foldsAsk, foldsCard, nextOpenStep, recommendAllPicks, trackedChipSide,
-  recordHeaderParts, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps, type Step,
+  recordHeaderParts, stepText, trackedReplyOffer, trackedSuggestion, usesSteps, visibleSteps, type Step,
 } from "./card-steps";
 import { ledgerChoiceGaps } from "../shared/choice-gaps";
 import { cardChoiceNotice } from "./choice-display";
@@ -461,7 +461,7 @@ export function TrackedDecisionCard({ item, theme, links, route, blockedNote, on
       <Text style={{ color: c.foregroundMuted, fontSize: 12, fontWeight: "600" }}>{t("진행 단계", "Steps")}</Text>
       {steps.shown.map((line, index) => <View key={index} style={{ flexDirection: "row", gap: 6 }}>
         <Text style={{ color: c.foregroundMuted, fontVariant: ["tabular-nums"], lineHeight: 21 }}>{index + 1}.</Text>
-        <View style={{ flexShrink: 1, flexGrow: 1 }}><HistoryMarkdown theme={theme} source={line} pullRepository={pullRepository} /></View>
+        <View style={{ flexShrink: 1, flexGrow: 1 }}><HistoryMarkdown theme={theme} source={stepText(line, index)} pullRepository={pullRepository} /></View>
       </View>)}
       {(steps.more > 0 || stepsOpen) && <TextButton theme={theme} expanded={stepsOpen}
         label={stepsOpen ? t("단계 접기", "Show fewer steps") : t(`단계 ${steps.more}개 모두 보기`, `Show all ${steps.more} steps`)}
