@@ -25,7 +25,7 @@ import { changeReceiptKey } from "./change-request-draft";
 import { kanbanPull, linkedHosts, mergeHoldDetails, mergeRecordLinks, seenElsewhere, snapshotHoldSessions } from "../shared/merge-hold";
 import type { PullRequestItem } from "../shared/prs";
 import { getPaseoClient, type PluginScreenProps } from "@getpaseo/plugin/client";
-import { remoteScope, readRemoteHistorySession } from "./remote-sessions";
+import { remoteScope, readRemoteHistorySession, type RemoteWaitingSession } from "./remote-sessions";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { DecisionActions, type DecisionReceipt } from "./decision-actions";
@@ -70,8 +70,11 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const projectGroups = useMemo(() => groupProjects(activeProjects), [activeProjects]);
   const pullRequests = snapshot?.pullRequests;
   const [settings, setSettings] = useState(false);
-  const {groups: peers, hosts: peerHosts, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
   const assigned = new Set(snapshot?.sessions.filter(row => row.serverId).map(row => JSON.stringify([row.serverId, row.id])));
+  const {groups: peers, hosts: peerHosts, loading: peersLoading} = useRemoteRunning(
+    {id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings,
+    (host, id) => assigned.has(JSON.stringify([host, id])),
+  );
   const sortedRecords = useMemo(() => {
     const priority = (urgency: string | null | undefined) => ["now","today","week"].includes(urgency ?? "") ? ["now","today","week"].indexOf(urgency!) : 3;
     return [...snapshot?.trackedDecisions?.items ?? []].sort((a,b) => priority(a.urgency) - priority(b.urgency) ||
@@ -85,7 +88,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     sessions: snapshotHoldSessions(snapshot?.sessions ?? []),
     peers: { read: readHosts, rows: peers.flatMap(({host, rows}) => rows
       .filter(row => !assigned.has(JSON.stringify([host.serverId, row.sessionId])))
-      .map(row => ({ id: row.sessionId, projectId: row.projectId, running: true, ...(row.workspacePull ? { workspacePull: row.workspacePull } : {}) }))) },
+      .map(row => ({ id: row.sessionId, projectId: row.projectId, running: !row.wait, ...(row.workspacePull ? { workspacePull: row.workspacePull } : {}) }))) },
     links: mergeRecordLinks(sortedRecords, item => {
       const target = trackedWorkSession(item, { hostId, hostLabel, sessions: snapshot?.sessions ?? [], hosts: peerHosts, folders });
       return linkedHosts(target, item.sessionHost, { hostId, hostLabel });
@@ -193,7 +196,6 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const [chosenProjects,setChosenProjects]=useState<(string|null)[]>([]);
   const filters = selectedProjectIds(filterGroups, chosenProjects);
   const inFilter = (id: string | null) => !filters.size || filters.has(id);
-  const visibleProjects = [...displayed.values()].filter(project => inFilter(project.id));
   const hostWideRecords = records.filter(item=>item.projectId === null);
   const renderWaitingMerge = (item: TrackedDecision) => {
     const wait = waitingMerges.get(item.key);
@@ -213,6 +215,15 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const incomplete = snapshot?.trackedDecisions && ["partial","unavailable","invalid"].includes(snapshot.trackedDecisions.status);
   const visiblePeers = peers.map(group => ({ ...group, rows: group.rows.filter(row =>
     inFilter(row.projectId) && !assigned.has(JSON.stringify([group.host.serverId, row.sessionId]))) }));
+  const peerWaits = new Map<string, RemoteWaitingSession[]>();
+  for (const { host, rows } of visiblePeers) for (const row of rows) {
+    if (!row.wait) continue;
+    const waiting = peerWaits.get(row.projectId) ?? [];
+    waiting.push({ serverId: host.serverId, hostLabel: host.label, sessionId: row.sessionId, title: row.title, wait: row.wait });
+    peerWaits.set(row.projectId, waiting);
+    if (!displayed.has(row.projectId)) displayed.set(row.projectId, { id: row.projectId, title: names.get(row.projectId) ?? row.projectId, cards: [] });
+  }
+  const visibleProjects = [...displayed.values()].filter(project => inFilter(project.id));
   const [showError, setShowError] = useState(false);
   const [manage, setManage] = useState(false);
   const [pickSession, setPickSession] = useState(false);
@@ -331,7 +342,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       localLink(s);
     }
     if (onOpenHostSession) for (const {host,rows} of peers) for (const s of rows) {
-      if (assigned.has(JSON.stringify([host.serverId, s.sessionId])) || !inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !matchesWorkspace(pr,s.workspacePull)) continue;
+      if (s.wait || assigned.has(JSON.stringify([host.serverId, s.sessionId])) || !inFilter(s.projectId) || !pr.projectIds.includes(s.projectId) || !matchesWorkspace(pr,s.workspacePull)) continue;
       workSessions.push({id:s.sessionId,key:JSON.stringify([host.serverId,s.sessionId]),label:[s.title || t("작업 세션","Work session"),host.label,t("진행 중","Running")].join(" · "),open:()=>onOpenHostSession(host.serverId,s.sessionId),running:true});
     }
     // The coordinator can name the work session that owns the PR when no workspace matches it.
@@ -545,13 +556,18 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       </View>}
       {!settings && snapshot && !configured && !snapshot.projects.length && <Text style={{ color: c.foregroundMuted }}>{t("표시할 세션이 없습니다. 워크스페이스에서 세션을 시작하면 여기에 나타납니다.", "Start a session in a workspace to see it here.")}</Text>}
       {!settings && configured && snapshot && <SessionProgress theme={theme} cards={visibleProjects.flatMap(project => project.cards)}
-        peers={visiblePeers} peersLoading={peersLoading} hostLabel={hostLabel} projectName={projectName} open={actions.onOpen} openRemote={onOpenHostSession}>
+        peers={visiblePeers} peersLoading={peersLoading} hostLabel={hostLabel} projectName={projectName} open={actions.onOpen} openRemote={onOpenHostSession}
+        now={now} openCoordinator={openCoordinator}>
         {!visibleProjects.length && !showHostWide && <Text style={{ color: c.foregroundMuted }}>{t("표시할 세션이 없습니다.", "No sessions to show.")}</Text>}
         {showHostWide && <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId="" title={t("공통","Host-wide")} cards={[]} requests={[]} followups={hostWideFollowups} now={now}
           records={hostWideRecords.filter(item => !waitingMerges.has(item.key))} waiting={hostWideRecords.filter(unlisted)} renderWaiting={renderWaitingMerge}
           decisions={byProject.get(null) ?? 0} renderRecord={renderRecord} renderPull={renderPull}
           recordLinks={recordLinks} compact={layout.compact} theme={theme} {...actions} />}
-        {visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} followups={followups.filter(item=>item.entry.projectId===p.id)} now={now} records={deciding.filter(r => r.projectId === p.id)} waiting={records.filter(r => r.projectId === p.id && unlisted(r))} renderWaiting={renderWaitingMerge} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={kanbanPrs.filter(pr => pr.projectIds.includes(p.id))} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
+        {visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} followups={followups.filter(item=>item.entry.projectId===p.id)}
+          now={now} openCoordinator={openCoordinator} remoteWaits={peerWaits.get(p.id)} records={deciding.filter(r => r.projectId === p.id)}
+          waiting={records.filter(r => r.projectId === p.id && unlisted(r))} renderWaiting={renderWaitingMerge} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0}
+          sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={kanbanPrs.filter(pr => pr.projectIds.includes(p.id))} key={p.id}
+          title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
         <RemoteRunning groups={visiblePeers} projects={activeProjects} open={onOpenHostSession} theme={theme} />
       </SessionProgress>}
     </ScrollView>

@@ -34,6 +34,7 @@ required = {
     "client/pull-requests.tsx", "client/decision-badge.tsx", "shared/decision-count.ts", "shared/prs.ts", "server/prs.ts",
     "shared/tracked-decisions.ts", "server/tracked-decisions.ts", "server/project-decision-sources.ts", "server/pr-merge.ts", "server/merge-notifications.ts",
     "client/tracked-decisions.tsx", "client/project-kanban.tsx", "client/remote-running.tsx", "client/remote-sessions.ts",
+    "client/coordinator-wait-status.tsx", "shared/coordinator-wait.ts",
     "shared/github-repository.ts", "shared/workspace-pull.ts", "shared/pages.ts", "server/snapshot-reads.ts", "shared/readiness.ts",
     "client/history-markdown.tsx", "client/vendor/marked/marked.js", "third-party/marked/LICENSE", "client/reply-history.tsx", "client/history-sessions.ts", "shared/reply-history.ts",
     "client/permission-request-summary.tsx", "shared/permission-summary.ts", "shared/shell-permission-command.ts",

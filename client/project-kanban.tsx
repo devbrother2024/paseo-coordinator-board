@@ -6,7 +6,7 @@ import { columnWidth, COLUMN_GAP } from "./lane-width";
 import type { PullRequestItem } from "../shared/prs";
 import { pullColumn } from "../shared/pull-judgments";
 import type { TrackedDecision } from "../shared/tracked-decisions";
-import { factStatus, laneLabel, noteLabel, sessionDetail, type Card, type Lane } from "./model";
+import { coordinatorWaitForCard, factStatus, kanbanSessionLanes, laneLabel, noteLabel, sessionDetail, type Card, type Lane } from "./model";
 import type { ReplyEntry } from "../shared/reply-history";
 import type { HistoryLinks } from "./history-sessions";
 import { KANBAN_ORDER, type FollowupKind } from "./reply-followup";
@@ -18,6 +18,8 @@ import { assignmentReasons } from "../shared/host-assignment";
 import { QuestionContext } from "./question-context";
 import { decisionChoiceNotice } from "./choice-display";
 import { waitedLabel } from "../shared/review-wait";
+import { CoordinatorWaitStatus } from "./coordinator-wait-status";
+import type { RemoteWaitingSession } from "./remote-sessions";
 type ColumnKind = Lane;
 type Actions = { sessionHostLabel?: string; onOpen?: (id:string) => void; onEdit:(id:string) => void };
 
@@ -46,7 +48,9 @@ function CoordinatorPending({ theme }: { theme: Theme }) {
   </View>;
 }
 
-function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Card; theme: Theme } & Actions) {
+function CardView({ card, theme, now, coordinatorWait, openCoordinator, onOpen, onEdit, sessionHostLabel }: {
+  card: Card; theme: Theme; now: number; coordinatorWait?: Card["session"]["coordinatorWait"]; openCoordinator?: () => void;
+} & Actions) {
   const [expanded, setExpanded] = useState(false);
   const { t } = useBoardLanguage();
   const { session, note } = card;
@@ -58,7 +62,7 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
   const detailIsQuestion = !!question && (question === session.detail || session.detail.endsWith(" · " + question));
   const runtime = [session.provider, session.model === session.provider ? null : session.model].filter(Boolean).join(" / ");
   const resting = card.lane === "review" || card.lane === "idle";
-  const waited = resting ? waitedLabel(session.waitingSince, Date.now(), t) : "";
+  const waited = resting && !coordinatorWait ? waitedLabel(session.waitingSince, now, t) : "";
   const noteTitle = note && note.kind !== "clear" ? [note.origin === "agent" ? t("세션 보고", "Session report") : null, noteLabel(note.kind, t)].filter(Boolean).join(" · ") : null;
   return (
     <View style={{ padding: 10, borderRadius: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface0, gap: 6 }}>
@@ -69,10 +73,10 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
           <Text style={{ color: c.foreground, fontSize: 14, fontWeight: "600", flex: 1 }}>{session.title}</Text>
           <Text accessible={false} style={{ color: c.foregroundMuted }}>{expanded ? "▴" : "▾"}</Text>
         </View>
-        <Text numberOfLines={1} style={{ color: c.foregroundMuted, fontSize: 12 }}>
+        {!coordinatorWait && <Text numberOfLines={1} style={{ color: c.foregroundMuted, fontSize: 12 }}>
           {card.lane === "human" ? t("내 답을 기다리는 중", "Waiting for my decision")
             : session.detail ? sessionDetail(session.detail, t) : laneLabel(card.lane, t)}
-        </Text>
+        </Text>}
         {resting && (!!waited || !!session.lastSummary) && <Text numberOfLines={expanded ? undefined : 2} style={{ color: c.foregroundMuted, fontSize: 12 }}>
           {[waited, session.lastSummary].filter(Boolean).join(" · ")}
         </Text>}
@@ -81,8 +85,9 @@ function CardView({ card, theme, onOpen, onEdit, sessionHostLabel }: { card: Car
           {session.assignment ? " · " + t(...assignmentReasons[session.assignment.reason]) : ""}
         </Text>}
       </Pressable>
+      {coordinatorWait && <CoordinatorWaitStatus reason={coordinatorWait} since={session.waitingSince} now={now} open={openCoordinator} theme={theme} />}
       {onOpen && <SessionChip theme={theme} label={t("세션", "Session")} accessibilityLabel={t(`세션 열기 · ${session.title}`, `Open session · ${session.title}`)} onPress={() => onOpen(session.id)} />}
-      {card.lane === "review" && session.needsCoordinator && <CoordinatorPending theme={theme} />}
+      {card.lane === "review" && session.needsCoordinator && !coordinatorWait && <CoordinatorPending theme={theme} />}
       {fact && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
         {fact.current ? "" : t("이전 · ", "Previous · ")}{factStatus(fact, t)}
       </Text>}
@@ -150,12 +155,13 @@ function Column({lane,entries,theme}: {lane:ColumnKind;entries:Entry[];theme:The
 }
 
 export type Followup = {entry:ReplyEntry; kind:FollowupKind};
-type Props = Actions & {projectId:string; title:string; followups?:Followup[]; now:number; historyLinks:HistoryLinks; openRemote?:(host:string,id:string)=>void; decisions:number; cards:Card[]; records:TrackedDecision[]; requests:PullRequestItem[];
+type Props = Actions & {projectId:string; title:string; followups?:Followup[]; now:number; openCoordinator?:()=>void; historyLinks:HistoryLinks; openRemote?:(host:string,id:string)=>void; decisions:number; cards:Card[]; records:TrackedDecision[]; requests:PullRequestItem[];
+  remoteWaits?: RemoteWaitingSession[];
   // Merge cards whose PR the board could not read. They wait here with the reason.
   waiting?:TrackedDecision[]; renderWaiting?:(item:TrackedDecision)=>ReactNode;
   renderRecord:(item:TrackedDecision)=>ReactNode; theme:Theme; compact:boolean; recordLinks:(item:TrackedDecision)=>TrackedSessionLinks; renderPull:(pr:PullRequestItem,projectId:string)=>ReactNode};
 
-export function Project({projectId,title,decisions,cards,records,waiting=[],renderWaiting,followups=[],now,historyLinks,openRemote,requests,renderRecord,theme,compact,recordLinks,renderPull,...actions}:Props) {
+export function Project({projectId,title,decisions,cards,records,waiting=[],renderWaiting,followups=[],now,openCoordinator,historyLinks,openRemote,remoteWaits=[],requests,renderRecord,theme,compact,recordLinks,renderPull,...actions}:Props) {
   const {t} = useBoardLanguage();
   const [width,setWidth] = useState(0);
   const groups:Record<ColumnKind,Entry[]> = {running:[],review:[],human:[],idle:[],done:[],unknown:[]};
@@ -166,8 +172,25 @@ export function Project({projectId,title,decisions,cards,records,waiting=[],rend
     groups[lane].push({key:"decision:"+item.key,content:<RecordPreview item={item} theme={theme} render={renderRecord} links={recordLinks(item)} />});
   }
   for(const card of cards) {
-    if(card.lane==="human" && records.some(item=>item.matchedSessionId===card.session.id)) continue;
-    groups[card.lane].push({key:"session:"+card.session.id,content:<CardView card={card} theme={theme} {...actions} />});
+    const coveredByLedger = card.lane === "human" && records.some(item => item.matchedSessionId === card.session.id);
+    for (const lane of kanbanSessionLanes(card, coveredByLedger)) {
+      const wait = lane === "running" ? coordinatorWaitForCard(card) : undefined;
+      groups[lane].push({ key: "session:" + card.session.id,
+        content: <CardView card={card} theme={theme} now={now} coordinatorWait={wait} openCoordinator={openCoordinator} {...actions} /> });
+    }
+  }
+  const c = theme.colors;
+  for (const { serverId, hostLabel, sessionId, title, wait } of remoteWaits) {
+    const name = title || t(`세션 ${sessionId.slice(0, 8)}`, `Session ${sessionId.slice(0, 8)}`);
+    groups.running.push({ key: JSON.stringify([serverId, sessionId]), content:
+      <View style={{ padding: 10, borderRadius: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface0, gap: 6 }}>
+        <Text style={{ color: c.foreground, fontSize: 14, fontWeight: "600" }}>{name}</Text>
+        <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{t("실행 호스트", "Host")} · {hostLabel}</Text>
+        <CoordinatorWaitStatus reason={wait.reason} since={wait.since} now={now} open={openCoordinator} theme={theme} />
+        {openRemote && <SessionChip theme={theme} label={t("세션", "Session")}
+          accessibilityLabel={t(`세션 열기 · ${name}`, `Open session · ${name}`)} onPress={() => openRemote(serverId, sessionId)} />}
+      </View>,
+    });
   }
   for(const pr of requests) {
     if(records.some(item=>item.matchedPull?.repo===pr.repo && item.matchedPull.number===pr.number)) continue;
@@ -186,7 +209,7 @@ export function Project({projectId,title,decisions,cards,records,waiting=[],rend
   return <View style={{gap:8}} onLayout={e=>setWidth(e.nativeEvent.layout.width)}>
     <Text accessibilityRole="header" style={{fontSize:18,fontWeight:"600",color:theme.colors.foreground}}>{title}</Text>
     <Text style={{fontSize:13,color:theme.colors.foregroundMuted}}>
-      {t(`세션 ${cards.length}개 · 진행 중인 세션 ${running}개 · 내 결정 ${decisions}건`,`Sessions ${cards.length} · Running sessions ${running} · My decisions ${decisions}`)}
+      {t(`세션 ${cards.length + remoteWaits.length}개 · 진행 중인 세션 ${running}개 · 내 결정 ${decisions}건`,`Sessions ${cards.length + remoteWaits.length} · Running sessions ${running} · My decisions ${decisions}`)}
     </Text>
     {stacked ? <View style={{gap:COLUMN_GAP}}>{columns}</View> :
       <ScrollView horizontal showsHorizontalScrollIndicator contentContainerStyle={{gap:COLUMN_GAP,paddingBottom:5,alignItems:"flex-start"}}>{columns}</ScrollView>}

@@ -49,7 +49,7 @@ test("활성 메타데이터만 읽고 양쪽 페이지를 순회한다. 선택/
  const reads:string[]=[];
  const client={
   agents:{list:async({filter,page}:{filter:{statuses:string[]},page:{cursor?:string}})=>{
-    expect(filter.statuses).toEqual(["running"]);reads.push("agent");
+    expect(filter.statuses).toEqual(["running", "idle"]);reads.push("agent");
     return {entries:[ag(page.cursor?"two":"one","w")],pageInfo:{hasMore:!page.cursor,nextCursor:page.cursor?null:"next"}};
   }},
   workspaces:{list:async({page}:{page:{cursor?:string}})=>{
@@ -61,6 +61,53 @@ test("활성 메타데이터만 읽고 양쪽 페이지를 순회한다. 선택/
  expect(reads).toEqual(["agent","agent","space","space"]);
  const inactive={agents:{list:async()=>({entries:[],pageInfo:{hasMore:false,nextCursor:null}})},workspaces:{list:()=>{throw Error("unnecessary")}}} as unknown as Reader;
  expect(await readRemoteSessions(inactive,scope)).toEqual([]);
+});
+
+test("reads only matched idle sessions and keeps remote waits distinct from running work", async () => {
+  const at = "2026-11-25T10:00:00Z";
+  const idle = { status: "idle", updatedAt: at };
+  const entries = [
+    ag("running", "w"), ag("waiting", "w", idle), ag("answered", "w", idle),
+    ag("decision", "w", idle), ag("unreadable", "w", idle), ag("assigned", "w", idle),
+    ag("permission", "w", { ...idle, pendingPermissions: [{}] }),
+    ag("active", "w", { ...idle, activeTurn: {} }), ag("unrelated", "other", idle),
+  ];
+  const reads: string[] = [];
+  const list = (entries: unknown[]) => ({ entries, pageInfo: { hasMore: false, nextCursor: null } });
+  const agentReply = (text: string) => ({ item: { type: "assistant_message", text }, timestamp: at });
+  const client = {
+    agents: {
+      list: async () => list(entries),
+      ref: (id: string) => ({ current: () => null, timeline: { refetch: async () => {
+        reads.push(id);
+        if (id === "unreadable") throw Error("Unavailable");
+        return { entries: [
+          agentReply(id === "decision" ? "Waiting for the coordinator. Please choose a size." : "Waiting for a screen slot."),
+          ...(id === "answered" ? [{ item: { type: "tool_call", agentMessage: { event: "message" } } }] : []),
+        ] };
+      } } }),
+    },
+    workspaces: { list: async () => list([ws("w", "a"), ws("other", "unmanaged")]) },
+  } as unknown as Reader;
+  const options = { cache: new Map(), skipWait: (id: string) => id === "assigned" };
+  for (let i = 0; i < 2; i++) {
+    expect(await readRemoteSessions(client, scope, () => true, options)).toEqual([
+      { sessionId: "running", projectId: "a", title: "실제 원격 작업" },
+      { sessionId: "waiting", projectId: "a", title: "실제 원격 작업", activityAt: at,
+        wait: { reason: "screen", since: at } },
+    ]);
+    // Set an old poll time on the cached observation. Only activity may invalidate it.
+    const saved = options.cache.get("waiting");
+    options.cache.set("waiting", { ...saved, checkedAt: Date.now() - 60_001 });
+  }
+  expect(reads.sort()).toEqual(["answered", "decision", "unreadable", "unreadable", "waiting"]);
+
+  entries[1] = ag("waiting", "w", { ...idle, updatedAt: "2026-11-25T10:01:00Z", status: "running" });
+  entries[2] = ag("answered", "w", { ...idle, archivedAt: at });
+  const next = await readRemoteSessions(client, scope, () => true, options);
+  expect(next.find(row => row.sessionId === "waiting")?.wait).toBeUndefined();
+  expect(options.cache.has("waiting")).toBe(false);
+  expect(options.cache.has("answered")).toBe(false);
 });
 
 test("조회 중 호스트 제외 시 다음 페이지나 작업 공간 조회를 중단한다", async () => {
@@ -76,6 +123,23 @@ test("조회 중 호스트 제외 시 다음 페이지나 작업 공간 조회�
   } as unknown as Reader;
   await expect(readRemoteSessions(client, scope, () => active)).rejects.toThrow("scope changed");
   expect(readCount).toBe(1);
+});
+
+test("ignores an in-flight conversation after the host is hidden", async () => {
+  let active = true;
+  const client = {
+    agents: {
+      list: async () => ({ entries: [ag("worker", "w", { status: "idle" })], pageInfo: { hasMore: false } }),
+      ref: () => ({ current: () => null, timeline: { refetch: async () => {
+        active = false;
+        return { entries: [{ item: { type: "assistant_message", text: "Waiting for the coordinator." } }] };
+      } } }),
+    },
+    workspaces: { list: async () => ({ entries: [ws("w", "a")], pageInfo: { hasMore: false } }) },
+  } as unknown as Reader;
+  const cache = new Map();
+  expect(await readRemoteSessions(client, scope, () => active, { cache })).toEqual([]);
+  expect(cache.size).toBe(0);
 });
 
 test("opening an idle remote history source checks its exact identity and project without listing every session",async()=>{

@@ -27,11 +27,19 @@ export function coordinatorHandled(row: Pick<SessionRow, "id" | "projectId">, ev
 // Uses only excerpts the board already read for idle and review sessions.
 export function decorateReviewWait(rows: SessionRow[], evidence: ReadonlyMap<string, Evidence>, context: Context) {
   for (const row of rows) {
-    if (row.lane !== "review" && row.lane !== "idle") {
-      delete row.waitingSince;
+    const observed = evidence.get(row.id);
+    const resting = row.lane === "review" || row.lane === "idle";
+    // A kept decision describes an earlier turn. The latest turn can still describe a wait.
+    const wait = row.status === "idle" && row.id !== context.coordinator && !row.nativePending &&
+      (resting || row.lane === "human") ? observed?.coordinatorWait : undefined;
+    if (wait) {
+      row.coordinatorWait = wait.reason;
+      row.waitingSince = wait.since ?? row.waitingSince ?? row.activityAt;
+    }
+    if (!resting) {
+      if (!wait) delete row.waitingSince;
       continue;
     }
-    const observed = evidence.get(row.id);
     const last = observed?.turns.findLast(turn => turn.role === "assistant");
     if (last) {
       const summary = lastMessageSummary(last.text);

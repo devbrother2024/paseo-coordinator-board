@@ -173,4 +173,5 @@ Spec: [spec.md](spec.md)
 | [reset-pass-display](reset-pass-display/intent.md) | 구현됨 (PR #59) | 세션 | 계정 카드에 사용량 초기화권의 남은 장수와 만료를 보이고, 값은 호스트의 account-usage.json이 채운다 |
 | [busy-session-delivery](busy-session-delivery/intent.md) | 승인 | 세션 | 작업 중인 세션에 현재 질문의 답을 보내고 대기 중인 답은 병렬 검토를 요청할 수 있다 |
 | [stable-coordinator-tools](stable-coordinator-tools/intent.md) | 구현됨 (PR #62) | 세션 | 코디네이터 도구를 계약으로 고정하고, 새 기능은 안내 도구와 범용 도구로 내어 운영 중인 대화를 그대로 쓴다 |
+| [waiting-on-coordinator](waiting-on-coordinator/intent.md) | 승인 | 세션 | 코디네이터 응답을 기다리는 로컬·원격 세션을 진행 화면에서 이유와 함께 표시한다 |
 | [single-card-input](single-card-input/intent.md) | 승인 | 세션 | 카드마다 입력창 하나로 답·질문·수정 요청을 보내고, 병합 카드 수정 요청과 세션 글의 질문 블록을 더한다 |

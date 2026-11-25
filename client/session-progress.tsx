@@ -5,9 +5,10 @@ import { Text, View } from "react-native";
 import { z } from "zod";
 import { Button, SessionChip, type Theme } from "./controls";
 import { useBoardLanguage } from "./language";
-import type { Card } from "./model";
+import { coordinatorWaitForCard, progressLane, type Card } from "./model";
 import type { RemoteGroup } from "./remote-running";
 import { assignmentReasons } from "../shared/host-assignment";
+import { CoordinatorWaitStatus } from "./coordinator-wait-status";
 
 const mode = z.enum(["projects", "running"]);
 type Mode = z.infer<typeof mode>;
@@ -19,10 +20,10 @@ const preference = defineSettings({
 type Props = {
   cards: Card[]; peers: RemoteGroup[]; peersLoading: boolean; hostLabel: string;
   projectName: (id: string) => string; open?: (id: string) => void; openRemote?: (host: string, id: string) => void;
-  theme: Theme; children: ReactNode;
+  theme: Theme; now: number; openCoordinator?: () => void; children: ReactNode;
 };
 
-export function SessionProgress({ cards, peers, peersLoading, hostLabel, projectName, open, openRemote, theme, children }: Props) {
+export function SessionProgress({ cards, peers, peersLoading, hostLabel, projectName, open, openRemote, theme, now, openCoordinator, children }: Props) {
   const { t } = useBoardLanguage();
   const saved = useSettings(preference);
   const [temporary, setTemporary] = useState<Mode | null>(null);
@@ -41,16 +42,21 @@ export function SessionProgress({ cards, peers, peersLoading, hostLabel, project
   }
 
   const c = theme.colors;
-  const local = cards.filter(card => card.lane === "running");
+  const local = cards.filter(card => progressLane(card) === "running");
   const count = local.length + peers.reduce((sum, group) => sum + group.rows.length, 0);
   const failed = peers.filter(group => group.failed);
   const rows = current === "running" ? [
-    ...local.map(({ session }) => ({
-      id: session.id, host: session.serverId ?? null, hostLabel: session.assignment?.label ?? hostLabel,
-      title: session.title, projectId: session.projectId, at: session.activityAt, reason: session.assignment?.reason,
-    })),
+    ...local.map(card => {
+      const { session } = card;
+      return {
+        id: session.id, host: session.serverId ?? null, hostLabel: session.assignment?.label ?? hostLabel,
+        title: session.title, projectId: session.projectId, at: session.activityAt, reason: session.assignment?.reason,
+        wait: coordinatorWaitForCard(card), since: session.waitingSince,
+      };
+    }),
     ...peers.flatMap(({ host, rows }) => rows.map(row => ({
-      id: row.sessionId, host: host.serverId, hostLabel: host.label, title: row.title, projectId: row.projectId, at: row.activityAt, reason: undefined,
+      id: row.sessionId, host: host.serverId, hostLabel: host.label, title: row.title, projectId: row.projectId, at: row.activityAt,
+      reason: undefined, wait: row.wait?.reason, since: row.wait?.since,
     }))),
   ].sort((a, b) => (Date.parse(b.at ?? "") || 0) - (Date.parse(a.at ?? "") || 0)
     || a.title.localeCompare(b.title) || (a.host ?? "").localeCompare(b.host ?? "") || a.id.localeCompare(b.id)) : [];
@@ -77,6 +83,7 @@ export function SessionProgress({ cards, peers, peersLoading, hostLabel, project
               <Text selectable style={{ fontSize: 12, color: c.foregroundMuted }}>
                 {project} · {row.hostLabel}{row.reason ? " · " + t(...assignmentReasons[row.reason]) : ""}
               </Text>
+              {row.wait && <CoordinatorWaitStatus reason={row.wait} since={row.since} now={now} open={openCoordinator} theme={theme} />}
             </View>
             {visit && <SessionChip theme={theme} label={t("세션 열기", "Open session")}
               accessibilityLabel={t(`세션 열기 · ${title}`, `Open session · ${title}`) + " · " + project + " · " + row.hostLabel} onPress={visit} />}
