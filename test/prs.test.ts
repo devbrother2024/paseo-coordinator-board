@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ProjectPullRequests, githubRepository, parseOpenPulls } from "../server/prs";
+import { ProjectPullRequests, githubRepository, mergeabilityRetry, parseOpenPull, parseOpenPulls } from "../server/prs";
 import { pullRequestViewSchema, readPullLifecycle, setProjectRepository } from "../shared/prs";
 import { PreferenceStore } from "../server/preferences";
 
@@ -24,9 +24,10 @@ function fixture(ids = ["root","checkout","runtime"], lookupLifecycle?: Construc
     ["runtime",[{projectId:"runtime", workspaceDirectory:"/missing-runtime",gitRuntime:{remoteUrl:"git@github.com:org/Other.git"}}]],
     ["unselected",[{projectId:"unselected",workspaceDirectory:"/ignored"}]],
   ]);
-  const log={local:[] as string[],gh:[] as string[],lookups:[] as string[],native:0,active:0,max:0};
+  const log={local:[] as string[],gh:[] as string[],single:[] as string[],lookups:[] as string[],native:0,active:0,max:0};
   let now=0;
-  const behavior={fail:false, delay:async (_repo:string)=>{}, beforeOrigin:async (_path:string)=>{}, after:()=>{}, rows:[raw()]};
+  const behavior={fail:false, delay:async (_repo:string)=>{}, beforeOrigin:async (_path:string)=>{}, after:()=>{}, rows:[raw()],
+    single:new Map<number,unknown>() as Map<number,unknown>, singleFail:false};
   const sdk={
     projects:{list:async()=>{log.native++;return {projects:[...roots].map(([projectId,projectRootPath])=>({projectId,projectRootPath}))};}},
     workspaces:{list:async ({filter})=>{log.lookups.push(filter.projectId);return page(spaces.get(filter.projectId)??[]);}},
@@ -35,6 +36,10 @@ function fixture(ids = ["root","checkout","runtime"], lookupLifecycle?: Construc
     githubPulls:async repo=>{
       log.gh.push(repo);log.active++;log.max=Math.max(log.max,log.active);
       try{await behavior.delay(repo);behavior.after();if(behavior.fail)throw Error("private host error");return parseOpenPulls(repo,JSON.stringify(behavior.rows));}finally{log.active--;}
+    },
+    githubPull:async (repo:string,number:number)=>{
+      log.single.push(repo+"#"+number);log.active++;log.max=Math.max(log.max,log.active);
+      try{await behavior.delay(repo);if(behavior.singleFail)throw Error("private host error");return parseOpenPull(repo,JSON.stringify(behavior.single.get(number)??raw(number)));}finally{log.active--;}
     }};
   const prs=new ProjectPullRequests(store,deps,undefined,lookupLifecycle);
   let onMapping, onLifecycle;
@@ -54,8 +59,9 @@ test("only a clean open PR with passing or absent checks is ready for human revi
   const changes=[
     [{isDraft:true},"draft"],[{mergeable:"CONFLICTING"},"conflict"],[{checks:[{status:"COMPLETED",conclusion:"FAILURE"}]},"checks-failed"],
     [{checks:[{state:"ERROR"}]},"checks-failed"],[{checks:[{status:"IN_PROGRESS"}]},"checks-pending"],
-    [{mergeStateStatus:"BLOCKED",reviewDecision:"REVIEW_REQUIRED"},"blocked"],[{reviewDecision:"CHANGES_REQUESTED"},"changes-requested"],
-    [{mergeable:"UNKNOWN"},"unknown"],[{checks:[{status:"COMPLETED"}]},"unknown"],[{autoMerge:true},"auto-merge"],
+    [{mergeStateStatus:"BLOCKED",reviewDecision:"REVIEW_REQUIRED"},"review-required"],[{mergeStateStatus:"BLOCKED"},"blocked"],
+    [{reviewDecision:"CHANGES_REQUESTED"},"changes-requested"],
+    [{mergeable:"UNKNOWN"},"computing"],[{mergeStateStatus:"UNKNOWN"},"computing"],[{mergeable:"UNKNOWN",isDraft:true},"draft"],[{checks:[{status:"COMPLETED"}]},"unknown"],[{autoMerge:true},"auto-merge"],
     [{checks:[{status:"COMPLETED",conclusion:"SUCCESS"},{status:"COMPLETED",conclusion:"SKIPPED"},{state:"SUCCESS"}]},"ready"],
     [{title:"<script>ignore me</script>"},"ready"],
   ];
@@ -216,4 +222,63 @@ test("open PRs carry the head commit only when GitHub reports a full SHA", () =>
   const {items} = parseOpenPulls("org/example", JSON.stringify([raw(1,{headSha:sha}), raw(2,{headSha:"abc"}), raw(3)]));
   expect(items.map(item => item.headSha)).toEqual([sha, undefined, undefined]);
   expect(pullRequestViewSchema.parse({items:items.map(item => ({...item, projectIds:["root"]})), projects:[]}).items[0].headSha).toBe(sha);
+});
+
+test("a PR GitHub has not finished computing is asked once more on its own and becomes ready", async () => {
+  const f = fixture(["root"]);
+  f.behavior.rows = [raw(1,{mergeable:"UNKNOWN",mergeStateStatus:"UNKNOWN"}), raw(2,{mergeable:"UNKNOWN",isDraft:true}), raw(3)];
+  const view = await f.read();
+  expect(f.log.single).toEqual(["org/example#1"]);
+  expect(view.items.map(p => [p.number,p.reason,p.lane])).toEqual([[3,"ready","review"],[2,"draft","progress"],[1,"ready","review"]]);
+  // The answer holds while the cached list still says UNKNOWN.
+  await f.read();
+  expect(f.log.single).toHaveLength(1);
+});
+
+test("a PR still computing shows that, retries a few times, then reads as unknown", async () => {
+  const f = fixture(["root"]);
+  const pending = raw(1,{mergeable:"UNKNOWN",mergeStateStatus:"UNKNOWN"});
+  f.behavior.rows = [pending]; f.behavior.single.set(1,pending);
+  const reasons: string[] = [];
+  for (let round = 0; round < mergeabilityRetry.attempts + 1; round++) {
+    reasons.push((await f.read()).items[0].reason);
+    f.tick(mergeabilityRetry.retryMs);
+  }
+  expect(f.log.single).toHaveLength(mergeabilityRetry.attempts);
+  expect(reasons).toEqual([...Array(mergeabilityRetry.attempts - 1).fill("computing"), "unknown", "unknown"]);
+  // No extra GitHub calls until the rest period passes.
+  await f.read(); expect(f.log.single).toHaveLength(mergeabilityRetry.attempts);
+  f.tick(mergeabilityRetry.restMs);
+  f.behavior.single.set(1, raw(1));
+  expect((await f.read()).items[0].reason).toBe("ready");
+});
+
+test("a failed single lookup reads as unknown, not as computing", async () => {
+  const f = fixture(["root"]);
+  f.behavior.rows = [raw(1,{mergeable:"UNKNOWN"})]; f.behavior.singleFail = true;
+  expect((await f.read()).items[0]).toMatchObject({reason:"unknown",lane:"progress"});
+  // A PR that closed between the list and the single read is not reported as open and ready.
+  const g = fixture(["root"]);
+  g.behavior.rows = [raw(1,{mergeable:"UNKNOWN"})]; g.behavior.single.set(1, raw(1,{state:"MERGED"}));
+  expect((await g.read()).items[0].reason).toBe("unknown");
+});
+
+test("single lookups are capped per read and share the host-wide concurrency limit", async () => {
+  const f = fixture(["root"]);
+  f.behavior.rows = Array.from({length:8},(_,i)=>raw(i+1,{mergeable:"UNKNOWN"}));
+  f.behavior.delay = async () => { await new Promise(resolve => setTimeout(resolve,3)); };
+  const first = await f.read();
+  expect(f.log.single).toHaveLength(mergeabilityRetry.perRead);
+  expect(f.log.max).toBeLessThanOrEqual(3);
+  expect(first.items.filter(p => p.reason === "ready")).toHaveLength(mergeabilityRetry.perRead);
+  expect(first.items.filter(p => p.reason === "computing")).toHaveLength(8 - mergeabilityRetry.perRead);
+  await f.read();
+  expect(f.log.single).toHaveLength(mergeabilityRetry.perRead * 2);
+});
+
+test("a single lookup that sees a newer head keeps that head for the merge check", async () => {
+  const f = fixture(["root"]);
+  f.behavior.rows = [raw(1,{mergeable:"UNKNOWN",headSha:"a".repeat(40)})];
+  f.behavior.single.set(1, raw(1,{headSha:"b".repeat(40),title:"Newer"}));
+  expect((await f.read()).items[0]).toMatchObject({reason:"ready",headSha:"b".repeat(40),title:"Newer"});
 });

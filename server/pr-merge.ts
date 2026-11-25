@@ -173,14 +173,15 @@ function readiness(repo: Repo, methods: MergeMethod[]): MergeReason {
   if (p.isDraft) return "draft";
   if (p.mergeable === "CONFLICTING" || p.mergeStateStatus === "DIRTY") return "conflict";
   if (p.reviewDecision === "CHANGES_REQUESTED") return "changes-requested";
-  if (p.reviewDecision === "REVIEW_REQUIRED") return "blocked";
+  if (p.reviewDecision === "REVIEW_REQUIRED") return "review-required";
   if (p.statusCheckRollup) {
     const { state } = p.statusCheckRollup;
     if (state === "FAILURE" || state === "ERROR") return "checks-failed";
     if (state === "PENDING" || state === "EXPECTED") return "checks-pending";
     if (state !== "SUCCESS") return "unknown";
   }
-  if (p.mergeStateStatus !== "CLEAN") return p.mergeStateStatus === "UNKNOWN" ? "unknown" : "blocked";
+  if (p.mergeStateStatus === "UNKNOWN" || p.mergeable === "UNKNOWN") return "computing";
+  if (p.mergeStateStatus !== "CLEAN") return "blocked";
   if (p.mergeable !== "MERGEABLE" || (p.reviewDecision !== null && p.reviewDecision !== "APPROVED"))
     return "unknown";
   if (

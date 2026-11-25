@@ -9,6 +9,7 @@ import { githubMergeApi, PullMerges } from "./pr-merge";
 import { githubRepository } from "../shared/github-repository";
 export { githubRepository } from "../shared/github-repository";
 import { readPages } from "./discovery";
+import { MergeabilityChecks } from "./pull-mergeability";
 import type { Preferences, PreferenceStore } from "./preferences";
 
 type Sdk = Pick<PluginHandlerContext["paseo"],"projects"|"workspaces">;
@@ -27,8 +28,13 @@ const rawPull = z.object({
   checks:z.array(check), autoMerge:z.boolean(),
 });
 const fields = "number,title,state,updatedAt,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest,headRepository,headRefName,headRefOid";
-const projection = "[.[] | {number,title,state,updatedAt,isDraft,mergeable,mergeStateStatus,reviewDecision,headRepo:.headRepository.nameWithOwner,headBranch:.headRefName,headSha:.headRefOid,checks:[.statusCheckRollup[]? | {status,conclusion,state}],autoMerge:(.autoMergeRequest != null)}]";
+const row = "{number,title,state,updatedAt,isDraft,mergeable,mergeStateStatus,reviewDecision,headRepo:.headRepository.nameWithOwner,headBranch:.headRefName,headSha:.headRefOid,checks:[.statusCheckRollup[]? | {status,conclusion,state}],autoMerge:(.autoMergeRequest != null)}";
+const projection = "[.[] | " + row + "]";
 const ttl = 60_000;
+// GitHub's PR list can report mergeability as UNKNOWN until someone asks for that PR alone.
+// retryMs: wait before asking again. attempts: single reads per round. perRead: single reads one board read may start.
+// resolvedMs: how long a single answer stands in for a list that still says UNKNOWN. restMs: pause after a round gives up.
+export const mergeabilityRetry = { retryMs: 15_000, attempts: 4, perRead: 3, resolvedMs: ttl, restMs: 5 * 60_000 };
 
 function reason(p: z.output<typeof rawPull>):Reason {
   if (p.isDraft || p.mergeStateStatus === "DRAFT") return "draft";
@@ -38,11 +44,27 @@ function reason(p: z.output<typeof rawPull>):Reason {
   if (p.reviewDecision === "CHANGES_REQUESTED") return "changes-requested";
   if (p.checks.some(c => c.status ? c.status !== "COMPLETED" : ["PENDING","EXPECTED"].includes(c.state ?? ""))) return "checks-pending";
   if (p.autoMerge) return "auto-merge";
-  if (p.reviewDecision === "REVIEW_REQUIRED" || ["BLOCKED","BEHIND","UNSTABLE","HAS_HOOKS"].includes(p.mergeStateStatus ?? "")) return "blocked";
+  if (p.reviewDecision === "REVIEW_REQUIRED") return "review-required";
+  if (["BLOCKED","BEHIND","UNSTABLE","HAS_HOOKS"].includes(p.mergeStateStatus ?? "")) return "blocked";
   const green = ["SUCCESS","NEUTRAL","SKIPPED"];
   if (p.reviewDecision && p.reviewDecision !== "APPROVED") return "unknown";
   if (p.checks.some(c => !(c.status === "COMPLETED" && green.includes(c.conclusion ?? "")) && c.state !== "SUCCESS")) return "unknown";
+  if (p.mergeable === "UNKNOWN" || p.mergeStateStatus === "UNKNOWN") return "computing";
   return p.mergeable === "MERGEABLE" && p.mergeStateStatus === "CLEAN" ? "ready" : "unknown";
+}
+
+function pullItem(repo:string, p:z.output<typeof rawPull>):Pull {
+  const why = reason(p);
+  const head = repositorySlug.safeParse(p.headRepo);
+  const headSha = commitSha.safeParse(p.headSha);
+  return {repo, number:p.number, ...(head.success && p.headBranch ? {headRepo:head.data,headBranch:p.headBranch} : {}),
+    ...(headSha.success ? {headSha:headSha.data} : {}), title:p.title.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g," ").slice(0,512),
+    url:pullUrl(repo,p.number), lane:why==="ready"?"review":"progress",reason:why,updatedAt:p.updatedAt};
+}
+
+// One open PR read on its own. A PR that closed in the meantime fails the parse.
+export function parseOpenPull(repo:string, json:string):Pull {
+  return pullItem(repo, rawPull.parse(JSON.parse(json)));
 }
 
 export function parseOpenPulls(repo:string, json:string):Source {
@@ -51,12 +73,7 @@ export function parseOpenPulls(repo:string, json:string):Source {
   const items: Pull[] = [];
   for (const p of rows.slice(0,scanLimit)) {
     if (seen.has(p.number)) continue;
-    const why = reason(p);
-    const head = repositorySlug.safeParse(p.headRepo);
-    const headSha = commitSha.safeParse(p.headSha);
-    items.push({repo, number:p.number, ...(head.success && p.headBranch ? {headRepo:head.data,headBranch:p.headBranch} : {}),
-      ...(headSha.success ? {headSha:headSha.data} : {}), title:p.title.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g," ").slice(0,512),
-      url:pullUrl(repo,p.number), lane:why==="ready"?"review":"progress",reason:why,updatedAt:p.updatedAt});
+    items.push(pullItem(repo,p));
     seen.add(p.number);
   }
   return {items,status:rows.length>scanLimit?"truncated":"ok"};
@@ -90,6 +107,10 @@ const githubPulls = async (repo:string) => parseOpenPulls(repo,await run("gh",[
   "pr","list","--repo","github.com/"+repo,"--state","open","--limit",String(scanLimit+1),"--json",fields,"--jq",projection,
 ]));
 
+const githubPull = async (repo:string, number:number) => parseOpenPull(repo,await run("gh",[
+  "pr","view",String(number),"--repo","github.com/"+repo,"--json",fields,"--jq",row,
+]));
+
 async function githubLifecycle(target: MergeTarget) {
   const output = await run("gh", ["pr", "view", String(target.number), "--repo", "github.com/" + target.repo, "--json", "state,isDraft,url"]);
   const row = z.object({state:pullLifecycle, isDraft:z.boolean(), url:z.string()}).parse(JSON.parse(output));
@@ -109,8 +130,11 @@ export class ProjectPullRequests {
   private readonly discovery = new Map<string,{expires:number; value:Promise<string|null>}>();
   private readonly waiting: (() => void)[] = [];
   private running = 0;
-  constructor(private store:PreferenceStore,private readonly deps = {localOrigin,githubPulls,now:Date.now},
-    private readonly mergeApi=githubMergeApi(args=>run("gh",args)), private readonly lookupLifecycle=githubLifecycle) {}
+  private readonly mergeability: MergeabilityChecks;
+  constructor(private store:PreferenceStore,private readonly deps:{localOrigin:typeof localOrigin; githubPulls:typeof githubPulls; githubPull?:typeof githubPull; now:()=>number} = {localOrigin,githubPulls,githubPull,now:Date.now},
+    private readonly mergeApi=githubMergeApi(args=>run("gh",args)), private readonly lookupLifecycle=githubLifecycle) {
+    this.mergeability = new MergeabilityChecks(deps.githubPull ?? githubPull, deps.now, mergeabilityRetry);
+  }
 
   private async limited<T>(task:()=>Promise<T>):Promise<T> {
     if (this.running >= 3) await new Promise<void>(resolve=>this.waiting.push(resolve));
@@ -295,11 +319,15 @@ export class ProjectPullRequests {
         return {projectId,mode,repo:resolved,status:resolved?"ok":native===null?"unavailable":"unmapped"};
       } catch { return {projectId,mode,repo:null,status:"unavailable"}; }
     }));
+    const budget = {left:mergeabilityRetry.perRead};
     const sources = new Map(await Promise.all([...pending].map(async ([repo,group]) => {
       let value = await group.read;
       // A queued lookup can lose its last authorized project while a slower
       // mapping for the same repository is still in progress.
       if (value === null && group.allowed()) value = await this.pulls(repo,false,group.allowed);
+      if (value?.items.some(p => p.reason === "computing")) {
+        value = {...value, items:await this.mergeability.apply(value.items,task=>this.limited(task),group.allowed,budget)};
+      }
       return [repo,value] as const;
     })));
     const latest = this.store.read();

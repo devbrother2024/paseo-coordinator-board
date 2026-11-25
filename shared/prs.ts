@@ -10,7 +10,8 @@ export const repositoryMode = z.enum(["auto", "manual", "off"]);
 export const repositoryOverride = z.discriminatedUnion("mode", [
   z.object({ mode:z.literal("manual"), repo:repositorySlug }), z.object({mode:z.literal("off")}),
 ]);
-export const pullReason = z.enum(["ready","draft","conflict","checks-failed","checks-pending","changes-requested","blocked","unknown","auto-merge"]);
+// "computing": GitHub has not finished working out mergeability yet. "unknown": the board could not read it.
+export const pullReason = z.enum(["ready","draft","conflict","checks-failed","checks-pending","changes-requested","review-required","blocked","computing","unknown","auto-merge"]);
 export const commitSha = z.string().regex(/^[a-f0-9]{40}$/);
 // What the coordinator decided about one PR head. GitHub readiness alone is not a merge decision.
 export const pullVerdict = z.enum(["ready", "needs-changes", "in-progress", "blocked"]);

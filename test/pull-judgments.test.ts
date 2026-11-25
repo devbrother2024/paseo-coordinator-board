@@ -120,3 +120,13 @@ test("without a coordinator GitHub decides, but a current non-ready verdict stil
   // Turning the setting off is the only way to ignore a current verdict.
   expect(applyPullJudgments([pr()], { enabled: false, coordinator: false, judgments: judged("blocked"), ledgerPulls: none })[0].gate).toBe("github");
 });
+
+test("each GitHub state has its own words, and status unknown is kept for lookups that failed", () => {
+  expect(pullStatusWords(pr({ reason: "computing", lane: "progress" }))).toEqual(["GitHub이 병합 가능 여부를 계산 중", "GitHub is still checking whether it can merge"]);
+  expect(pullStatusWords(pr({ reason: "review-required", lane: "progress" }))).toEqual(["리뷰 필요", "Review required"]);
+  expect(pullStatusWords(pr({ reason: "checks-pending", lane: "progress" }))[0]).toBe("검사 중");
+  expect(pullStatusWords(pr({ reason: "blocked", lane: "progress" }))[0]).toBe("병합 조건 대기");
+  expect(pullStatusWords(pr({ reason: "unknown", lane: "progress" }))[0]).toBe("상태 미확인");
+  expect(pullColumn(pr({ reason: "computing", lane: "progress" }))).toBe("running");
+  expect(pullColumn(pr({ reason: "review-required", lane: "progress" }))).toBe("review");
+});

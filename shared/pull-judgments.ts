@@ -60,7 +60,7 @@ export type PullColumn = "human" | "review" | "running";
 export function pullColumn(pr: Pick<PullRequestItem, "lane" | "reason" | "gate" | "judgment">): PullColumn {
   if (pr.lane === "review") return "human";
   if (pr.gate === "needs-changes" || pr.gate === "blocked" || pr.gate === "stale") return "review";
-  if (["conflict", "checks-failed", "changes-requested", "blocked", "unknown"].includes(pr.reason)) return "review";
+  if (["conflict", "checks-failed", "changes-requested", "review-required", "blocked", "unknown"].includes(pr.reason)) return "review";
   return "running";
 }
 
@@ -68,7 +68,11 @@ const githubWords = {
   ready: ["병합 검토 가능", "Ready for merge review"], draft: ["초안", "Draft"],
   conflict: ["충돌 해결 필요", "Conflicts to resolve"], "checks-failed": ["검사 실패", "Checks failed"],
   "checks-pending": ["검사 중", "Checks pending"], "changes-requested": ["수정 요청", "Changes requested"],
-  blocked: ["병합 조건 대기", "Merge requirements pending"], unknown: ["상태 미확인", "Status unknown"],
+  "review-required": ["리뷰 필요", "Review required"],
+  blocked: ["병합 조건 대기", "Merge requirements pending"],
+  computing: ["GitHub이 병합 가능 여부를 계산 중", "GitHub is still checking whether it can merge"],
+  // Only when the board could not read the PR from GitHub.
+  unknown: ["상태 미확인", "Status unknown"],
   "auto-merge": ["자동 병합 대기", "Auto-merge enabled"],
 } as const satisfies Record<PullRequestItem["reason"], readonly [string, string]>;
 export const githubStatusWords: Record<PullRequestItem["reason"], readonly [string, string]> = githubWords;
