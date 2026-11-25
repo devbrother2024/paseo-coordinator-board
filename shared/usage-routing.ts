@@ -8,10 +8,17 @@ const quotaWindow = z.object({
 const balance = z.object({
   id:z.string(), label:z.string(), remaining:z.number().nullable(), limit:z.number().nullable(), unit:z.string(), resetsAt:stamp,
 });
+// Free resets of a usage limit some subscriptions grant. Paseo does not report them, so they come
+// only from the host's account-usage.json and are shown, never used to pick an account.
+const resetPass = z.object({
+  id:z.string(), label:z.string(), left:z.number().int().nonnegative(), expiresAt:z.array(z.string()), note:z.string().optional(),
+});
+export type ResetPass = z.infer<typeof resetPass>;
 export const accountUsage = z.object({
   providerId:z.string(), label:z.string(), plan:z.string().nullable(), fetchedAt:stamp,
   issue:z.enum(["login","rate-limit"]).optional(),
   status:z.enum(["available","unavailable","error"]), windows:z.array(quotaWindow), balances:z.array(balance),
+  resetPasses:z.array(resetPass).optional(),
 });
 export type AccountUsage = z.infer<typeof accountUsage>;
 
