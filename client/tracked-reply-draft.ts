@@ -39,11 +39,17 @@ export function closedRevision(outcome: { status: string; requested?: string; re
   return outcome && finished.has(outcome.status) ? outcome.revision ?? outcome.requested ?? null : null;
 }
 
+// A reply format that lists choices ("A / B") or leaves blanks ("<time>") guides the person; it is not a sentence to send.
+const replyFormat = (line: string) => /<[^>]+>/.test(line) || /\s\/\s/.test(line);
+
 // Merge cards use the PR action, and long explanations are not answers to send as they are. The ledger's own short
-// reply comes first, then the first recommendation line.
+// reply comes first, then its example reply (the sentence to send after following the recommendation), then the first
+// recommendation line, which can be an instruction rather than a reply.
 export function recommendedTrackedReply(item: TrackedDecision) {
   if (item.kind === "merge" || item.questions.length || item.matchedSessionId) return "";
-  return [item.recommendedReply, item.recommend[0]].map(line => line?.trim() ?? "").find(line => line && !isLongReply(line)) ?? "";
+  const example = item.howToAnswer?.trim() ?? "";
+  return [item.recommendedReply, replyFormat(example) ? "" : example, item.recommend[0]].map(line => line?.trim() ?? "")
+    .find(line => line && !isLongReply(line)) ?? "";
 }
 
 // Everything a card sends stays on screen. A reply written before the card gained questions keeps its editor,

@@ -102,6 +102,9 @@ test("a personal check card suggests 'I checked this' when the ledger has no rep
   expect(isHumanCheck(check)).toBe(true);
   expect(trackedSuggestion(check, "확인했어요")).toBe("확인했어요");
   expect(trackedSuggestion(record({ kind: "check", where: "human", recommendedReply: "봤어요" }), "확인했어요")).toBe("봤어요");
+  // A personal check whose recommendation is an instruction suggests the ledger's example reply instead.
+  const disconnect = record({ kind: "check", where: "human", recommend: ["원격 데스크톱 연결 끊기"], howToAnswer: "원격 데스크톱 끊었어" });
+  expect(trackedSuggestion(disconnect, "확인했어요")).toBe("원격 데스크톱 끊었어");
   // Other cards keep the ledger's own suggestion, or none.
   expect(isHumanCheck(record({ kind: "check", where: "manager" }))).toBe(false);
   expect(trackedSuggestion(record({ kind: "answer", where: "manager" }), "확인했어요")).toBe("");
