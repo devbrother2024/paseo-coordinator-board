@@ -18,6 +18,8 @@ export type Evidence = {
   clarificationMessages?: Map<string, ClarificationObservation>;
   laterInput?: boolean;
   deliveries?: { id: string; sender: string; bodyHash: string }[];
+  // Sender of the most recent agent message when it is the latest input.
+  lastInputSender?: string;
 };
 type Candidate = Pick<SessionRow, "lane" | "detail" | "decisionRequestedAt">;
 const request = /확인해\s*주실\s*것|(?:확인|선택|승인|결정|답변|지정)\s*(?:부탁드|해\s*(?:주세|주실|주셔야|주시겠))|(?:알려|골라|정해|답해)\s*(?:주세|주실|주셔야)|(?:할까요|될까요|하시겠어요|고르시겠어요|원하시나요)[?？]|\b(?:please (?:choose|confirm|approve)|which .* (?:prefer|choose)|shall I|would you like me to|could you (?:confirm|choose))\b/i;
@@ -34,14 +36,17 @@ export function excerpt(page: Page): Evidence {
   const boardMessageHashes=new Map<string,string>();
   let messageIds: string[] = [];
   let clarification: ClarificationObservation | undefined;
+  let lastInputSender: string | undefined;
   const clarificationMessages = new Map<string, ClarificationObservation>();
   for (const { item, seqEnd, timestamp } of page.entries) {
     if (item.type === "tool_call" && (item.agentMessage || item.name === "heartbeat")) {
       messageIds = [];
       clarification = undefined;
       laterInputs.push(item.callId);
+      lastInputSender = undefined;
       const prefix = "paseo-agent-message:";
       if (item.status === "completed" && item.callId.startsWith(prefix) && item.agentMessage?.event === "message") {
+        lastInputSender = item.agentMessage.sender.id;
         deliveries.push({ id:item.callId.slice(prefix.length), sender:item.agentMessage.sender.id,
           bodyHash:createHash("sha256").update(item.agentMessage.text).digest("hex") });
       }
@@ -50,6 +55,7 @@ export function excerpt(page: Page): Evidence {
     const role = item.type === "assistant_message" ? "assistant" : "user";
     const text = item.text.trim();
     if (item.type === "user_message") {
+      lastInputSender = undefined;
       messageIds = [item.messageId, item.clientMessageId].filter((id): id is string => !!id);
       if (messageIds.length && text.startsWith("[Coordinator Board · ")) {
         const hash=createHash("sha256").update(item.text).digest("hex");
@@ -82,7 +88,8 @@ export function excerpt(page: Page): Evidence {
     ...(clarification && messageIds.length ? { lastInputIds: messageIds } : {}),
     ...(clarificationMessages.size ? { clarificationMessages } : {}),
     ...(boardMessageHashes.size ? {boardMessageHashes} : {}),
-    ...(replies.size ? { replies } : {}), ...(laterInputs.length ? {laterInput:true} : {}), ...(deliveries.length ? {deliveries} : {}) };
+    ...(replies.size ? { replies } : {}), ...(laterInputs.length ? {laterInput:true} : {}), ...(deliveries.length ? {deliveries} : {}),
+    ...(lastInputSender ? { lastInputSender } : {}) };
 }
 
 const noQuestion = /(?:확인해\s*주실\s*것|결정해\s*주실\s*것|확인\s*요청)(?:은|이|이란)?\s*(?:없|없습니다|없음)/;
@@ -144,8 +151,13 @@ export function classify(e: Evidence, row: SessionRow, decision?: Preferences["j
   return row;
 }
 
+// The board reads excerpts only for resting sessions without an error to review.
+export function usesConversationEvidence(row: Pick<SessionRow, "lane" | "detail">) {
+  return (row.lane === "idle" || row.lane === "review") && !row.detail.includes("오류");
+}
+
 export function applyConversationEvidence(evidence: Evidence, row: SessionRow, prefs: Preferences) {
-  if ((row.lane !== "idle" && row.lane !== "review") || row.detail.includes("오류")) return false;
+  if (!usesConversationEvidence(row)) return false;
   const judgment = prefs.judgments[row.id];
   Object.assign(row, classify(evidence, row, judgment?.projectId === row.projectId ? judgment : undefined, row.id === prefs.coordinator),
     { evidenceId: evidence.id });
