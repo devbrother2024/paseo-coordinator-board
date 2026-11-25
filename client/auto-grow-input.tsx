@@ -7,11 +7,11 @@ import { SendTextInput, type SendAction } from "./send-input";
 const web = Platform.OS === "web";
 const DEFAULT_MIN_HEIGHT = 56;
 
-type Props = ComponentProps<typeof TextInput> & { send?: SendAction };
+type Props = ComponentProps<typeof TextInput> & { send?: SendAction; onOverflowChange?: (overflows: boolean | undefined) => void };
 
 // A multi-line input that is as tall as its text, from the style's minHeight up to a share of the window, then scrolls inside.
 // A single-line input (multiline off) is passed through untouched.
-export function AutoGrowInput({ send, style, multiline, value, onLayout, onContentSizeChange, ...props }: Props) {
+export function AutoGrowInput({ send, style, multiline, value, onLayout, onContentSizeChange, onOverflowChange, ...props }: Props) {
   const { height: windowHeight } = useWindowDimensions();
   const input = useRef<unknown>(null);
   const [content, setContent] = useState<number>();
@@ -34,6 +34,9 @@ export function AutoGrowInput({ send, style, multiline, value, onLayout, onConte
   }, [measure, multiline]);
 
   const fit = content === undefined ? undefined : fitInputHeight({ content: content + verticalChrome(flat, !web), min, max: maxInputHeight(windowHeight, min) });
+  // Tells the owner whether the text is taller than the input can grow, so it can ask for a read confirmation only then.
+  const overflows = multiline ? fit?.scrolls : false;
+  useEffect(() => { onOverflowChange?.(overflows); }, [overflows, onOverflowChange]);
   const grown = !multiline ? style : [style, { minHeight: min, height: fit?.height },
     web ? { resize: "none", overflowY: fit?.scrolls ? "auto" : "hidden" } as object : null];
   const fields = {
