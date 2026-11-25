@@ -129,7 +129,8 @@ test("does not close (1): the person wrote about something else", () => {
   const result = judge(evidence(ask, ["user", "Let's talk about the logo first.", 0.5], reply));
   expect(result).toMatchObject({ lane: "human", detail: expect.stringContaining("Shall I publish"), keptQuestion: { maybeAnswered: true } });
   expect(judge(evidence(ask, ["user", "", 0.5], reply)).keptQuestion?.maybeAnswered).toBe(true);
-  expect(keptQuestionNotice({ keptQuestion: result.keptQuestion!, decision: { source: "conversation" } as any })?.line?.[0]).toContain("세션에 답했을 수 있음 · 확인");
+  // The card does not say it may have been answered: the coordinator judges that (question-judgments).
+  expect(keptQuestionNotice({ keptQuestion: result.keptQuestion!, decision: { source: "conversation" } as any })?.line?.[0]).toBe("이 뒤로 세션이 1번 더 말함");
 });
 
 test("does not close (2): messages and heartbeats from other sessions", () => {
@@ -217,11 +218,11 @@ test("card lines in both languages", () => {
   const decision = { source: "conversation" } as any;
   expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 0 }, decision })?.line).toBeNull();
   expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 1 }, decision })?.line).toEqual(
-    ["이 뒤로 세션이 1번 더 말함 · 아직 답 없음", "The session spoke 1 more time since · No answer yet"]);
+    ["이 뒤로 세션이 1번 더 말함", "The session spoke 1 more time since"]);
   expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 17, stale: true }, decision })?.line).toEqual(
-    ["오래된 질문 · 이 뒤로 세션이 17번 더 말함 · 아직 답 없음", "Old question · The session spoke 17 more times since · No answer yet"]);
+    ["오래된 질문", "Old question"]);
   expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 3, ended: true, maybeAnswered: true }, decision })?.line).toEqual(
-    ["세션 끝남 · 미처리 · 세션에 답했을 수 있음 · 확인", "Session ended · Not handled · You may have answered in the session · Check"]);
+    ["세션 끝남 · 미처리", "Session ended · Not handled"]);
   expect(keptQuestionNotice({ keptQuestion: { key: "k", later: 1 }, decision: { source: "coordinator" } as any })).toBeNull();
 });
 

@@ -70,9 +70,12 @@ test("every board tool is an action, and the guide repeats the tool's own descri
   const context = { agent: { id: "coordinator-1", provider: "codex" }, paseo: {} };
   const overview = JSON.parse((await guide.execute({}, context)).text);
   const named = tools.filter(tool => tool.name !== boardGuideName && tool.name !== boardActionName);
-  expect(overview.actions.map((action: any) => action.name)).toEqual(named.map(tool => tool.name));
-  // Contract 1 is the installed board: nothing yet exists only through board_action.
-  expect(overview.board).toEqual({ contract: coordinatorContract.version, guide: "" });
+  // Actions with no tool definition of their own run through board_action only. They come after the tools.
+  const onlyActions = ["judge_open_question"];
+  expect(overview.actions.map((action: any) => action.name)).toEqual([...named.map(tool => tool.name), ...onlyActions]);
+  expect(overview.actions.filter((action: any) => action.tool === false).map((action: any) => action.name)).toEqual(onlyActions);
+  // An action only through board_action gives the guide a revision, so a running conversation is told to read it once.
+  expect(overview.board).toEqual({ contract: coordinatorContract.version, guide: expect.stringMatching(/^[0-9a-f]{12}$/) });
   for (const tool of named) {
     const topic = JSON.parse((await guide.execute({ topic: tool.name }, context)).text);
     // The descriptions keep their full guidance, so a new conversation misses no rule.

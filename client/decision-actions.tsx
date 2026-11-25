@@ -187,10 +187,7 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
     <CardHeader theme={theme} text={marker}>
       {open && <SessionChip theme={theme} label={t("작업 세션 열기", "Open work session")} accessibilityLabel={named(t("작업 세션 열기", "Open work session")).accessibilityLabel} onPress={() => open(session.id)} />}
     </CardHeader>
-    {kept && <View style={{ ...wrap, alignItems: "center" }}>
-      {kept.line && <Text style={{ color: kept.stale || kept.ended ? c.statusWarning : c.foregroundMuted, fontSize: 12 }}>{t(...kept.line)}</Text>}
-      <Button theme={theme} {...named(t("처리됨으로 닫기", "Close as handled"))} disabled={busy} onPress={() => void closeKept(kept.key)} />
-    </View>}
+    {kept?.line && <Text style={{ color: kept.stale || kept.ended ? c.statusWarning : c.foregroundMuted, fontSize: 12 }}>{t(...kept.line)}</Text>}
     {split ? <View>
       {/* The full title, laid out unseen at the same width, tells whether two lines cut it off. */}
       <View pointerEvents="none" aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
@@ -208,20 +205,16 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
     </View>}
     {!formal && decision && <QuestionContext theme={theme} title={session.title} choices={decision.choices} context={context} notice={choiceNotice} />}
     {!!kept?.older.length && <View style={{ gap: 4 }}>
-      <Text style={{ color: c.foregroundMuted, fontSize: 12, fontWeight: "600" }}>{t("이 세션의 이전 미처리 질문", "Earlier questions in this session, not handled")}</Text>
-      {kept.older.map(item => <View key={item.key} style={{ ...wrap, alignItems: "center" }}>
-        <Text selectable style={{ color: c.foreground, fontSize: 13, flexShrink: 1 }}>{item.question}</Text>
-        <Button theme={theme} {...named(t("처리됨으로 닫기", "Close as handled") + " · " + item.question.slice(0, 40))} label={t("처리됨으로 닫기", "Close as handled")}
-          disabled={busy} onPress={() => void closeKept(item.key)} />
-      </View>)}
+      <Text style={{ color: c.foregroundMuted, fontSize: 12, fontWeight: "600" }}>{t("이 세션의 다른 결정", "Other decisions in this session")}</Text>
+      {kept.older.map(item => <Text key={item.key} selectable style={{ color: c.foreground, fontSize: 13 }}>{item.question}</Text>)}
     </View>}
     {completion && !coordination && <View style={wrap}>
       <Button theme={theme} {...named(t(...completion.label))} disabled={busy || replyPhotos.reading}
         onPress={() => { setError(null); setCoordination({ recipientId: coordinator!, text: t(...completion.text) }); }} />
     </View>}
     {kept?.ended ? <Text style={{ color: c.foregroundMuted }}>
-      {t("세션이 끝났거나 찾을 수 없어 답을 보낼 수 없습니다. 처리됐으면 처리됨으로 닫아 주세요.",
-        "The session ended or cannot be found, so no reply can be sent. If it was handled, close it as handled.")}
+      {t("세션이 끝났거나 찾을 수 없어 답을 보낼 수 없습니다. 코디네이터가 처리 여부를 판단합니다.",
+        "The session ended or cannot be found, so no reply can be sent. The coordinator judges whether it was handled.")}
     </Text> : formal || !decision ? formal && (pendingRequests ?? <Text style={{ color: c.foregroundMuted }}>
       {t("승인 요청은 작업 세션에서 확인해 주세요.", "Review the approval request in the work session.")}
     </Text>) : <>
@@ -316,6 +309,14 @@ export function DecisionActions({ card, theme, hostLabel, coordinator, coordinat
       </View>}
       {showEvidence && sourceExcerpts.map(text => <HistoryMarkdown key={text} theme={theme} source={text} muted />)}
       {showEvidence && renderClarification?.("history")}
+      {showEvidence && !!kept?.verdictEvidence && <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>
+        {t("코디네이터 판단 근거", "Coordinator's evidence")} · {kept.verdictEvidence}
+      </Text>}
+      {/* Closing it yourself stays possible, out of the way: the coordinator judges whether a question was handled. */}
+      {showEvidence && kept && <Pressable accessibilityRole="button" accessibilityLabel={named(t("처리된 것으로 직접 닫기", "Close as handled yourself")).accessibilityLabel}
+        disabled={busy} style={{ paddingVertical: 4, paddingHorizontal: 3 }} onPress={() => void closeKept(kept.key)}>
+        <Text style={{ color: c.foregroundMuted, fontSize: 12, textDecorationLine: "underline" }}>{t("처리된 것으로 직접 닫기", "Close as handled yourself")}</Text>
+      </Pressable>}
     </View>
     {receipt && <ReceiptText receipt={receipt} theme={theme} />}
     {!!error && <Text accessibilityLiveRegion="polite" selectable style={{ color: c.statusDanger }}>{t(...error)}</Text>}

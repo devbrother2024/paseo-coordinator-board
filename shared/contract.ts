@@ -48,6 +48,8 @@ const session = z.object({
     maybeAnswered: z.literal(true).optional(), ended: z.literal(true).optional(),
     // The person's done note on the session already closed an earlier question, so it does not hide this one.
     noteSpent: z.literal(true).optional(),
+    // The coordinator judged that the question still needs the person, and why.
+    verdict: z.literal("needed").optional(), verdictEvidence: z.string().max(2000).optional(),
     older: z.array(z.object({ key: z.string().min(1).max(64), question: z.string().max(340), askedAt: z.string().optional() })).max(10).optional(),
   }).optional(),
   lastSummary: z.string().max(400).optional(),

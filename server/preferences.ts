@@ -38,6 +38,12 @@ export const raisedQuestionSchema = z.object({
   maybeAnswered: z.literal(true).optional(), moved: z.literal(true).optional(),
   // The ledger card the question moved to.
   movedTo: z.string().max(6000).optional(),
+  // Why the coordinator should judge whether it was handled, while it has not.
+  judge: z.enum(["others-open", "spoke-after", "person-wrote"]).optional(),
+  // The coordinator's judgment that it still needs the person.
+  verdict: z.object({ kind: z.literal("needed"), evidence: z.string().max(2000).optional(), at: z.iso.datetime(), by: z.string().max(256) }).optional(),
+  // The coordinator that was told to judge it.
+  notified: z.string().max(256).optional(),
 });
 export type RaisedQuestion = z.output<typeof raisedQuestionSchema>;
 const raisedSession = z.object({
@@ -50,7 +56,10 @@ const raisedSession = z.object({
 });
 export type RaisedSession = z.output<typeof raisedSession>;
 const closedQuestion = z.object({
-  sessionId: z.string(), at: z.iso.datetime(), reason: z.enum(["board", "session", "choice", "ledger", "person"]),
+  sessionId: z.string(), at: z.iso.datetime(), reason: z.enum(["board", "session", "choice", "ledger", "person", "coordinator"]),
+  // A coordinator's judgment: its evidence, who judged, and the question for recent decisions.
+  evidence: z.string().max(2000).optional(), by: z.string().max(256).optional(),
+  question: z.string().max(340).optional(), projectId: z.string().max(4096).optional(),
   // Where the question was in its timeline, so a later settling line still finds it after the record is gone.
   epoch: z.string().max(4096).optional(), seq: z.number().optional(),
   // The person's done note that closed it. One note closes one question.

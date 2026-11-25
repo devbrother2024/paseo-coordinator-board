@@ -28,6 +28,7 @@ import { createOperations } from "./server/operations";
 import { hostVisibility } from "./shared/hosts";
 import { decorateDecision, DecisionSender } from "./server/decisions";
 import { applyDoneNotes } from "./server/session-decisions";
+import { coordinatorClosures, judgeOpenQuestionTool, QuestionNotices } from "./server/question-judgments";
 import { sendDecision } from "./shared/decision-actions";
 import { isCurrentMembership, managedSessions, registerSessionLinks, releaseUnmanagedCoordinator } from "./server/session-links";
 import { registerRecommendation } from "./server/recommendation";
@@ -67,6 +68,7 @@ export default function contribute(server: PluginServerContext) {
   const reader = new ConversationReader();
   const projectRoots = new ProjectRootReader();
   const facts = new BoardFacts(prefs, notes, reader);
+  const questionNotices = new QuestionNotices(prefs);
   facts.register(server);
   const operatingRoot = join(home, "plugin-workspaces");
   const operatingFolders = operatingDirectories(operatingRoot);
@@ -154,6 +156,8 @@ export default function contribute(server: PluginServerContext) {
     // Saving the record must not stop the board from showing. The next snapshot saves again.
     try { if (save(structuredClone(latest))) prefs.change(save); }
     catch { console.warn("Could not save the board's question records."); }
+    // Questions whose handling the board cannot tell go to the coordinator to judge. The board does not wait for it.
+    void questionNotices.deliver(paseo).catch(() => console.warn("Could not tell the coordinator which questions to judge."));
     facts.decorate(visible, evidence, visibleNotes);
     for (const row of visible) {
       decorateDecision(row, visibleNotes[row.id], latest, evidence.get(row.id));
@@ -273,6 +277,8 @@ export default function contribute(server: PluginServerContext) {
     if (updates.size) prefs.change(current => {
       for (const [id,text] of updates) if (current.decisionReceipts[id]) current.decisionReceipts[id].response = text;
     });
+    // Questions the coordinator judged handled, with its evidence.
+    activity.push(...coordinatorClosures(latest, selected));
     const changes = changeRequestHistory(latest, selected, evidence);
     activity.push(...changes.entries);
     if (changes.responses.size || changes.confirmed.length) prefs.change(current => {
@@ -642,6 +648,6 @@ export default function contribute(server: PluginServerContext) {
   const removeReport = attachReportTool(server, notes);
   const reviewContext = async () => ({ thresholdHours: await staleHours(),
     covered: coveredSessionIds(tracked.read(new Set(prefs.read().projects), [], { items: [], projects: [] }).items) });
-  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount), judgePullTool(prefs, prs, invalidateCount, undefined, {hints:(selected, id) => tracked.ownerHints(selected, id)})], toolStamps, reviewContext);
+  const removeCoordinator = attachCoordinatorTools(server, prefs, reader, [...operations.tools, facts.tool, trackedReviewTool(prefs, tracked, prs, reader, invalidateCount), judgePullTool(prefs, prs, invalidateCount, undefined, {hints:(selected, id) => tracked.ownerHints(selected, id)}), judgeOpenQuestionTool(prefs, invalidateCount)], toolStamps, reviewContext);
   return () => { removeMergeTurn(); removeMergePermission(); removeReplyClose(); removeReplyArchive(); removeCoordinator(); removeReport(); };
 }

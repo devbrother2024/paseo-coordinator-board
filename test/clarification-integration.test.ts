@@ -11,6 +11,7 @@ import {sendDecision} from "../shared/decision-actions";
 import {askClarification,clarificationKey,trackedClarificationCard, type ClarificationCard} from "../shared/clarifications";
 
 const roots:string[]=[];
+const isJudgmentNotice=(text:string)=>text.startsWith("[Coordinator Board · 판단 필요 / Judgment needed]");
 afterEach(()=>{for(const root of roots.splice(0)) rmSync(root,{recursive:true,force:true});});
 
 async function fixture(matchedQuestion?: string) {
@@ -135,7 +136,9 @@ test("an explanation in the source session keeps the original choice answerable 
   await expect(answer("writer")).rejects.toThrow();
   const final=await answer("editor");
   expect(final.recipientId).toBe("editor");
-  expect(f.sent.map(m=>m.id)).toEqual(["editor","writer","editor"]);
+  // The coordinator also hears which questions to judge (the person wrote something else to the writer).
+  expect(f.sent.filter(m=>!isJudgmentNotice(m.text)).map(m=>m.id)).toEqual(["editor","writer","editor"]);
+  expect(f.sent.filter(m=>isJudgmentNotice(m.text)).every(m=>m.id==="coordinator")).toBe(true);
   expect((await f.snapshot()).replyHistory?.some(r=>r.answer==="Use 0.10 seconds.")).toBe(true);
 });
 
@@ -171,8 +174,8 @@ test("a clarification on a tracked card with inline native controls keeps the th
   const result=await f.answer({projectId:"studio",sessionId:"editor",recipientId:"editor",version:original.version,
     action:"reply",text:"Use the second take.",requestKey:"fixture-matched-final"});
   expect(result.recipientId).toBe("editor");
-  expect(f.sent.map(message=>message.id)).toEqual(["editor","editor"]);
-  expect(f.sent[1].text).toContain("Use the second take.");
+  expect(f.sent.filter(message=>!isJudgmentNotice(message.text)).map(message=>message.id)).toEqual(["editor","editor"]);
+  expect(f.sent.filter(message=>!isJudgmentNotice(message.text))[1].text).toContain("Use the second take.");
   expect((await f.snapshot()).replyHistory?.some(entry=>entry.answer==="Use the second take.")).toBe(true);
 
   f.append("editor",{type:"user_message",text:"Review today's revised cut.",clientMessageId:"new-edit-request"});
@@ -182,7 +185,7 @@ test("a clarification on a tracked card with inline native controls keeps the th
   expect(next.question).toBe(original.question);
   expect(next.version).not.toBe(original.version);
   await expect(f.ask({...input,requestKey:"fixture-matched-request-after-revision"})).rejects.toThrow();
-  expect(f.sent).toHaveLength(2);
+  expect(f.sent.filter(message=>!isJudgmentNotice(message.text))).toHaveLength(2);
 });
 
 test("reopening the board confirms the exact accepted question before the assistant replies", async () => {
