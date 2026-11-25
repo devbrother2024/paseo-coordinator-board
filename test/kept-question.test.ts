@@ -409,3 +409,20 @@ test("review 2: a ledger card revised after an earlier revision was resolved doe
   expect(left).toMatchObject({ lane: "human", detail: expect.stringContaining("Shall I publish") });
   expect(scanOf(left)!.closed).toEqual([]);
 });
+
+test("review 3: an answer that was ambiguous stays ambiguous when the timeline is read again after a later closure", () => {
+  const first: Step = ["assistant", "Two ways for the cache:\n(a) Memory.\n(b) Disk.\nShall I go with (a) or (b)?", 3];
+  const second: Step = ["assistant", "Two ways for logs:\n(a) Keep.\n(b) Drop.\nShall I go with (a) or (b)?", 2];
+  const steps: Step[] = [first, second, ["user", "a", 1], ["user", "Drop the logs.", 0.5, "board-reply-1"], ["assistant", "Dropping the logs.", 0.4]];
+  const newer = evidence(...steps).events!.find(event => event.role === "assistant" && event.text.includes("logs")) as any;
+  for (const question of [newer.key, undefined]) {
+    const scope = blank();
+    scope.decisionReceipts = { "board-reply-1": { fingerprint: "f", sessionId: "worker", version: "v", status: "sent", ...(question ? { question } : {}) } };
+    const once = snapshot(scope, evidence(...steps));
+    expect(once).toMatchObject({ lane: "human", detail: expect.stringContaining("(a) or (b)"), keptQuestion: { maybeAnswered: true } });
+    expect(Object.keys(scope.closedQuestions)).toHaveLength(1);
+    const again = snapshot(scope, evidence(...steps));
+    expect(again).toMatchObject({ lane: "human", keptQuestion: { maybeAnswered: true } });
+    expect(Object.keys(scope.closedQuestions)).toHaveLength(1);
+  }
+});

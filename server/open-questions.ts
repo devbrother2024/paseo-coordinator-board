@@ -207,9 +207,11 @@ export function scanQuestions(evidence: { epoch?: string; events?: readonly Ques
     }
     const open = list.filter(item => !item.closed);
     if (!open.length) continue;
-    // An answer that fits more than one open question cannot tell which one it answers, so it closes none.
-    const matches = open.filter(item => answersChoices(event.text, choicesOf(item)));
-    if (matches.length === 1) close(matches[0], "choice");
+    // An answer that fits more than one question asked before it cannot tell which one it answers, so it closes none.
+    // Questions closed since count too: a closure recorded later must not make the same answer clear when the timeline
+    // is read again.
+    const matches = list.filter(item => answersChoices(event.text, choicesOf(item)));
+    if (matches.length === 1 && !matches[0].closed) close(matches[0], "choice");
     else for (const item of open) item.maybeAnswered = true;
   }
   // A question that moved to a ledger card closes only when that card has a resolution on record. A card that left the
