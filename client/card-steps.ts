@@ -11,12 +11,16 @@ export type QuestionDraft = { selected?: readonly string[]; typed?: string; skip
 // A card with several questions shows one at a time. A single question keeps the whole form on the card.
 export const usesSteps = (questions: readonly Question[]) => questions.length >= 2;
 
-// A long card waits as a short preview until the person starts answering, so the next card stays in view.
-export const foldsCard = (item: Pick<TrackedDecision, "questions">) => usesSteps(item.questions);
-
 export function firstOpenStep(answered: readonly boolean[]): Step {
   const index = answered.findIndex(done => !done);
   return index < 0 ? "summary" : index;
+}
+
+// Where a card first shows: a card with several questions opens straight on its first unanswered question (the
+// summary once all are answered), with no Answer button to press first. A single question keeps the whole form (null).
+export function openingStep(questions: readonly Question[], answered: readonly boolean[]): Step | null {
+  if (!usesSteps(questions)) return null;
+  return firstOpenStep(questions.map((_, index) => !!answered[index]));
 }
 
 // The next unanswered question after this one, then any left behind. With none left, the summary.
