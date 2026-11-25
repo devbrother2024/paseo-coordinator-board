@@ -120,8 +120,11 @@ export class PullChangeRequests {
     // message, even under the same key and words.
     const prior = saved?.withdrawnAt ? undefined : saved;
     const uuid = messageUuid(saved?.withdrawnAt ? input.requestKey + "\n" + saved.withdrawnAt : input.requestKey);
-    const messageId = photos.length ? boardPhotoMessageId(uuid) : uuid;
-    if (prior?.messageId === messageId) {
+    const fresh = photos.length ? boardPhotoMessageId(uuid) : uuid;
+    // The recorded request keeps its own message ID, so its retries find it even when it was sent after a reopening.
+    const retried = !!prior && (prior.requestKey === input.requestKey || prior.messageId === fresh);
+    const messageId = retried ? prior.messageId : fresh;
+    if (retried) {
       // The same request again only checks the earlier attempt. It is never sent twice.
       if (prior.fingerprint !== fingerprint) return { status: "unconfirmed" };
       return prior.status === "sent" ? { status: "sent", recipientId: prior.recipientId } : this.confirm(sdk, key, prior);
@@ -147,6 +150,7 @@ export class PullChangeRequests {
     const record: PullChangeRequest = {
       repo: input.repo, number: input.number, projectId: input.projectId, headSha: input.headSha, title: pr.title.slice(0, 512),
       text: input.text, recipientId: recipient.id, coordinator: recipient.coordinator, messageId, messageHash: hash(text), fingerprint,
+      requestKey: input.requestKey,
       at: new Date(this.now()).toISOString(), status: "pending", ...(photos.length ? { imageCount: photos.length } : {}),
     };
     try {

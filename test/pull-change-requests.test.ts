@@ -224,6 +224,22 @@ test("a request sent again after the card was reopened is a new request, even wi
   expect(f.requests.withdraw(target)).toBe(true);
   expect(await f.send()).toEqual({ status: "sent", recipientId: "worker-1" });
   expect(new Set(f.sent.map(message => message.options.messageId)).size).toBe(3);
+  // A retry of the request sent after reopening is still that request: it is confirmed, never sent again or refused.
+  expect(await f.send()).toEqual({ status: "sent", recipientId: "worker-1" });
+  expect(f.sent).toHaveLength(3);
+  const unsure = fixture();
+  await unsure.send();
+  expect(unsure.requests.withdraw(target)).toBe(true);
+  unsure.state.failSend = true;
+  expect(await unsure.send()).toEqual({ status: "unconfirmed" });
+  unsure.state.failSend = false;
+  const record = unsure.store.read().pullChangeRequests[key];
+  expect(record).toMatchObject({ status: "pending", requestKey: "change-key-0001" });
+  expect(await unsure.send()).toEqual({ status: "unconfirmed" });
+  unsure.timeline["worker-1"] = [{ item: { type: "user_message", messageId: record.messageId, text: unsure.sent[0].text } }];
+  expect(await unsure.send()).toEqual({ status: "sent", recipientId: "worker-1" });
+  expect(unsure.sent).toHaveLength(1);
+  expect(unsure.store.read().pullChangeRequests[key].status).toBe("sent");
   // A request whose delivery is unknown can be reopened too, and does not hold the next one.
   const lost = fixture();
   lost.state.failSend = true;

@@ -15,6 +15,8 @@ export const pullChangeRequestSchema = z.object({
   repo: repositorySlug, number: z.number().int().positive(), projectId: z.string().min(1).max(4096), headSha: commitSha,
   title: z.string().max(512), text: z.string().max(MAX_CHANGE_REQUEST_TEXT),
   recipientId: id, coordinator: z.boolean(), messageId: z.string().uuid(), messageHash: sha256, fingerprint: sha256,
+  // The key the screen sent this request under. The same key again is a retry of this request, whatever its message ID.
+  requestKey: z.string().max(96).optional(),
   at: z.iso.datetime(), status: z.enum(["pending", "sent"]),
   imageCount: z.number().int().positive().optional(),
   // The person reopened the merge card. Nothing was sent for it.
