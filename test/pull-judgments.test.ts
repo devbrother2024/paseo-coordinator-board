@@ -138,7 +138,7 @@ test("a verified remote owner's host is carried to the PR row", () => {
   expect(item.judgment).toMatchObject({ ownerSessionId: "far", ownerSessionHost: "peer-a" });
 });
 
-test("a change request on the current head takes the merge card down until a new head, a later verdict or a withdrawal", () => {
+test("a change request on the current head takes the merge card down until a new head or a withdrawal", () => {
   const asked = (extra = {}) => ({ [pullJudgmentKey("org/example", 7)]: { headSha: head, at: "2026-11-24T02:00:00.000Z", status: "sent" as const, ...extra } });
   const [item] = applyPullJudgments([pr()], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: asked() });
   expect(item).toMatchObject({ lane: "progress", gate: "change-requested" });
@@ -149,10 +149,12 @@ test("a change request on the current head takes the merge card down until a new
   expect(applyPullJudgments([pr()], { ...on, judgments: {}, ledgerPulls: new Set([pullJudgmentKey("org/example", 7)]), changeRequests: asked() })[0].gate).toBe("change-requested");
   // A new head: the request no longer applies, and the earlier verdict is stale as before.
   expect(applyPullJudgments([pr({ headSha: newer })], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: asked() })[0].gate).toBe("stale");
-  // A verdict the coordinator wrote after the request, on the same head, is the newer word.
-  const later = judged("ready", { at: "2026-11-24T03:00:00.000Z" });
-  expect(applyPullJudgments([pr()], { ...on, judgments: later, ledgerPulls: none, changeRequests: asked() })[0]).toMatchObject({ lane: "review", gate: "judged" });
-  expect(applyPullJudgments([pr()], { ...on, judgments: judged("needs-changes", { at: "2026-11-24T03:00:00.000Z" }), ledgerPulls: none, changeRequests: asked() })[0].gate).toBe("needs-changes");
+  // A verdict on the same head does not lift it, whenever it was written: a coordinator checking PRs on its rounds may
+  // not know the person asked for changes. Only the person reopening the card or a new head does.
+  for (const verdict of ["ready", "needs-changes", "in-progress", "blocked"] as const) {
+    const later = judged(verdict, { at: "2026-11-24T03:00:00.000Z" });
+    expect(applyPullJudgments([pr()], { ...on, judgments: later, ledgerPulls: none, changeRequests: asked() })[0]).toMatchObject({ lane: "progress", gate: "change-requested" });
+  }
   // Withdrawn: the merge card is back.
   expect(applyPullJudgments([pr()], { ...on, judgments: judged("ready"), ledgerPulls: none, changeRequests: asked({ withdrawnAt: "2026-11-24T02:30:00.000Z" }) })[0].gate).toBe("judged");
   // A request whose delivery is still unknown may have arrived, so the card comes down too and the row says so.

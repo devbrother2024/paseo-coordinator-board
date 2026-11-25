@@ -53,12 +53,12 @@ export function changeRequestRecipient(pr: Pick<PullRequestItem, "judgment" | "p
   return coordinator ? { id: coordinator, coordinator: true } : null;
 }
 
-// Whether a recorded request still keeps the merge card down and the board from merging: it was not withdrawn, it was
-// written about this head, and no verdict on this head came after it. A request whose delivery is still unknown may
-// have arrived, so it holds too.
-export function holdsMergeCard(request: Pick<PullChangeRequest, "headSha" | "at" | "withdrawnAt"> | undefined,
-  headSha: string | undefined, verdictAt: string | undefined) {
-  return !!request && !request.withdrawnAt && !!headSha && request.headSha === headSha && !(verdictAt && verdictAt > request.at);
+// Whether a recorded request still keeps the merge card down and the board from merging: it was not withdrawn and it
+// was written about this head. A request whose delivery is still unknown may have arrived, so it holds too. Only a new
+// head or the person reopening the card lifts it. A verdict on the same head does not, whenever it was written: a
+// coordinator checking PRs on its rounds may not know the person asked for changes.
+export function holdsMergeCard(request: Pick<PullChangeRequest, "headSha" | "withdrawnAt"> | undefined, headSha: string | undefined) {
+  return !!request && !request.withdrawnAt && !!headSha && request.headSha === headSha;
 }
 
 // Keep the newest requests when the store grows past its limit.

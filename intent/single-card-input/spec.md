@@ -63,10 +63,10 @@ RPC `board.request-pull-changes`:
 - 저장(호스트 설정 `pullChangeRequests`, 선택 필드, PR마다 최신 하나, 최대 200개): `repo`, `number`, `projectId`, `headSha`, `title`, `text`, `recipientId`, `coordinator`, `messageId`, `messageHash`, `fingerprint`, `at`, `status`(`pending` → `sent`), `imageCount?`, `withdrawnAt?`.
 - 재시도: 같은 `requestKey`로 다시 부르면 다시 보내지 않는다. 기록이 `sent`면 `sent`, `pending`이면 받는 세션 대화에서 그 메시지를 찾아 있으면 `sent`, 없으면 `unconfirmed`. 다른 요청의 `pending`은 10분 동안 새 전송을 막는다(`unconfirmed`). 거둔 기록(`withdrawnAt`)은 끝난 요청이다. 그 뒤의 요청은 열쇠와 글이 같아도 새 메시지로 보낸다. 화면은 전송에 성공하면 열쇠를 버린다.
 - `pending` 확인: 보드가 받는 세션 대화에서 같은 메시지(ID와 해시)를 읽으면 `sent`로 바꾼다(`changeRequestHistory`).
-- 병합 카드가 내려가는 조건(`applyPullJudgments`, `holdsMergeCard`): 거두지 않은 요청(`sent` 또는 `pending`)의 `headSha`가 PR의 지금 머리와 같고, 그 머리에 요청 뒤에 쓰인 병합 판단이 없으면 줄이 `progress`, 문이 `change-requested`. PR 항목의 `changeRequest`가 `sent`인지 `pending`인지 알린다. 병합 판단 설정이 꺼져 있어도 같다.
+- 병합 카드가 내려가는 조건(`applyPullJudgments`, `holdsMergeCard`): 거두지 않은 요청(`sent` 또는 `pending`)의 `headSha`가 PR의 지금 머리와 같으면 줄이 `progress`, 문이 `change-requested`. 그 머리에 대한 병합 판단은 언제 쓰였든 이것을 풀지 않는다(코디네이터는 정기 점검에서 같은 머리를 다시 판단할 수 있고 수정 요청을 모를 수 있다). PR 항목의 `changeRequest`가 `sent`인지 `pending`인지 알린다. 병합 판단 설정이 꺼져 있어도 같다.
 - 보드의 병합 거절: 같은 조건이면 병합 미리보기(`board.preview-pull-request-merge`)는 표를 내주지 않고, 병합 확정(`board.confirm-pull-request-merge`)은 미리보기를 연 뒤에 요청이 들어온 경우에도 병합하지 않는다. 둘 다 `blocked`와 이유 `change-requested`를 돌려주고, 화면은 "수정 요청을 보낸 PR입니다. 병합하려면 병합 카드 다시 열기"를 두 언어로 보인다. 다른 화면에 남아 있던 옛 병합 카드에서 눌러도 같다. GitHub에서 직접 하는 병합은 막지 않는다.
 - 원장 병합 카드(`waitingMergeCard`): 그 PR의 문이 `change-requested`면 프로젝트 진행의 PR 줄로 기다린다.
-- 다시 뜨는 조건: 새 머리 커밋(있던 판단이 풀리고 다시 판단을 거친다), 같은 머리에 요청 뒤 코디네이터가 쓴 새 판단, 사람이 누른 **병합 카드 다시 열기**(`board.withdraw-pull-change-request`, 아무것도 보내지 않고 기록에 `withdrawnAt`만 남긴다. `pending`인 요청도 거둘 수 있다).
+- 다시 뜨는 조건은 둘뿐이다: 새 머리 커밋(있던 판단이 풀리고 다시 판단을 거친다), 사람이 누른 **병합 카드 다시 열기**(`board.withdraw-pull-change-request`, 아무것도 보내지 않고 기록에 `withdrawnAt`만 남긴다. `pending`인 요청도 거둘 수 있다).
 - 쓰는 중에 바뀐 대상(`changeDraftTarget`): 초안은 쓸 때 화면에 있던 커밋과 받는 곳에 묶인다. 새로 고침으로 둘 중 하나가 바뀌면 글은 그대로 두고, 사람이 바뀐 내용을 확인하기 전에는 보내기를 끈다(원장 카드 답과 같은 방식).
 - 보낸 뒤 화면: 그 자리에 접힌 "수정 요청 보냄" 카드(보낸 글, 받은 세션, 응답 첫 줄). 최근 결정 기록에도 남는다.
 
@@ -124,7 +124,7 @@ RPC `board.request-pull-changes`:
 | R7 | 질문에 답하지 않고 글만 보낸 개정은 목록에서 빠지고, 새 내용으로 올라오면 다시 열린다 | 같은 파일 "a free-text reply to a card with questions hides that revision until the card changes" |
 | R8 | 원장 카드 답의 접힌 카드는 응답이 와도 원장에서 내려갈 때까지 남는다 | `test/decision-receipts.test.ts` "a ledger reply stays through its follow-up until the card is taken down" |
 | R9 | 받는 곳은 살아 있고 권한 대기가 아닌 담당 세션, 아니면 코디네이터다 | `test/pull-change-requests.test.ts` "the request goes to the owner session, or to the coordinator when the owner cannot take it" |
-| R10 | 지금 머리에 보낸 요청이 있으면 병합 카드가 내려간다. 새 머리, 요청 뒤의 새 판단, 거두기로 다시 뜬다 | `test/pull-judgments.test.ts` "a change request on the current head takes the merge card down until a new head, a later verdict or a withdrawal" |
+| R10 | 지금 머리에 보낸 요청이 있으면 병합 카드가 내려간다. 새 머리와 거두기로만 다시 뜨고, 같은 머리의 새 판단으로는 뜨지 않는다 | `test/pull-judgments.test.ts` "a change request on the current head takes the merge card down until a new head or a withdrawal" |
 | R11 | 원장 병합 카드도 그 PR 줄과 함께 기다리고 결정 수에서 빠진다 | `test/merge-card-place.test.ts` "a ledger merge card waits with its PR after a change request" |
 | R12 | 서버는 병합 카드가 아니거나 머리·받는 곳이 다르면 보내지 않고, 권한 대기·일하는 중이면 `busy`다 | `test/pull-change-requests.test.ts` "nothing is sent unless the PR is a merge card on that head and the recipient can take input" |
 | R13 | 같은 요청을 다시 부르면 다시 보내지 않고, 전송에는 출처를 붙이지 않는다 | 같은 파일 "a retry confirms the earlier request instead of sending again" |
@@ -136,7 +136,7 @@ RPC `board.request-pull-changes`:
 | R19 | 추천대로 모두 고르기는 고르지 않은 질문만 채운다 | 같은 파일 "recommended options fill only unanswered questions" |
 | R20 | 블록이 있는 글은 질문 문장이 없어도 결정 카드가 되고 `decision.block`이 실린다 | `test/conversation.test.ts` "a message ending in a question block becomes a decision card with its options" |
 | R22 | 거둔 뒤의 요청은 열쇠와 글이 같아도 새 메시지로 나가고, `pending`인 요청도 거둘 수 있다 | `test/pull-change-requests.test.ts` "a request sent again after the card was reopened is a new request, even with the same key and words" |
-| R23 | 지금 머리에 요청(`sent`, `pending`)이 있으면 보드의 병합 미리보기와 확정이 거절되고, 거두기·새 판단·다른 머리에서는 풀린다 | `test/pr-merge.test.ts` "a PR with a change request on its head is not merged from the board until the card is reopened" |
+| R23 | 지금 머리에 요청(`sent`, `pending`)이 있으면 보드의 병합 미리보기와 확정이 거절되고, 거두기와 다른 머리에서만 풀린다(같은 머리의 새 판단으로는 풀리지 않는다) | `test/pr-merge.test.ts` "a PR with a change request on its head is not merged from the board until the card is reopened" |
 | R24 | `pending`인 요청은 받는 세션 대화에서 읽히면 `sent`가 된다 | `test/pull-change-requests.test.ts` "a pending request is confirmed when the board reads it in the recipient's conversation" |
 | R25 | 수정 요청의 머리말과 카드 정보에서 제어·양방향 문자를 지우고 사람 글은 그대로 둔다 | 같은 파일 "the heading and context of a change request carry no control or direction characters" |
 | R26 | 읽지 못하는 수정 요청 기록 하나는 그 기록만 버려진다 | 같은 파일 "one unreadable change request record is dropped without losing the rest of the settings" |
@@ -150,6 +150,7 @@ RPC `board.request-pull-changes`:
 - `action`을 `reply`에서 다른 값으로 바꾸기: 옛 기록의 해시가 맞지 않고, 값을 읽던 쪽이 있으면 깨진다. 값을 더하는 쪽을 골랐다.
 - 수정 요청을 병합 대기(`MergeHold`)로 다루기: 대기는 화면이 다른 기기까지 읽어 계산한다. 수정 요청은 서버가 아는 사실이므로 병합 판단과 같은 자리(문)에서 정한다. 결정 수와 화면이 같은 값을 본다.
 - 요청이 `pending`일 때 병합 카드를 그대로 두기: 다시 누를 자리는 남지만, 도착했을 수도 있는 수정 요청을 두고 병합할 수 있다. 내리고, 되돌리는 길을 **병합 카드 다시 열기**로 둔다.
+- 요청 뒤 같은 머리에 쓰인 새 판단으로 병합 카드를 다시 띄우기: 코디네이터는 정기 점검에서 같은 머리를 다시 준비됐다고 기록할 수 있고, 사람이 수정을 요청한 것을 모를 수 있다. 사람이 요청한 것은 사람이 거두거나 새 커밋이 올라올 때만 풀린다.
 - 수정 요청을 화면에서만 가리기: 다른 기기나 새로 고치지 않은 화면의 옛 카드에서 병합된다. 서버의 병합 경로가 같은 기록을 본다.
 - 블록을 정규식 하나로 찾기: 앞에 인용한 블록과 끝의 블록이 하나로 묶이거나, 닫히지 않은 바깥 펜스 안의 블록이 질문으로 읽힌다.
 - 블록의 고른 표시를 따로 저장하기: 입력창의 글과 표시가 어긋날 수 있다. 글 하나만 진실로 둔다.

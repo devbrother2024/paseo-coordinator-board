@@ -460,13 +460,14 @@ test("a PR with a change request on its head is not merged from the board until 
   asked();
   expect(await f.confirm(open.token)).toMatchObject({ status: "blocked", reason: "change-requested" });
   expect(f.mutations()).toBe(0);
-  // Reopening the card, a request about an earlier head, or a later verdict on this head lets the merge through again.
+  // A ready verdict the coordinator records on the same head afterwards does not lift it: it may not know about the request.
+  f.store.change((s) => { s.pullJudgments[key] = { repo: "org/site", number: 7, headSha: head, verdict: "ready", reason: "Checked again", at: "2026-11-25T03:00:00.000Z", coordinator: "coord" }; });
+  expect(await f.preview()).toMatchObject({ status: "blocked", reason: "change-requested", token: null });
+  expect(await f.confirm(open.token)).toMatchObject({ status: "blocked", reason: "change-requested" });
+  expect(f.mutations()).toBe(0);
+  // Only a request about another head, or the person reopening the card, lets the merge through again.
   asked({ headSha: "f".repeat(40) });
   expect((await f.preview()).status).toBe("ready");
-  asked();
-  f.store.change((s) => { s.pullJudgments[key] = { repo: "org/site", number: 7, headSha: head, verdict: "ready", reason: "Checked again", at: "2026-11-25T03:00:00.000Z", coordinator: "coord" }; });
-  expect((await f.preview()).status).toBe("ready");
-  f.store.change((s) => { delete s.pullJudgments[key]; });
   asked({ withdrawnAt: "2026-11-25T02:30:00.000Z" });
   const again = await f.preview();
   expect(again.status).toBe("ready");

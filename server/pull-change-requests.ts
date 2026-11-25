@@ -79,10 +79,8 @@ export function confirmChangeRequest(scope: Pick<Preferences, "pullChangeRequest
 }
 
 // Whether the board may not merge this head now: the person asked for changes on it and has not reopened the card.
-export function mergeHeldByChangeRequest(scope: Pick<Preferences, "pullChangeRequests" | "pullJudgments">, repo: string, number: number, headSha: string) {
-  const key = pullJudgmentKey(repo, number);
-  const verdict = own(scope.pullJudgments, key);
-  return holdsMergeCard(own(scope.pullChangeRequests, key), headSha, verdict?.headSha === headSha ? verdict.at : undefined);
+export function mergeHeldByChangeRequest(scope: Pick<Preferences, "pullChangeRequests">, repo: string, number: number, headSha: string) {
+  return holdsMergeCard(own(scope.pullChangeRequests, pullJudgmentKey(repo, number)), headSha);
 }
 
 export class PullChangeRequests {

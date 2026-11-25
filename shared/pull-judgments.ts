@@ -22,7 +22,7 @@ type Options = {
   // PRs that a coordinator ledger merge card already raised for the person.
   ledgerPulls: ReadonlySet<string>;
   // Change requests the person sent from merge cards, by PR.
-  changeRequests?: Record<string, Pick<PullChangeRequest, "headSha" | "at" | "status" | "withdrawnAt">>;
+  changeRequests?: Record<string, Pick<PullChangeRequest, "headSha" | "status" | "withdrawnAt">>;
 };
 
 // Decide which GitHub-ready PRs become merge cards. Everything else stays in project progress.
@@ -40,9 +40,9 @@ export function applyPullJudgments<T extends PullRequestItem>(items: readonly T[
     if (pr.reason !== "ready") return { ...pr, lane: "progress", ...(judgment ? { judgment } : {}) } as T;
     const asked = options.changeRequests && Object.hasOwn(options.changeRequests, key) ? options.changeRequests[key] : undefined;
     let gate: PullGate;
-    // The person asked for changes on this head instead of merging. That holds whatever the verdict setting says,
-    // until a new head or a later verdict on the same head.
-    if (holdsMergeCard(asked, pr.headSha, current?.at)) gate = "change-requested";
+    // The person asked for changes on this head instead of merging. That holds whatever the verdict setting or a
+    // verdict on this head says, until a new head or the person reopening the card.
+    if (holdsMergeCard(asked, pr.headSha)) gate = "change-requested";
     else if (!options.enabled) gate = "github";
     // A verdict bound to this exact head is the most specific evidence, even over a ledger card.
     // It still holds while no coordinator is designated.
