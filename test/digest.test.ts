@@ -4,7 +4,7 @@ import { PreferenceStore } from "../server/preferences";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { sendCoordinatorRequest, digestPrompt, digestWithFactReplies, recordDigestCompletion } from "../server/digest";
+import { sendCoordinatorRequest, digestPrompt, digestWithFactReplies, recordDigestCompletion, completedBoardTools } from "../server/digest";
 
 function fixture() {
   let owner = "primary";
@@ -104,4 +104,26 @@ test("only a verified complete digest turn advances the host timestamp", async (
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("a board tool run through board_action counts as that tool", () => {
+  const call = (name: string, extra: Record<string, unknown> = {}) => ({ type: "tool_call", name, status: "completed", ...extra }) as any;
+  const viaAction = (input: unknown, status = "completed") => call("mcp__paseo__board_action", { status, detail: { type: "unknown", input, output: null } });
+  expect(completedBoardTools(call("mcp__paseo__review_board_records"))).toEqual(["review_board_records"]);
+  expect(completedBoardTools(viaAction({ action: "review_board_records", input: {} }))).toEqual(["board_action", "review_board_records"]);
+  // A call that did not complete, and one without a readable action, name nothing more.
+  expect(completedBoardTools(viaAction({ action: "review_board_records" }, "failed"))).toEqual([]);
+  for (const input of [undefined, null, "review_board_records", { action: 3 }, []]) expect(completedBoardTools(viaAction(input))).toEqual(["board_action"]);
+  expect(completedBoardTools(call("board_action"))).toEqual(["board_action"]);
+  // A call the board refused (unknown action, input the installed board does not accept) ran nothing.
+  // Paseo's Claude provider reports it as failed. Another provider may report it completed with the error in its output.
+  const refused = (output: unknown) => call("mcp__paseo__board_action", { detail: { type: "unknown", input: { action: "review_board_records" }, output } });
+  for (const output of [{ isError: true, content: [{ type: "text", text: "Unknown board action" }] }, { is_error: true }, { structuredContent: {}, isError: true }]) {
+    expect(completedBoardTools(refused(output))).toEqual([]);
+  }
+  expect(completedBoardTools(refused({ isError: false, content: [] }))).toEqual(["board_action", "review_board_records"]);
+  expect(completedBoardTools(refused("Recorded."))).toEqual(["board_action", "review_board_records"]);
+  // The same holds for a named tool that reported an error.
+  expect(completedBoardTools(call("mcp__paseo__review_board_records", { detail: { type: "unknown", input: {}, output: { isError: true } } }))).toEqual([]);
+  expect(completedBoardTools({ type: "user_message", text: "review_board_records" } as any)).toEqual([]);
 });

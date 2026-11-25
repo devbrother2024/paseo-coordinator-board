@@ -21,7 +21,7 @@
 아래 가운데 **하나라도** 해당하면 만듭니다.
 
 - 설계 갈림길이 있어 **버린 대안을 남길 가치**가 있다.
-- 계약이 바뀐다: 플러그인 데이터 파일 형식(호스트 설정, 메모, 사진, `tracked-decisions.json`, `tracked-sources.json`, `account-usage.json`, 프로젝트 원장), 서버와 화면 사이의 RPC 계약(`shared/contract.ts`), 코디네이터 도구 입력 형식(`shared/coordinator-tools.ts`). 이미 저장된 데이터나 옛 도구 정의를 기억하는 대화가 깨질 수 있다.
+- 계약이 바뀐다: 플러그인 데이터 파일 형식(호스트 설정, 메모, 사진, `tracked-decisions.json`, `tracked-sources.json`, `account-usage.json`, 프로젝트 원장), 서버와 화면 사이의 RPC 계약(`shared/contract.ts`), 코디네이터 도구의 이름과 입력 형식(`shared/coordinator-contract.ts`의 계약). 이미 저장된 데이터나 옛 도구 정의를 기억하는 대화가 깨질 수 있다.
 - 경계가 바뀐다: 세션에 보내는 전송(출처, 받는 조건), 대기 중인 요청에 답하는 길, 외부 명령(`gh`, `git`) 실행, 다른 호스트와 네트워크.
 - 일이 커서 여러 PR로 쪼개야 한다.
 
@@ -172,4 +172,5 @@ Spec: [spec.md](spec.md)
 | [replace-bootstrap](replace-bootstrap/intent.md) | 구현됨 (PR #57) | 세션 | 보드에서 코디네이터를 교체하면 새 세션이 시작 지시로 옛 코디네이터의 일을 이어받고, 옛 세션은 사람이 설정에서 보관한다 |
 | [reset-pass-display](reset-pass-display/intent.md) | 구현됨 (PR #59) | 세션 | 계정 카드에 사용량 초기화권의 남은 장수와 만료를 보이고, 값은 호스트의 account-usage.json이 채운다 |
 | [busy-session-delivery](busy-session-delivery/intent.md) | 승인 | 세션 | 작업 중인 세션에 현재 질문의 답을 보내고 대기 중인 답은 병렬 검토를 요청할 수 있다 |
+| [stable-coordinator-tools](stable-coordinator-tools/intent.md) | 구현됨 (PR #62) | 세션 | 코디네이터 도구를 계약으로 고정하고, 새 기능은 안내 도구와 범용 도구로 내어 운영 중인 대화를 그대로 쓴다 |
 | [single-card-input](single-card-input/intent.md) | 승인 | 세션 | 카드마다 입력창 하나로 답·질문·수정 요청을 보내고, 병합 카드 수정 요청과 세션 글의 질문 블록을 더한다 |

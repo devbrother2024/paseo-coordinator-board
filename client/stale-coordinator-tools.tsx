@@ -4,8 +4,8 @@ import { Button, type Theme } from "./controls";
 import { staleToolsNotice } from "./coordinator-tools";
 import { useBoardLanguage } from "./language";
 
-// The notice at the top of the board when the coordinator's conversation still holds the tool
-// definitions of an older board build. The fixes are the person's: replace it, or type /clear.
+// The notice at the top of the board when the coordinator's conversation holds tool definitions older
+// than this board works with. Opening the session comes first; replacing it is the last resort.
 export function StaleCoordinatorTools({ tools, theme, onReplace, onOpen }: {
   tools: CoordinatorTools | undefined; theme: Theme; onReplace?: () => void; onOpen?: () => void;
 }) {
@@ -19,8 +19,8 @@ export function StaleCoordinatorTools({ tools, theme, onReplace, onOpen }: {
     <Text selectable style={{ color: c.foreground, fontSize: 14 }}>{notice.effect}</Text>
     {notice.steps.map((step, index) => <Text key={index} selectable style={{ color: c.foreground, fontSize: 14 }}>{index + 1}. {step}</Text>)}
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-      {onReplace && <Button theme={theme} selected label={t("새 세션으로 교체", "Replace with a new session")} onPress={onReplace} />}
-      {onOpen && <Button theme={theme} label={t("코디네이터 세션 열기", "Open coordinator session")} onPress={onOpen} />}
+      {onOpen && <Button theme={theme} selected label={t("코디네이터 세션 열기", "Open coordinator session")} onPress={onOpen} />}
+      {onReplace && <Button theme={theme} label={t("새 세션으로 교체", "Replace with a new session")} onPress={onReplace} />}
     </View>
   </View>;
 }

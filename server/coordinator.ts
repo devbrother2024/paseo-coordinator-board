@@ -1,4 +1,4 @@
-import { defineAgentTool, type AgentToolDefinition, type PluginHandlerContext, type PluginServerContext } from "@getpaseo/plugin/server";
+import { defineAgentTool, type PluginHandlerContext, type PluginServerContext } from "@getpaseo/plugin/server";
 import { z } from "zod";
 import { ConversationReader, usesConversationEvidence } from "./conversation";
 import { managedSessions, isCurrentMembership } from "./session-links";
@@ -7,6 +7,7 @@ import { retiredCoordinator } from "./coordinator-bootstrap";
 import { discoverSessions } from "./discovery";
 import { isManagedCoordinator, judgment, PreferenceStore, type Preferences } from "./preferences";
 import { stampingTool, type CoordinatorToolStamps } from "./coordinator-tools";
+import { boardActions, boardActionTool, boardGuideTool, guideRevision, type CoordinatorTool } from "./board-guide";
 import { needsCoordinator, waitedFor } from "../shared/review-wait";
 import { coordinatorHandled } from "./review-wait";
 
@@ -31,7 +32,7 @@ function handoverSource(scope: Preferences, caller: string) {
   return scope.coordinator === caller ? retiredCoordinator(scope) : null;
 }
 
-export function attachCoordinatorTools(server: Pick<PluginServerContext, "addHook">, prefs: PreferenceStore, reader: ConversationReader, additionalTools: AgentToolDefinition[] = [],
+export function attachCoordinatorTools(server: Pick<PluginServerContext, "addHook">, prefs: PreferenceStore, reader: ConversationReader, additionalTools: CoordinatorTool[] = [],
   stamps?: CoordinatorToolStamps, reviewContext?: ReviewContext) {
   const read = defineAgentTool({
     name: "read_board_conversation",
@@ -118,8 +119,14 @@ export function attachCoordinatorTools(server: Pick<PluginServerContext, "addHoo
       return { text: "판단을 해당 세션 카드에 기록했습니다." };
     },
   });
-  const defined = [read, write, ...additionalTools];
-  stamps?.serve(defined);
+  // Every board tool is also an action. The guide and the action tool are how a running conversation
+  // reaches what the board added after it loaded its tool definitions.
+  const named: CoordinatorTool[] = [read, write, ...additionalTools];
+  const actions = boardActions(named);
+  const revision = guideRevision(actions);
+  const defined = [...named.filter(tool => !tool.actionOnly),
+    boardGuideTool(actions, revision, async ({ paseo, agent }) => stamps ? stamps.definitions(paseo, agent) : "unknown"), boardActionTool(actions)];
+  stamps?.serve(defined, revision);
   const tools = stamps ? defined.map(tool => stampingTool(tool, stamps)) : defined;
   return server.addHook("agent.open.before", async ({ request }) => {
     const scope = prefs.read();
