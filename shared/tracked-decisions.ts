@@ -18,7 +18,7 @@ const target = z.object({repo:repositorySlug, number:z.number().int().positive()
 const reference = z.object({source:id,projectId:projectId.nullable(),id});
 const fingerprint = z.string().regex(/^[a-f0-9]{64}$/);
 export const trackedDecisionInputSchema = reference.extend({
-  title:text, deliverWhenIdle:z.boolean().optional(),
+  title:text, deliverWhenIdle:z.boolean().optional().catch(undefined),
   kind:z.enum(["check","answer","merge","approve","cleanup","other"]).default("other"),
   ask:lines, recommend:lines, why:lines, risk:lines, steps:lines,
   questions:z.array(z.object({

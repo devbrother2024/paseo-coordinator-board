@@ -23,7 +23,7 @@ const entry = z.object({
     key:nonempty,text:nonempty,recommended:z.boolean().default(false),does:lines,pros:lines,cons:lines,note:z.string().nullish(),
   })) })).default([]),
   pr: z.number().int().positive().nullish(), since:z.string().nullish(), howToAnswer:z.string().nullish(), answerLead:z.string().nullish(), urgency:z.string().nullish(),
-  deliverWhenIdle:z.boolean().optional(), dueAt:z.string().max(64).nullish(), blocksWork:z.boolean().nullish(), recommendedReply:z.string().nullish(),
+  deliverWhenIdle:trackedDecisionInputSchema.shape.deliverWhenIdle, dueAt:z.string().max(64).nullish(), blocksWork:z.boolean().nullish(), recommendedReply:z.string().nullish(),
 });
 const ledger = z.object({ items: z.array(z.unknown()) });
 type LedgerSource = z.infer<typeof manifest>["sources"][number];

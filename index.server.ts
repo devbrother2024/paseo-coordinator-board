@@ -34,7 +34,7 @@ import { BoardFacts } from "./server/board-facts";
 import { ProjectRootReader } from "./server/project-root";
 import { recordDigestCompletion } from "./server/digest";
 import { coordinatorReach, operatingProjects } from "./server/coordinator-reach";
-import { discoverBoardSessions } from "./server/board-sessions";
+import { discoverBoardSessions, withRemoteReadHost } from "./server/board-sessions";
 import { withAssignmentHost } from "./server/host-assignment";
 import { judgedMergeCardOptions, judgePullTool, registerMergeJudgmentSettings } from "./server/pull-judgments";
 import { applyPullJudgments } from "./shared/pull-judgments";
@@ -94,6 +94,18 @@ export default function contribute(server: PluginServerContext) {
     const scope = prefs.read();
     return { configured: scope.projects.length > 0, coordinator: scope.coordinator, decisionTitles: tracked.previewTitles(new Set(scope.projects)) };
   });
+  async function readOriginState(paseo: PluginHandlerContext["paseo"], id:string, serverId?:string):Promise<NonNullable<QueueView["originState"]>> {
+    try {
+      const result = serverId
+        ? await withRemoteReadHost(paseo,serverId,(sdk,read) => read(() => sdk.agents.ref(id).refresh()))
+        : await paseo.agents.ref(id).refresh();
+      if (!result) return "ended";
+      const agent = result.agent;
+      if (!agent || agent.id !== id) return "unknown";
+      return agent.status === "closed" || agent.archivedAt ? "ended" : "live";
+    } catch { return "unknown"; }
+  }
+
   async function buildSnapshot(paseo: PluginHandlerContext["paseo"], refreshPulls=false) {
     // GitHub can take seconds even when Paseo already knows the current sessions.
     // Start both paths together, and consume both rejections via Promise.all.
@@ -129,8 +141,22 @@ export default function contribute(server: PluginServerContext) {
     for (const id of evidence.keys()) if (!targets.has(id)) evidence.delete(id);
     const {history = [], ...trackedDecisions} = tracked.read(selected, visible, pullRequests, evidence);
     const minutes = await parallelMinutes();
-    function showQueue(queue:QueueView, coordinator:string|null) {
+    const originReads = new Map<string, ReturnType<typeof readOriginState>>();
+    const queueUpdates:Promise<void>[] = [];
+    function showQueue(queue:QueueView, coordinator:string|null, serverId?:string) {
       const row = targets.get(queue.recipientId);
+      if (queue.parallel === "held") {
+        if (row && row.serverId === serverId) {
+          queue.originState = row.status === "closed" ? "ended" : "live";
+        } else {
+          // Archived sessions disappear from discovery. An unreachable host is inconclusive.
+          const key = JSON.stringify([serverId,queue.recipientId]);
+          const state = originReads.get(key) ?? readOriginState(paseo,queue.recipientId,serverId);
+          originReads.set(key,state);
+          queueUpdates.push(state.then(value => { queue.originState = value; }));
+        }
+        return;
+      }
       if (row && queue.at && canChangeQueue({...queue,at:queue.at},"parallel",row.provider,minutes)) {
         queue.offer = true;
         if (coordinator) queue.coordinatorId = coordinator;
@@ -143,9 +169,12 @@ export default function contribute(server: PluginServerContext) {
       if (!selected.has(q.input.projectId)) return [];
       const queue = {messageId,projectId:q.input.projectId,sessionId:q.input.sessionId,version:q.input.version,title:q.title,
         recipientId:q.input.recipientId,answer:q.input.text,at:q.at,stopped:q.stopped,parallel:q.parallel,imageCount:q.photos.length};
-      showQueue(queue,latest.coordinator);
+      showQueue(queue,latest.coordinator,q.serverId ?? undefined);
       return [queue];
     });
+    await Promise.all(queueUpdates);
+    // A remote turn can finish without a local hook, or while this plugin is stopped.
+    // Recover the person's saved reply on the next snapshot. resume skips holds and rechecks the card before sending.
     if (queuedConversations.some(q=>!q.stopped && q.parallel!=="held")) {
       void decisions.resume(paseo).catch(()=>console.warn("Could not check queued conversation replies."));
     }
@@ -406,6 +435,22 @@ export default function contribute(server: PluginServerContext) {
     const control=(provider?:string|null)=>card.kind==="ledger"
       ? tracked.control(input,scope(),provider,minutes) : decisions.control(input,provider,minutes);
     if (action!=="parallel") {
+      if (action==="resume") {
+        let recipientId:string | undefined;
+        let serverId:string | undefined;
+        if (card.kind==="session") {
+          const queued=prefs.read().queuedDecisions[messageId];
+          if (queued?.parallel==="held" && scope().has(card.projectId) && queued.input.projectId===card.projectId &&
+              queued.input.sessionId===card.sessionId && queued.input.version===card.version) {
+            recipientId=queued.input.recipientId;
+            serverId=queued.serverId ?? undefined;
+          }
+        } else {
+          const target=tracked.queuedTarget(input,scope());
+          if (target?.record.queue?.parallel==="held") recipientId=target.recipientId;
+        }
+        if (!recipientId || await readOriginState(ctx.paseo,recipientId,serverId)!=="live") return {status:"changed"};
+      }
       if (!control()) return {status:"changed"};
       if (action==="resume") {
         if (card.kind==="session") await decisions.resume(ctx.paseo,card.sessionId);
@@ -444,6 +489,8 @@ export default function contribute(server: PluginServerContext) {
     invalidateCount();
     const body=[
       "병렬 세션 검토 요청 / Parallel session request",
+      "보드가 만든 요청입니다. 실린 답은 사람이 썼지만 이 요청 자체는 승인이 아닙니다. 승인으로 쓰려면 원래 세션 기록에서 원문을 확인하세요.",
+      "The board generated this request. A person wrote the enclosed reply. This request itself is not approval. Check the original session transcript before treating the reply as authorization.",
       "원래 작업과 겹치지 않을 때만 새 작업 세션에 맡기고 결과를 알려 주세요. 겹치면 원래 세션의 대기를 유지하도록 알려 주세요.",
       "Assign a new session only if the work is independent. Report the outcome so the person can cancel or resume the original reply.",
       JSON.stringify({card,originalSession:request.recipientId,title:request.title,answer:request.answer}),

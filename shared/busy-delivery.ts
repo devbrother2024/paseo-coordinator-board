@@ -35,9 +35,12 @@ export const parallelState = z.enum(["held", "resumed"]);
 export const queueView = z.object({
   messageId:z.string().uuid(), recipientId:z.string(), answer:z.string().optional(), imageCount:z.number().int().nonnegative(),
   stopped:z.boolean(), at:z.string().optional(), parallel:parallelState.optional(), offer:z.boolean().optional(),
-  coordinatorId:z.string().optional(),
+  coordinatorId:z.string().optional(), originState:z.enum(["live","ended","unknown"]).optional(),
 });
 export type QueueView = z.infer<typeof queueView>;
+export function canResumeHeldReply(queue:Pick<QueueView,"stopped"|"parallel"|"originState">) {
+  return queue.parallel === "held" && !queue.stopped && queue.originState === "live";
+}
 export const manageQueuedAnswer = defineRpc({
   name:"board.manage-queued-answer",
   input:z.strictObject({card:queueRef,messageId:z.string().uuid(),action:z.enum(["parallel","resume","cancel"]),coordinatorId:z.string().optional()}),

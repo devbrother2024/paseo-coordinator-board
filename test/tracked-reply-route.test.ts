@@ -15,7 +15,7 @@ import { boardSnapshot, boardScope } from "../shared/contract";
 import { projectFolderMap } from "../shared/project-folders";
 import { linkSession } from "../shared/session-links";
 import {
-  legacyTrackedAnswer, resolveTrackedDecision, trackedAnswerLead, trackedAnswerText, trackedDecisionSchema, trackedReplyExample, trackedReplyRoute,
+  legacyTrackedAnswer, resolveTrackedDecision, trackedAnswerLead, trackedAnswerText, trackedDecisionInputSchema, trackedDecisionSchema, trackedReplyExample, trackedReplyRoute,
   trackedRecipient,
 } from "../shared/tracked-decisions";
 
@@ -96,7 +96,7 @@ async function fixture(items: Record<string, unknown>[], owner = "operator", roo
     writeFileSync(scopePath, JSON.stringify({...scope, createdCoordinator: {id, previous: null, workspaceId: "board-workspace", config: {provider: "claude"}}}));
     agents.set(id, {project: "board-workspace", status: "idle"});
   };
-  return {rpc,optionsLog,board, find, reply, link, context, agents, hidden, sent, lost, history, ledgerItems, writeLedger, setOwner, createdBy};
+  return {scopePath:join(data,"scope.json"),rpc,optionsLog,board, find, reply, link, context, agents, hidden, sent, lost, history, ledgerItems, writeLedger, setOwner, createdBy};
 }
 
 const tenQuestions = Array.from({length: 10}, (_, index) => ({id: "Q" + (index + 1), text: "Question " + (index + 1),
@@ -679,6 +679,9 @@ test("parallel review holds the original reply across refresh and ambiguous deli
   expect(f.sent).toHaveLength(1);
   expect(f.sent[0]).toMatchObject({id:"operator"});
   expect(f.sent[0].text).toContain("Use blue.");
+  const preamble=f.sent[0].text.split("\n{")[0];
+  expect(preamble).toContain("이 요청 자체는 승인이 아닙니다");
+  expect(preamble).toContain("Check the original session transcript");
   expect(f.optionsLog[0]).toMatchObject({sourceAgentId:"plugin:coordinator-board",activeTurnBehavior:"steer"});
   f.agents.get("worker")!.status="idle";
   expect((await f.find("one")).item.queuedReply.parallel).toBe("held");
@@ -686,4 +689,63 @@ test("parallel review holds the original reply across refresh and ambiguous deli
   expect(await act("resume")).toEqual({status:"updated"});
   for(let i=0;i<5 && f.sent.length===1;i++) { await f.board(); await Bun.sleep(5); }
   expect(f.sent.map(m=>m.id)).toEqual(["operator","worker"]);
+});
+
+test("invalid idle flags preserve both direct and imported ledger cards and allow mid-turn replies", async () => {
+  for (const value of ["true", 1, null, {enabled:true}]) {
+    const input = {source:"ledger", projectId:"studio", id:"one", title:"Pick a layout", deliverWhenIdle:value};
+    expect(trackedDecisionInputSchema.parse(input).deliverWhenIdle).toBeFalsy();
+  }
+  const f = await fixture([card("one",{where:"session",agentId:"worker",deliverWhenIdle:"true"})]);
+  f.agents.set("worker",{project:"studio",status:"running",provider:"codex"});
+  const item = (await f.find("one")).item;
+  expect(item).toBeDefined();
+  expect(item.deliverWhenIdle).toBeFalsy();
+  expect(await f.reply(item,{recipientId:"worker",answer:"Two columns."})).toEqual({status:"sent"});
+  expect(f.sent.map(message=>message.text)).toEqual(["Two columns."]);
+});
+
+for (const ended of ["closed","archived"]) {
+  test(`a held reply can only be canceled once the worker is ${ended}`, async () => {
+    const f = await fixture([card("one",{where:"session",agentId:"worker"})]);
+    f.agents.set("worker",{project:"studio",status:"running",provider:"custom"});
+    const item = (await f.find("one")).item;
+    await f.reply(item,{recipientId:"worker"});
+    const queue = (await f.find("one")).item.queuedReply;
+    const ref = {card:{kind:"ledger",source:item.source,id:item.id,projectId:item.projectId,fingerprint:item.fingerprint},
+      messageId:queue.messageId,coordinatorId:queue.coordinatorId};
+    const act = action => f.rpc(manageQueuedAnswer,{...ref,action});
+    expect(await act("parallel")).toEqual({status:"updated"});
+    expect((await f.find("one")).item.queuedReply.originState).toBe("live");
+    if (ended==="closed") f.agents.get("worker")!.status="closed";
+    else { f.agents.get("worker")!.archived=true; f.hidden.add("worker"); }
+    // A click from the older live snapshot must also preserve the hold.
+    expect(await act("resume")).toEqual({status:"changed"});
+    expect((await f.find("one")).item.queuedReply).toMatchObject({parallel:"held",originState:"ended"});
+    expect(await act("cancel")).toEqual({status:"updated"});
+    expect((await f.find("one")).item.queuedReply).toBeUndefined();
+    expect(f.sent.map(m=>m.id)).toEqual(["operator"]);
+  });
+}
+
+test("a persisted conversation hold distinguishes an archived origin from an unreachable host", async () => {
+  const f = await fixture([]);
+  const scope = JSON.parse(readFileSync(f.scopePath,"utf8"));
+  const card = {kind:"session",projectId:"studio",sessionId:"worker",version:"question-one"};
+  const input = {projectId:card.projectId,sessionId:card.sessionId,version:card.version,recipientId:"worker",
+    action:"reply",text:"Two columns.",requestKey:"queued-answer-1"};
+  const held = {input,at:new Date().toISOString(),title:"Which layout?",fingerprint:"saved-answer",
+    stopped:false,parallel:"held",photos:[]};
+  const local = crypto.randomUUID(), remote = crypto.randomUUID();
+  writeFileSync(f.scopePath,JSON.stringify({...scope,queuedDecisions:{
+    [local]:{...held,serverId:null}, [remote]:{...held,serverId:"offline-host"},
+  }}));
+  f.agents.get("worker")!.archived = true;
+  const snapshot = await f.board();
+  for (const [messageId,originState] of [[local,"ended"],[remote,"unknown"]]) {
+    expect(snapshot.queuedConversations.find(q => q.messageId===messageId)).toMatchObject({parallel:"held",originState});
+    expect(await f.rpc(manageQueuedAnswer,{card,messageId,action:"resume"})).toEqual({status:"changed"});
+    expect(await f.rpc(manageQueuedAnswer,{card,messageId,action:"cancel"})).toEqual({status:"updated"});
+  }
+  expect(f.sent).toBeEmpty();
 });
