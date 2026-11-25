@@ -288,3 +288,45 @@ test("리뷰 8: 정의는 발췌에 남는 4턴에서만 계산한다", () => {
   expect(evidence.turns).toHaveLength(4);
   expect(evidence.turns.map(turn => turn.definitions?.map(({ key }) => key))).toEqual([["b"], ["c"], ["d"], ["e"]]);
 });
+
+test("앞 내용이 표에서 끝나면 표 머리와 본문 첫 줄을 함께 보인다", async () => {
+  const { previewMarkdown } = await import("../client/choice-display");
+  const table = ["| 저장소 | PR | 상태 |", "|---|---|---|", "| alpha-web | #12 | 병합됨 |", "| beta | #3 | 병합됨 |", "| gamma-api | #7 | 열림 |"];
+  // 표만 있을 때: 머리와 구분 줄은 한 줄로 세고, 본문 첫 줄은 반드시 들어간다.
+  expect(previewMarkdown(table.join("\n"), 1)).toEqual({ preview: table.slice(0, 3).join("\n"), more: true });
+  expect(previewMarkdown(table.join("\n"))).toEqual({ preview: table.slice(0, 5).join("\n"), more: false });
+  // 표 앞 문단이 한도를 거의 채워도 머리만 남지 않는다.
+  const lead = ["완료했습니다.", "", "## 병합 결과", ""];
+  expect(previewMarkdown([...lead, ...table].join("\n"))).toEqual({ preview: [...lead, ...table.slice(0, 3)].join("\n"), more: true });
+  // 한도가 제목에서 끝나면 제목 아래 첫 단위(표면 머리와 본문 첫 줄)까지 보인다.
+  const longer = ["첫째", "둘째", "셋째", "## 병합 결과", "", ...table];
+  expect(previewMarkdown(longer.join("\n"))).toEqual({ preview: longer.slice(0, 8).join("\n"), more: true });
+  expect(previewMarkdown("첫째\n둘째\n셋째\n## 다음\n설명 한 줄\n둘째 줄")).toEqual({ preview: "첫째\n둘째\n셋째\n## 다음\n설명 한 줄", more: true });
+  // 제목 예외는 한 번만: 제목 아래가 또 제목이면 거기서 끝난다.
+  expect(previewMarkdown("첫째\n둘째\n셋째\n## 다음\n### 그 아래\n설명")).toEqual({ preview: "첫째\n둘째\n셋째\n## 다음\n### 그 아래", more: true });
+  // 제목 아래가 코드 블록이면 빈 블록이 아니라 첫 줄까지 보인다.
+  expect(previewMarkdown("첫째\n둘째\n셋째\n## 명령\n\n```sh\nnpm ci\nnpm test\n```")).toEqual({ preview: "첫째\n둘째\n셋째\n## 명령\n\n```sh\nnpm ci\n```", more: true });
+  const almost = ["첫째", "둘째", "## 병합 결과", ...table];
+  expect(previewMarkdown(almost.join("\n"))).toEqual({ preview: almost.slice(0, 6).join("\n"), more: true });
+  // 코드 블록 안의 파이프 줄은 표로 보지 않는다.
+  expect(previewMarkdown("```\n| a |\n|---|\n| b |\n```", 2)).toEqual({ preview: "```\n| a |\n```", more: true });
+});
+
+test("미리보기와 링크 판단은 카드 값을 바꾸지 않는다", async () => {
+  const { previewMarkdown } = await import("../client/choice-display");
+  const { lexBoardMarkdown } = await import("../client/board-markdown");
+  const { pullReferenceTokens, tableRowClues } = await import("../client/pull-reference-markdown");
+  const { repositoryIndex } = await import("../client/pull-repositories");
+  const decision = { source: "conversation", question: "정리할까요?", version: "v1", contextMarkdown: "| 저장소 | PR |\n|---|---|\n| alpha-web | #12 |" };
+  const before = structuredClone(decision);
+  const tokens = lexBoardMarkdown(decision.contextMarkdown);
+  const lexed = structuredClone(tokens);
+  const known = repositoryIndex([{ repo: "studio/alpha-web" }]);
+  previewMarkdown(decision.contextMarkdown, 1);
+  for (const token of tokens) {
+    if (token.type === "table") tableRowClues(token as never, known);
+    if ("tokens" in token && token.tokens) pullReferenceTokens(token.tokens, { repository: "studio/beta", known });
+  }
+  expect(decision).toEqual(before);
+  expect(tokens).toEqual(lexed);
+});

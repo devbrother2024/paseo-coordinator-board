@@ -224,12 +224,47 @@ test("remote assignments keep their location on replay and won't repeat an accep
   expect((await s.plan()).location.serverId).toBe(local.serverId);
   const receipt = await s.assign(s.job);
   expect(receipt).toMatchObject({ sessionId: child, location: { serverId: remote.serverId } });
+  expect(s.store.read().dispatchReceipts[child].routeSource).toBe("board");
+  expect(s.win.creates.get(child)?.metadata["coordinator-board/dispatch-route-source"]).toBe("board");
   expect(await s.assign(s.job)).toEqual(receipt);
   expect(s.win.sends).toHaveLength(1);
   expect(s.win.creates.size).toBe(1);
   expect(s.mac.creates.size).toBe(0);
   expect(s.win.state.disposals).toBeGreaterThan(0);
   await expect(s.assign({ ...s.job, expectedHostId: local.serverId })).rejects.toThrow(/다른 작업/);
+});
+
+test("the coordinator can pin a different catalog route on the remote host and replay it once", async () => {
+  const s = scenario();
+  s.win.sdk.providers.listModels = async () => ({ models: [
+    { id: expectedRoute.model, label: "Codex", isDefault: true, thinkingOptions: [{ id: "high" }] },
+    { id: "alternate-model", label: "Alternate model", isDefault: false, thinkingOptions: [{ id: "low" }] },
+  ] });
+  const alternate = { ...expectedRoute, model: "alternate-model", effort: "low" };
+  const job: DispatchInput = { ...s.job, expectedRoute: alternate, routeSource: "coordinator" };
+  expect((await s.plan()).routes.find((entry: { grade: string }) => entry.grade === job.grade).route).toEqual(expectedRoute);
+  await expect(s.assign({ ...job, routeSource: undefined })).rejects.toThrow(/미리보기/);
+  expect(s.win.creates.size).toBe(0);
+
+  s.win.state.loseNextSendAck = true;
+  await expect(s.assign(job)).rejects.toThrow(/Could not confirm delivery/);
+  const [sessionId] = s.win.creates.keys();
+  expect(s.win.creates.get(sessionId)).toMatchObject({
+    config: { provider: "codex/alternate-model", thinkingOptionId: "low", modeId },
+    metadata: { "coordinator-board/dispatch-route-source": "coordinator" },
+  });
+  expect(s.store.read().dispatchReceipts[sessionId].routeSource).toBe("coordinator");
+  await expect(s.assign({ ...job, routeSource: undefined })).rejects.toThrow(/different task/);
+  s.win.sdk.providers.listModels = async () => ({ models: [] });
+  const result = await s.assign(job);
+  expect(result).toMatchObject({ sessionId, route: alternate, location: { serverId: remote.serverId } });
+  expect(await s.assign(job)).toEqual(result);
+  expect(s.win.creates.size).toBe(1);
+  expect(s.mac.creates.size).toBe(0);
+  expect(s.win.sendAttempts).toEqual([{
+    sourceAgentId: coordinator, sourceAgentServerId: local.serverId, messageId: creationUuid(job.requestKey, "prompt"),
+  }]);
+  expect(s.win.sends).toHaveLength(1);
 });
 
 test("remote first instructions work without agent steering and replay only once", async () => {

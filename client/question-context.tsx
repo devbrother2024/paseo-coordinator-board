@@ -26,7 +26,7 @@ export function QuestionContext({ theme, title, choices, context, notice, pullRe
     {notice && <Text accessibilityLiveRegion="polite" selectable style={{ color: c.statusWarning, fontSize: 13 }}>{t(...notice.notice)}</Text>}
     {preview && <View style={{ gap: 3 }}>
       <Text style={label}>{t("앞 내용", "Earlier in the message")}</Text>
-      <HistoryMarkdown theme={theme} source={open ? context! : preview.preview} pullRepository={pullRepository} muted />
+      <HistoryMarkdown theme={theme} source={open ? context! : preview.preview} fallbackSource={context} pullRepository={pullRepository} muted />
       {preview.more && <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }}
         accessibilityLabel={title + " · " + (open ? t("앞 내용 접기", "Show less of the earlier text") : t("앞 내용 더 보기", "Show more of the earlier text"))}
         style={{ alignSelf: "flex-start", paddingVertical: 4 }} onPress={() => setOpen(value => !value)}>

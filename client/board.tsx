@@ -10,7 +10,7 @@ import { closedRevision } from "./tracked-reply-draft";
 import { mentionsSecurityGate, trackedCoverage, trackedReplyRoute, usesSourceCoordinator, pullKey, type TrackedDecision } from "../shared/tracked-decisions";
 import { projectFolderMap } from "../shared/project-folders";
 import { MergeFeedback, PullRequestCard, PullRequestSettings, WaitingMergeRow, type MergeNotice, type WorkSessionLink } from "./pull-requests";
-import { ownKanbanEntry, waitingMergeCard } from "../shared/merge-card-place";
+import { ownKanbanEntry, placeMergeCards, pullDecidesNow } from "../shared/merge-card-place";
 import { foldReceipts, holdsActivityClosed, needsHostWideFilter, pullRowKey, receiptEntry, receiptInScope, receiptsToFold, recordActionKey, RECEIPT_FOLD_MS, sessionRowKey, settleReceipt, unsentActionKey, withReceiptPositions, type CompletedAction, type InlineReceipt } from "./decision-receipts";
 import { rankDecisionRows, priorityLabel } from "./decision-priority";
 import { DecisionEditingRow, keepEditingPositions, useDecisionEditing } from "./decision-editing";
@@ -19,6 +19,7 @@ import { latestMergeNotification } from "./merge-notification";
 import { decisionSummary } from "./decision-summary";
 import { matchesWorkspace } from "../shared/workspace-pull";
 import { ownerRunning } from "../shared/pull-judgments";
+import { kanbanPull, linkedHosts, mergeHoldDetails, mergeRecordLinks, seenElsewhere, snapshotHoldSessions } from "../shared/merge-hold";
 import type { PullRequestItem } from "../shared/prs";
 import { getPaseoClient, type PluginScreenProps } from "@getpaseo/plugin/client";
 import { remoteScope, readRemoteHistorySession } from "./remote-sessions";
@@ -41,6 +42,8 @@ import { CoordinatorReplaceLoader } from "./coordinator-replace";
 import { blocksReplies, opensSession, readSessionReach } from "../shared/coordinator-reach";
 import { Button, type Theme } from "./controls";
 import { Project } from "./project-kanban";
+import { KnownPullRepositories } from "./history-markdown";
+import { knownPullRepositories } from "./pull-repositories";
 import { SessionProgress } from "./session-progress";
 import { BoardLanguageSetting, useBoardLanguage } from "./language";
 import { projectCards, type Card, type Snapshot } from "./model";
@@ -65,21 +68,39 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const activeProjects = useMemo(() => snapshot?.projects.filter(p => !p.missing) ?? [], [snapshot?.projects]);
   const projectGroups = useMemo(() => groupProjects(activeProjects), [activeProjects]);
   const pullRequests = snapshot?.pullRequests;
-  const readyPrs = pullRequests?.items.filter(pr => pr.lane === "review") ?? [];
-  const records = useMemo(() => {
+  const [settings, setSettings] = useState(false);
+  const {groups: peers, hosts: peerHosts, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
+  const assigned = new Set(snapshot?.sessions.filter(row => row.serverId).map(row => JSON.stringify([row.serverId, row.id])));
+  const sortedRecords = useMemo(() => {
     const priority = (urgency: string | null | undefined) => ["now","today","week"].includes(urgency ?? "") ? ["now","today","week"].indexOf(urgency!) : 3;
     return [...snapshot?.trackedDecisions?.items ?? []].sort((a,b) => priority(a.urgency) - priority(b.urgency) ||
       (a.where === "human" ? 0 : 1) - (b.where === "human" ? 0 : 1) || (a.since ?? "~").localeCompare(b.since ?? "~"));
   }, [snapshot?.trackedDecisions]);
-  // A merge card waits in project progress until GitHub confirms its PR is ready.
-  const waitingMerges = new Map(records.flatMap(item => {
-    const wait = waitingMergeCard(item, pullRequests);
-    return wait ? [[item.key, wait] as const] : [];
-  }));
-  const deciding = records.filter(item => !waitingMerges.has(item.key));
+  const folders = useMemo(() => projectFolderMap(snapshot?.projects ?? []), [snapshot?.projects]);
+  // A merge card whose work session still runs on the PR branch waits in project progress until the session rests.
+  // A session linked to a PR on a host the board did not read (offline, hidden, loading or failed) warns on that PR only.
+  const readHosts = new Set(peers.filter(group => !group.failed).map(group => group.host.serverId));
+  const holdDetails = mergeHoldDetails(pullRequests?.items ?? [], {
+    sessions: snapshotHoldSessions(snapshot?.sessions ?? []),
+    peers: { read: readHosts, rows: peers.flatMap(({host, rows}) => rows
+      .filter(row => !assigned.has(JSON.stringify([host.serverId, row.sessionId])))
+      .map(row => ({ id: row.sessionId, projectId: row.projectId, running: true, ...(row.workspacePull ? { workspacePull: row.workspacePull } : {}) }))) },
+    links: mergeRecordLinks(sortedRecords, item => {
+      const target = trackedWorkSession(item, { hostId, hostLabel, sessions: snapshot?.sessions ?? [], hosts: peerHosts, folders });
+      return linkedHosts(target, item.sessionHost, { hostId, hostLabel });
+    }),
+  });
+  const holds = new Map([...holdDetails].map(([key, detail]) => [key, detail.hold]));
+  const pullHold = (pr: Pick<PullRequestItem, "repo" | "number">) => holds.get(pullKey(pr.repo, pr.number));
+  const readyPrs = pullRequests?.items.filter(pr => pullDecidesNow(pr, holds)) ?? [];
+  // Held PRs sit in the kanban's running column as plain PR rows.
+  const kanbanPrs = pullRequests?.items.map(pr => kanbanPull(pr, holds)) ?? [];
+  // The same placement as the decision count. A merge card waits in project progress until GitHub confirms its PR
+  // is ready, and while a work session runs on its branch (then it shows as its PR row instead).
+  const { deciding, waiting: waitingMerges, held: heldMerges } = placeMergeCards(sortedRecords, pullRequests, holds);
+  const records = sortedRecords.filter(item => !heldMerges.has(item.key));
   // Cards whose PR row cannot show in the kanban (no readable PR) keep a small row with the reason.
   const unlisted = (item: TrackedDecision) => { const wait = waitingMerges.get(item.key); return !!wait && !wait.pr; };
-  const folders = useMemo(() => projectFolderMap(snapshot?.projects ?? []), [snapshot?.projects]);
   const [inlineReceipts, setInlineReceipts] = useState<InlineReceipt[]>([]);
   const completed = new Set(inlineReceipts.map(receipt => receipt.actionKey));
   const names = new Map(snapshot?.projects.map(project => [project.id, project.title]));
@@ -104,8 +125,6 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     projectIds.add(item.projectId);
     if (item.projectId && !displayed.has(item.projectId)) displayed.set(item.projectId,{id:item.projectId,title:names.get(item.projectId) ?? item.projectTitle ?? item.projectId,cards:[]});
   }
-  const [settings, setSettings] = useState(false);
-  const {groups: peers, hosts: peerHosts, loading: peersLoading} = useRemoteRunning({id:hostId ?? "",label:hostLabel}, activeProjects, pullRequests?.projects ?? [], !!hostId && !settings);
   const peerKey = JSON.stringify(peerHosts.map(host => host.serverId));
   // One read per remote session and refresh, shared by ledger card chips and PR rows.
   const workSessionStates = useMemo(() => createRemoteWorkSessionStates(getPaseoClient), [hostId, updatedAt, peerKey]);
@@ -191,7 +210,6 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const filterNames = new Map(filterGroups.flatMap(group => group.ids.map(id => [id, group.label] as const)));
   const projectName=(id:string|null)=>filterNames.get(id) ?? displayed.get(id ?? "")?.title ?? id ?? t("공통","Host-wide");
   const incomplete = snapshot?.trackedDecisions && ["partial","unavailable","invalid"].includes(snapshot.trackedDecisions.status);
-  const assigned = new Set(snapshot?.sessions.filter(row => row.serverId).map(row => JSON.stringify([row.serverId, row.id])));
   const visiblePeers = peers.map(group => ({ ...group, rows: group.rows.filter(row =>
     inFilter(row.projectId) && !assigned.has(JSON.stringify([group.host.serverId, row.sessionId]))) }));
   const [showError, setShowError] = useState(false);
@@ -325,7 +343,8 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
     // The owner the coordinator named on another host comes first; otherwise the ledger card's remote session.
     const remoteTarget = judgedOwnerSession(pr, peerHosts, linkedIds) ?? (fromLedger?.kind === "remote" ? fromLedger : undefined);
     const remoteSession = remoteTarget && onOpenHostSession ? {...remoteTarget, states: workSessionStates, fresh: freshWorkSessionStates, open: onOpenHostSession} : undefined;
-    return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions} remoteSession={remoteSession}
+    return <PullRequestCard key={JSON.stringify([pr.url,projectId])} pr={pr} projectId={projectId} theme={theme} priorityLabel={priority} workSessions={workSessions} remoteSession={remoteSession} hold={pullHold(pr)}
+      remoteElsewhere={seenElsewhere(holdDetails, pr, remoteTarget?.id)}
       clarification={decision && !embedded && questionFor({kind:"pull",projectId,repo:pr.repo,number:pr.number,updatedAt:pr.updatedAt},pr.repo + " #" + pr.number)}
       decision={decision} showDivider={!decision || embedded} securityGate={securityGate} openCoordinator={openCoordinator} onResult={notice => {
         const { status } = notice;
@@ -394,7 +413,9 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   });
   const c = theme.colors;
   const assignmentNotice = !settings && snapshot?.assignmentNotice;
+  const knownRepositories = useMemo(() => knownPullRepositories(snapshot), [snapshot]);
   return (
+    <KnownPullRepositories.Provider value={knownRepositories}>
     <ScrollView ref={scroll} style={{ flex: 1, backgroundColor: c.surface0 }} contentContainerStyle={{ gap: 20, padding: layout.compact ? 12 : 22 }}>
       <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <View style={{ flex: 1, minWidth: 140, gap: 3 }}>
@@ -510,9 +531,10 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           records={hostWideRecords.filter(item => !waitingMerges.has(item.key))} waiting={hostWideRecords.filter(unlisted)} renderWaiting={renderWaitingMerge}
           decisions={byProject.get(null) ?? 0} renderRecord={renderRecord} renderPull={renderPull}
           recordLinks={recordLinks} compact={layout.compact} theme={theme} {...actions} />}
-        {visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} followups={followups.filter(item=>item.entry.projectId===p.id)} now={now} records={deciding.filter(r => r.projectId === p.id)} waiting={records.filter(r => r.projectId === p.id && unlisted(r))} renderWaiting={renderWaitingMerge} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={pullRequests?.items.filter(pr => pr.projectIds.includes(p.id)) ?? []} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
+        {visibleProjects.map((p) => <Project historyLinks={historyLinks} openRemote={onOpenHostSession} projectId={p.id} followups={followups.filter(item=>item.entry.projectId===p.id)} now={now} records={deciding.filter(r => r.projectId === p.id)} waiting={records.filter(r => r.projectId === p.id && unlisted(r))} renderWaiting={renderWaitingMerge} renderRecord={renderRecord} decisions={byProject.get(p.id) ?? 0} sessionHostLabel={hostLabel} renderPull={renderPull} recordLinks={recordLinks} requests={kanbanPrs.filter(pr => pr.projectIds.includes(p.id))} key={p.id} title={p.title} cards={p.cards} compact={layout.compact} theme={theme} {...actions} />)}
         <RemoteRunning groups={visiblePeers} projects={activeProjects} open={onOpenHostSession} theme={theme} />
       </SessionProgress>}
     </ScrollView>
+    </KnownPullRepositories.Provider>
   );
 }
