@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BOARD_REPLY_KIND, boardReply, boardReplyItem, boardReplyMessageSchema, CHAT_QUESTION_KIND, chatQuestionItem, chatQuestionSchema, messageKey, questionAnswer } from "../shared/chat-question";
+import { BOARD_REPLY_KIND, boardReply, boardReplyItem, boardReplyMessageSchema, CHAT_QUESTION_KIND, foldedAnswer, chatQuestionItem, chatQuestionSchema, messageKey, questionAnswer } from "../shared/chat-question";
 
 const block = "```board-question\n" + JSON.stringify({ questions: [
   { id: "Q1", text: "Where should the cache live?", options: [{ key: "A", text: "Memory", recommended: true }, { key: "B", text: "Disk" }] },
@@ -64,4 +64,17 @@ test("a board reply in the conversation shows the person's words and keeps the f
   expect(boardReplyMessageSchema.safeParse(item.data).success).toBe(true);
   // A message the person typed is left as Paseo draws it.
   expect(boardReplyItem("Go with disk")).toBeUndefined();
+});
+
+test("a folded question shows the chosen options, never the answer's own words", () => {
+  const question = chatQuestionItem(asked, "complete")!.items[0].data.block;
+  expect(foldedAnswer({ state: "answered", reply: "Q1 · Where should the cache live?: A · Memory", viaBoard: true }, question))
+    .toEqual({ viaBoard: true, picks: { 0: ["A"] }, choseNone: false });
+  // A pasted clipboard or a follow-up question chooses nothing, and its text stays out of the card.
+  const pasted = JSON.stringify({ type: "excalidraw/clipboard", elements: [{ text: "x".repeat(500) }] }) + "\nWhich computer was it?";
+  const folded = foldedAnswer({ state: "answered", reply: pasted, viaBoard: false }, question)!;
+  expect(folded).toEqual({ viaBoard: false, picks: {}, choseNone: true });
+  expect(JSON.stringify(folded)).not.toContain("excalidraw");
+  expect(foldedAnswer({ state: "open" }, question)).toBeNull();
+  expect(foldedAnswer({ state: "unknown" }, question)).toBeNull();
 });

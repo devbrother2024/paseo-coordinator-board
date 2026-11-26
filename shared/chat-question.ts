@@ -1,6 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
-import { questionBlockSchema, splitQuestionBlock } from "./question-block";
+import { blockPicks, questionBlockSchema, splitQuestionBlock, type QuestionBlock } from "./question-block";
 
 // A session's own conversation draws its message with the code block as written, so a `board-question` block shows
 // as raw JSON there. The board replaces a finished message that ends in a valid block with one that shows the text
@@ -85,4 +85,12 @@ export function boardReplyItem(text: string) {
   if (!reply) return undefined;
   const data: BoardReplyMessage = { heading: reply.heading, answer: reply.answer, text };
   return { items: [{ type: "plugin" as const, kind: BOARD_REPLY_KIND, version: 1, data }] };
+}
+
+// What a folded, answered question shows: where the answer came from and the options it chose. The answer's own words
+// are not repeated: they are the person's message right below, and may be anything pasted (a long JSON clipboard, say).
+export function foldedAnswer(state: ChatQuestionState, block: QuestionBlock) {
+  if (state.state !== "answered") return null;
+  const picks = blockPicks(state.reply, block);
+  return { viaBoard: state.viaBoard, picks, choseNone: !Object.keys(picks).length };
 }
