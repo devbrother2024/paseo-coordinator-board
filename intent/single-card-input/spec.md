@@ -99,7 +99,7 @@ RPC `board.request-pull-changes`:
 - 필드: `questions`(1개에서 8개). 질문마다 `text`(필수, 500자), `id`(선택, 24자), `multi`(선택, 여러 개 선택), `options`(0개에서 8개). 선택지마다 `key`(필수, 16자), `text`(필수, 300자), `does`·`pros`·`cons`(선택, 400자), `recommended`(선택). 블록에 `recommend`(선택, 600자), `recommendedReply`(선택, 2,000자). 모르는 필드는 무시한다.
 - 크기: 블록 안 글은 12,000자까지. 글자 수는 제어 문자와 양방향 제어 문자를 지우고 공백을 정리한 뒤에 센다(`recommendedReply`는 줄 바꿈을 남긴다).
 - 틀린 블록: JSON이 아니거나, 상한을 넘거나, 필수 값이 비었거나, 한 질문 안에서 `key`가 겹치거나, 질문 이름표(`id · text`)가 겹치면 블록 전체를 쓰지 않는다. 글은 지금처럼 그대로 보인다.
-- 자리: 글의 마지막이어야 한다. 블록 뒤에 다른 글이 있으면 블록으로 읽지 않는다. 글의 코드 펜스를 처음부터 따라가며, 다른 펜스 밖에 있고 닫힌 마지막 블록 하나만 본다. 본문 중간에 인용한 옛 블록은 예시로 남고 끝의 블록이 질문이 된다. 다른 펜스 안에 든 블록(바깥 펜스가 닫히지 않은 경우 포함), 닫히지 않은 블록, 들여쓴 블록은 읽지 않는다.
+- 자리: 글의 마지막 코드 블록이어야 한다. 블록 뒤에 일반 글(출처, 남은 일)이 있어도 읽고, 그 글은 블록 앞 글 아래에 남긴다(2026-11-26 유지관리자 요청: 세션이 블록 뒤에 출처 목록을 붙여 카드에 JSON이 그대로 보인 일). 블록 뒤에 다른 코드 블록이 있으면(닫혔든 아니든) 그것이 마지막 펜스이므로 읽지 않는다. 글의 코드 펜스를 처음부터 따라가며, 다른 펜스 밖에 있고 닫힌 마지막 블록 하나만 본다. 본문 중간에 인용한 옛 블록은 예시로 남고 끝의 블록이 질문이 된다. 다른 펜스 안에 든 블록(바깥 펜스가 닫히지 않은 경우 포함), 닫히지 않은 블록, 들여쓴 블록은 읽지 않는다.
 - 맞는 블록이면: 그 글은 블록을 뺀 나머지로 읽고, 블록 앞 글에 질문 문장이 없어도 결정 카드가 된다(제목은 첫 질문). 글에서 이름표를 찾는 안내는 내지 않는다.
 - RPC 계약: 세션의 `decision`에 선택 필드 `block`(위 모양을 정리한 값). 카드 판본(`version`)에는 넣지 않는다(판본은 대화 근거에 묶여 있다).
 - 화면: 질문마다 선택지를 원장 카드처럼 그린다. 고르면 입력창에 `Q1 · 캐시를 어디에 둘까요?: A · 메모리` 같은 줄이 채워진다(`applyBlockChoice`). 고른 표시는 입력창의 글에서 읽는다(`blockPicks`). 그래서 사람이 그 줄을 고치거나 지우면 표시도 따라 바뀐다. 사람이 그 줄 뒤에 덧붙인 글(조건, 직접 쓴 답)은 다른 선택지를 고르거나 고른 것을 풀어도 남는다. **추천 답 넣기**는 `recommendedReply`를 입력창에 넣는다. **추천대로 모두 고르기**는 원장 카드와 질문 블록 카드 모두에서 없앤다(유지관리자 요청): 선택지 옆 **추천** 표시와 카드의 추천 줄은 그대로 두고, 질문마다 사람이 직접 고른다. 질문이 하나인 원장 카드의 **추천 선택지 고르기**도 같은 이유로 없앤다(추천 선택지를 직접 누르는 것과 같은 한 번 누르기). 선택지가 없는 카드의 **추천 답 넣기**는 고를 선택지가 없으므로 그대로 둔다. `does`·`pros`·`cons`는 **근거·이력 보기**를 펼치면 보인다.
@@ -133,7 +133,7 @@ RPC `board.request-pull-changes`:
 | R13 | 같은 요청을 다시 부르면 다시 보내지 않고, 전송에는 출처를 붙이지 않는다 | 같은 파일 "a retry confirms the earlier request instead of sending again" |
 | R14 | 거두기는 아무것도 보내지 않고 기록만 남긴다 | 같은 파일 "withdrawing reopens the merge card without sending" |
 | R15 | 맞는 블록은 정리된 값으로 읽히고 글에서 빠진다 | `test/question-block.test.ts` "a block at the end of a message is read and taken out of the text" |
-| R16 | 틀린 블록, 상한을 넘는 블록, 끝이 아닌 블록은 쓰지 않는다 | 같은 파일 "a malformed, oversized or misplaced block is ignored" |
+| R16 | 틀린 블록, 상한을 넘는 블록, 마지막 코드 블록이 아닌 블록은 쓰지 않는다 | 같은 파일 "a malformed, oversized or misplaced block is ignored" |
 | R17 | 제어 문자와 양방향 제어 문자는 지워진다 | 같은 파일 "control characters are removed before the block is shown" |
 | R18 | 선택지를 고르면 입력창의 그 질문 줄이 채워지고, 고른 표시는 글에서 읽는다 | 같은 파일 "choosing an option writes that question's line, and the text says what is chosen" |
 | R19 | **추천대로 모두 고르기**(여러 질문 카드, 질문 블록 카드)와 **추천 선택지 고르기**(질문 하나 카드) 버튼과 그 판정은 없다. 추천 표시, 추천 줄, **추천 답 넣기**는 남는다 | 화면 확인(R21), 판정 함수 제거 |
@@ -143,6 +143,7 @@ RPC `board.request-pull-changes`:
 | R24 | `pending`인 요청은 받는 세션 대화에서 읽히면 `sent`가 된다 | `test/pull-change-requests.test.ts` "a pending request is confirmed when the board reads it in the recipient's conversation" |
 | R25 | 수정 요청은 PR 제목 없이 저장소·번호·링크·커밋으로만 PR을 가리키고, 머리말에서 제어·양방향 문자를 지우며 사람 글은 그대로 둔다 | 같은 파일 "a change request names its PR without the PR title, and carries no control or direction characters" |
 | R26 | 읽지 못하는 수정 요청 기록 하나는 그 기록만 버려진다 | 같은 파일 "one unreadable change request record is dropped without losing the rest of the settings" |
+| R36 | 블록 뒤의 일반 글은 블록을 막지 않고 본문에 남으며, 블록 뒤의 다른 코드 블록은 블록을 막는다 | `test/question-block.test.ts` "plain text after the block stays in the message and the block is still read", `test/conversation.test.ts` "a message ending in a question block becomes a decision card with its options" |
 | R27 | 끝의 블록은 앞에 인용한 블록과 따로 읽히고, 다른 펜스 안의 블록은 읽지 않는다 | `test/question-block.test.ts` "only a block that stands on its own at the very end counts, whatever the message quotes before it" |
 | R28 | 같은 글·사진·대상으로 다시 누르면 같은 열쇠로 확인만 하고, 글·사진·커밋·받는 곳이 바뀌면 새 요청이다 | `test/change-request-draft.test.ts` "an unchanged retry keeps its key, and an edited draft or another target gets a new one" |
 | R29 | 쓰는 중에 PR의 커밋이나 받는 곳이 바뀌면 확인하기 전에는 보내지 않는다 | 같은 파일 "a draft written for one commit and recipient waits for a look when either changes" |

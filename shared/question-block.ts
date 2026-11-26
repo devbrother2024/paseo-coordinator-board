@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// A question block is a fenced code block named `board-question` at the very end of a session's message. Its JSON lists
+// A question block is a fenced code block named `board-question`, the last code block in a session's message. Its JSON lists
 // the questions and options the session asks the person to choose from. The board draws them like a ledger card.
 export const MAX_BLOCK_LENGTH = 12000;
 const MAX_QUESTIONS = 8;
@@ -72,8 +72,9 @@ function readBlock(body: string): QuestionBlock | null {
   return block.data;
 }
 
-// The last code block that stands on its own (outside any other fence), when it is closed, named `board-question` and
-// followed by nothing. A block quoted earlier in the message, or one inside another fence, is not the question.
+// The last code block that stands on its own (outside any other fence), when it is closed and named `board-question`.
+// Plain text may follow it (sessions often list sources or what is left there), but no other code block may: a block
+// quoted earlier in the message, or one inside another fence, is not the question.
 function lastBlock(rows: readonly string[]) {
   let open: { mark: string; size: number; info: string; start: number; own: boolean } | null = null;
   let last: { info: string; start: number; end: number; own: boolean } | null = null;
@@ -89,17 +90,19 @@ function lastBlock(rows: readonly string[]) {
     }
   });
   const found = last as { info: string; start: number; end: number; own: boolean } | null;
-  if (open || !found || !found.own || found.info !== "board-question") return null;
-  return rows.slice(found.end + 1).every(row => !row.trim()) ? found : null;
+  return open || !found || !found.own || found.info !== "board-question" ? null : found;
 }
 
-// The message without its question block, and the block when it is valid. Anything else leaves the message as it is.
+// The message without its question block, and the block when it is valid. Text after the block stays, below the text
+// before it. Anything else leaves the message as it is.
 export function splitQuestionBlock(message: string): { text: string; block?: QuestionBlock } {
   const rows = message.split(/\r?\n/);
   const found = lastBlock(rows);
   const block = found && readBlock(rows.slice(found.start + 1, found.end).join("\n"));
   if (!found || !block) return { text: message };
-  return { text: rows.slice(0, found.start).join("\n").trimEnd(), block };
+  const before = rows.slice(0, found.start).join("\n").trimEnd();
+  const after = rows.slice(found.end + 1).join("\n").trim();
+  return { text: before && after ? before + "\n\n" + after : before || after, block };
 }
 
 const prefix = (item: BlockQuestion) => blockQuestionLabel(item) + ": ";
