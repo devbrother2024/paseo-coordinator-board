@@ -52,3 +52,10 @@ export function elapsedLabel(ms: number, t: Translate) {
 export function hostWideVisible(count: { records: number; followups: number }) {
   return count.records > 0 || count.followups > 0;
 }
+
+/** For a reply whose photos were not sent and were removed: says so in place of the photos. */
+export function photoNote(entry: Pick<ReplyEntry, "imageCount" | "photosDropped">): [string, string] | null {
+  if (!entry.photosDropped || !entry.imageCount) return null;
+  const count = entry.imageCount;
+  return [`사진 ${count}장은 보내지 않아 지웠습니다`, `${count} photo${count === 1 ? " was" : "s were"} not sent and ${count === 1 ? "was" : "were"} removed`];
+}

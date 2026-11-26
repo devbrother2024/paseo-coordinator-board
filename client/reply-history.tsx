@@ -9,7 +9,7 @@ import { Button, type Theme } from "./controls";
 import type { HistoryLinks, HistorySession } from "./history-sessions";
 import { HistoryMarkdown } from "./history-markdown";
 import { useBoardLanguage } from "./language";
-import { recipientNotFound } from "./reply-followup";
+import { photoNote, recipientNotFound } from "./reply-followup";
 
 type Props = { entry: ReplyEntry; theme: Theme; links: HistoryLinks; open?: (id:string) => void; openRemote?: (host:string,id:string) => void };
 
@@ -73,7 +73,8 @@ export function ReplyCard({entry, theme, links, open, openRemote}:Props) {
     : {
     sent:t("전송됨","Sent"), pending:t("전송 확인 중","Delivery unconfirmed"),
     unsent:t("전송 중단 · 카드 또는 수신 상태 확인 필요","Not sent · review the card or recipient"),
-    recorded:t("보드에 기록함","Saved on board"), closed:entry.reviewedBy ? t("코디네이터가 확인함","Reviewed by coordinator") : t("기록 닫음","Record closed"),
+    recorded:t("보드에 기록함","Saved on board"), closed:entry.skipped ? t("이미 처리됨 · 보내지 않음","Already handled · not sent")
+      : entry.reviewedBy ? t("코디네이터가 확인함","Reviewed by coordinator") : t("기록 닫음","Record closed"),
   }[entry.status];
   const states = {running:t("진행 중","Running"), idle:t("대기 중","Idle"), closed:t("대화 종료","Closed"),
     error:t("오류","Error"), unknown:t("미확인","Unknown")};
@@ -94,7 +95,8 @@ export function ReplyCard({entry, theme, links, open, openRemote}:Props) {
         open={open} openRemote={openRemote} theme={theme} />)}</View>}
     {!!entry.reviewReason && <HistoryMarkdown theme={theme} source={entry.reviewReason} />}
     {!!entry.answer && <HistoryMarkdown theme={theme} source={entry.answer} preview={long && !full} />}
-    {!!entry.imageCount && <View style={{gap:4}}>
+    {photoNote(entry) && <Text style={{color:colors.foregroundMuted,fontSize:12}}>{t(...photoNote(entry)!)}</Text>}
+    {!!entry.imageCount && !entry.photosDropped && <View style={{gap:4}}>
       <Text style={{color:colors.foregroundMuted,fontSize:12}}>{t(`첨부 사진 ${entry.imageCount}장`, `${entry.imageCount} attached photo${entry.imageCount === 1 ? "" : "s"}`)}</Text>
       {entry.localPhotos && <>
         <View style={{flexDirection:"row",flexWrap:"wrap",gap:5}}>{Array.from({length:entry.imageCount}, (_, index) =>
