@@ -165,6 +165,19 @@ test("a message ending in a question block becomes a decision card with its opti
   decorateDecision(cited, undefined, {judgments:{}, answers:{}}, sourced);
   expect(cited.decision.block.questions[0].options.map(choice=>choice.text)).toEqual(["Memory","Disk"]);
   expect(cited.decision.question + cited.decision.contextMarkdown).not.toContain("board-question");
+  // 2026-11-26: a coordinator judgment with labels only does not replace the block's options and reasons.
+  const judged = {...row, ...classify(plain,row), evidenceId:plain.id};
+  decorateDecision(judged, undefined, {judgments:{[row.id]:{kind:"question", evidenceId:plain.id, projectId:row.projectId, text:"asked",
+    content:{question:"Where should the cache live?", recommendation:"Go with A.", options:[{label:"A · Memory (fast)", reply:"Go with A."}]}}}, answers:{}}, plain);
+  expect(judged.decision).toMatchObject({source:"conversation", question:"Q1 · Where should the cache live?"});
+  expect(judged.decision.block.questions[0].options.map(choice=>choice.text)).toEqual(["Memory","Disk"]);
+  expect(judged.decision.options).toBeUndefined();
+  // Without a block the coordinator's structured judgment still shapes the card.
+  const prose = evidence(["assistant_message", "두 곳을 비교했습니다.\n(A)와 (B) 중 어디에 둘지 정해 주세요."]);
+  const judgedProse = {...row, ...classify(prose,row), evidenceId:prose.id};
+  decorateDecision(judgedProse, undefined, {judgments:{[row.id]:{kind:"question", evidenceId:prose.id, projectId:row.projectId, text:"asked",
+    content:{question:"어디에 둘까요?", options:[{label:"A · 메모리", reply:"A로 해 주세요."}]}}}, answers:{}}, prose);
+  expect(judgedProse.decision).toMatchObject({source:"coordinator", question:"어디에 둘까요?"});
   // A broken block is not a card of its own, and the text stays as written.
   const broken = evidence(["assistant_message", "I compared two places.\n\n```board-question\n{ nope\n```"]);
   expect(broken.turns.at(-1).block).toBeUndefined();

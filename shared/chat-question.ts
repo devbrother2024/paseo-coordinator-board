@@ -53,20 +53,51 @@ export type ChatQuestionState = z.infer<typeof chatQuestionStateSchema>;
 
 type Entry = { item: { type: string; text?: string } };
 
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// The options a reply names, by question. Only these count as an answer, so a later message about something else (a
+// new request, a pasted clipboard) does not answer the question:
+// - the line the board card or the conversation writes (`Q1 · question: A · option`);
+// - a question id followed by an option key (`Q1은 A`, `Q1: A로`, `Q1 A`), for each question with an id;
+// - for a block with one question, a reply that starts with an option key (`A`, `A로 해`, `B안으로`).
+export function answerPicks(reply: string, block: QuestionBlock): Record<number, string[]> {
+  const picks = blockPicks(reply, block);
+  block.questions.forEach((question, index) => {
+    if (picks[index] || !question.options.length) return;
+    const keys = question.options.map(option => escape(option.key)).join("|");
+    const named = question.id
+      ? new RegExp("(?:^|[^A-Za-z0-9])" + escape(question.id) + "\\s*(?:은|는|:|·|=|-)?\\s*(" + keys + ")(?![A-Za-z0-9])").exec(reply)
+      : null;
+    const lead = block.questions.length === 1
+      ? new RegExp("^\\s*(" + keys + ")(?=$|[\\s.,!)]|로|으로|안)").exec(reply)
+      : null;
+    const key = (named ?? lead)?.[1];
+    if (key) picks[index] = [key];
+  });
+  return picks;
+}
+
 // Whether the person answered a question message, read from the session's recent record. The message is found by
-// its key; the first message from the person after it is the answer. A message not in the record read is unknown,
-// and the question stays open to choose from: it is never shown as answered without the answer in hand.
+// its key, and its block is read from it. The first later message from the person that names an option is the
+// answer; a message that names none (a new request, a follow-up question) leaves the question open. A message not in
+// the record read is unknown, and the question stays open to choose from: it is never shown as answered without the
+// answer in hand. Messages from other sessions are not the person's and are not in `user_message`.
 export function questionAnswer(entries: readonly Entry[], key: string): ChatQuestionState {
   let at = -1;
   entries.forEach((entry, index) => {
     if (entry.item.type === "assistant_message" && typeof entry.item.text === "string" && messageKey(entry.item.text.trim()) === key) at = index;
   });
   if (at < 0) return { state: "unknown" };
-  const next = entries.slice(at + 1).find(entry => entry.item.type === "user_message" && typeof entry.item.text === "string");
-  if (!next) return { state: "open" };
-  const text = next.item.text!.trim();
-  const reply = boardReply(text);
-  return { state: "answered", reply: (reply ? reply.answer : text).trim().slice(0, 4000), viaBoard: !!reply };
+  const block = splitQuestionBlock(entries[at].item.text!.trim()).block;
+  if (!block) return { state: "unknown" };
+  for (const entry of entries.slice(at + 1)) {
+    if (entry.item.type !== "user_message" || typeof entry.item.text !== "string") continue;
+    const text = entry.item.text.trim();
+    const reply = boardReply(text);
+    const words = (reply ? reply.answer : text).trim();
+    if (Object.keys(answerPicks(words, block)).length) return { state: "answered", reply: words.slice(0, 4000), viaBoard: !!reply };
+  }
+  return { state: "open" };
 }
 
 export const chatQuestionState = defineRpc({
@@ -88,9 +119,9 @@ export function boardReplyItem(text: string) {
 }
 
 // What a folded, answered question shows: where the answer came from and the options it chose. The answer's own words
-// are not repeated: they are the person's message right below, and may be anything pasted (a long JSON clipboard, say).
+// are not repeated: they are the person's message right below. Without a chosen option it does not fold.
 export function foldedAnswer(state: ChatQuestionState, block: QuestionBlock) {
   if (state.state !== "answered") return null;
-  const picks = blockPicks(state.reply, block);
-  return { viaBoard: state.viaBoard, picks, choseNone: !Object.keys(picks).length };
+  const picks = answerPicks(state.reply, block);
+  return Object.keys(picks).length ? { viaBoard: state.viaBoard, picks } : null;
 }

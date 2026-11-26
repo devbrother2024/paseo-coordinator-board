@@ -33,7 +33,15 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
     content = { source: "permission", question: row.detail };
   } else if (((row.status === "idle" && row.evidenceId && row.lane === "human") || row.keptQuestion) && !dismissed) {
     const judgment = prefs.judgments[row.id];
-    const structured = judgment?.kind === "question" && judgment.evidenceId === row.evidenceId && judgment.projectId === row.projectId;
+    // A question the session asked with a question block keeps the block's options, recommendation and reasons. The
+    // coordinator's structured judgment carries only option labels, so it does not replace them (2026-11-26: a card
+    // showed "this card does not say what A is" with the session's block right there).
+    const asked = () => {
+      const scan = scanOf(row) ?? (evidence ? scanQuestions(evidence, row.id === prefs.coordinator, questionContext(prefs, row.id)) : undefined);
+      const main = mainQuestion(scan);
+      return !!(main && questionDetails(main)?.block);
+    };
+    const structured = judgment?.kind === "question" && judgment.evidenceId === row.evidenceId && judgment.projectId === row.projectId && !asked();
     content = structured
       ? { ...judgment.content, source: "coordinator", question: judgment.content?.question || judgment.text }
       : { source: "conversation", question: (row.keptQuestion && mainQuestion(scanOf(row))?.question) || row.detail.replace(/^세션의 확인 요청 · /, "") };
