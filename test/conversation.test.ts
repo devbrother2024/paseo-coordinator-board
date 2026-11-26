@@ -158,6 +158,13 @@ test("a message ending in a question block becomes a decision card with its opti
   expect(only.turns.at(-1).text).toBe("Where should the cache live?");
   expect(classify(only,row).lane).toBe("human");
   expect(classify(evidence(["assistant_message", block],["user_message","다른 작업은?"]),row)).toMatchObject({lane:"human",keptQuestion:{maybeAnswered:true}});
+  // Sources listed after the block do not hide it: the card keeps its options and the sources stay in the message.
+  const sourced = evidence(["assistant_message", "다음에 무엇을 할지 정해 주세요.\n\n" + block + "\n출처:\n- [A paper](https://example.com/a)"]);
+  expect(sourced.turns.at(-1).text).toBe("다음에 무엇을 할지 정해 주세요.\n\n출처:\n- [A paper](https://example.com/a)");
+  const cited = {...row, ...classify(sourced,row), evidenceId:sourced.id};
+  decorateDecision(cited, undefined, {judgments:{}, answers:{}}, sourced);
+  expect(cited.decision.block.questions[0].options.map(choice=>choice.text)).toEqual(["Memory","Disk"]);
+  expect(cited.decision.question + cited.decision.contextMarkdown).not.toContain("board-question");
   // A broken block is not a card of its own, and the text stays as written.
   const broken = evidence(["assistant_message", "I compared two places.\n\n```board-question\n{ nope\n```"]);
   expect(broken.turns.at(-1).block).toBeUndefined();

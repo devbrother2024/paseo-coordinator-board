@@ -62,8 +62,7 @@ test("a malformed, oversized or misplaced block is ignored", () => {
   untouched(fence({ questions: [{ text: "Q", options: [{ key: "k".repeat(17), text: "x" }] }] }));
   untouched(fence({ questions: [{ text: "Q", options: [] }], recommendedReply: "x".repeat(2001) }));
   untouched(fence({ questions: [{ text: "Q", options: [] }], pad: "x".repeat(MAX_BLOCK_LENGTH) }));
-  // Only the last thing in the message counts, and only under the exact name.
-  untouched(fence(sample) + "\n\nOne more thing after the block.");
+  // Only the last code block in the message counts, and only under the exact name.
   untouched("```json\n" + JSON.stringify(sample) + "\n```");
   untouched("Example:\n\n" + fence(sample) + "\n\n" + fence(sample).replace("board-question", "text"));
 });
@@ -87,6 +86,21 @@ test("only a block that stands on its own at the very end counts, whatever the m
   untouched("Text\n\n> " + fence(sample).split("\n").join("\n> "));
   // Windows line endings read the same.
   expect(splitQuestionBlock(("Text\n\n" + fence(sample)).replace(/\n/g, "\r\n")).block?.questions).toHaveLength(2);
+});
+
+test("plain text after the block stays in the message and the block is still read", () => {
+  // Sessions often list sources or what is left after the block. That text is not a code block, so the block is still
+  // the last one and is read; the text after it stays with the message, below the text before it.
+  const sources = "Sources:\n- [A paper](https://example.com/a)\n- [A talk](https://example.com/b)";
+  const read = splitQuestionBlock("Decide what to do next.\n\n" + fence(sample) + "\n" + sources + "\n");
+  expect(read.block?.questions[0].text).toBe("Where should the cache live?");
+  expect(read.text).toBe("Decide what to do next.\n\n" + sources);
+  // With nothing before the block, the text after it is the whole message.
+  expect(splitQuestionBlock(fence(sample) + "\n\nOne more thing.")).toEqual({ text: "One more thing.", block });
+  // A code block after it, closed or left open, makes that block the last one, so nothing is read.
+  const untouched = (message: string) => expect(splitQuestionBlock(message)).toEqual({ text: message });
+  untouched(fence(sample) + "\n\nRun this:\n\n```sh\nnpm test\n```");
+  untouched(fence(sample) + "\n\nRun this:\n\n```sh\nnpm test");
 });
 
 test("control characters are removed before the block is shown", () => {

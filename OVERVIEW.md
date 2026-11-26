@@ -193,7 +193,7 @@ To ask before deciding, write the question in the card's input, attach a screens
 
 ### A question block for options
 
-When a session ends its message with a `board-question` code block, the board draws its questions and options like a ledger card. Choosing an option fills the card's input with a line such as `Q1 · Where should the cache live?: A · Memory`. A recommended option carries a **Recommended** mark, and **Use recommendation** puts `recommendedReply` into the input. The board reads what is chosen from the text in the input, so editing or deleting a line changes the highlight too. Nothing is sent until you press **Send**. An option's `does`, `pros` and `cons` show when **Evidence and history** is open.
+When a session ends its message with a `board-question` code block, the board draws its questions and options like a ledger card. Plain text after the block, such as sources or what is left, does not stop it: the block is still read and that text stays in the message (another code block after it does stop it). Choosing an option fills the card's input with a line such as `Q1 · Where should the cache live?: A · Memory`. A recommended option carries a **Recommended** mark, and **Use recommendation** puts `recommendedReply` into the input. The board reads what is chosen from the text in the input, so editing or deleting a line changes the highlight too. Nothing is sent until you press **Send**. An option's `does`, `pros` and `cons` show when **Evidence and history** is open.
 
 ````markdown
 I compared two places. Please choose one.
