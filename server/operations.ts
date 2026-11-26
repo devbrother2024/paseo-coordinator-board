@@ -5,6 +5,7 @@ import { setUsageRouting } from "../shared/usage-routing";
 import { z } from "zod";
 import { join } from "node:path";
 import { boardPhotoMessageId, readSessionPhoto } from "../shared/session-photos";
+import { chatQuestionState, questionAnswer } from "../shared/chat-question";
 import { listSentRequests } from "../shared/sent-requests";
 import { SessionPhotoStore } from "./session-photos";
 import { SentRequestStore } from "./sent-requests";
@@ -49,6 +50,12 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
   function register(server: PluginServerContext) {
     registerDispatchHosts(server, store, invalidate);
     server.handle(readSessionPhoto, async ({sessionId, messageId, index}) => sessionPhotos.read(sessionId, messageId, index));
+    // Whether the person answered a question message the session's conversation shows. Read only; a record that cannot
+    // be read leaves the question open to choose from.
+    server.handle(chatQuestionState, async ({ sessionId, key }, { paseo }) => {
+      const page = await paseo.agents.ref(sessionId).timeline.refetch({ direction: "tail", projection: "projected", limit: 128 }).catch(() => null);
+      return page ? questionAnswer(page.entries, key) : { state: "unknown" as const };
+    });
     server.handle(listSentRequests, async (_input, { paseo }) => ({ requests: await sentRequests.confirm(paseo) }));
     server.handle(coordinatorPinSettings, (_input, { paseo }) => lifecycle.pinSettings(paseo));
     server.handle(retiredCoordinatorState, async (_input, { paseo }) => ({ retired: await lifecycle.retired(paseo) }));
