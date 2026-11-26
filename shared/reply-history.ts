@@ -28,6 +28,8 @@ export const replyEntry = replyDetails.extend({
   cardRemoved: z.literal(true).optional(),
   // A queued reply not sent because its question was handled another way meanwhile.
   skipped: z.literal(true).optional(),
+  // Its photos were not sent and were removed.
+  photosDropped: z.literal(true).optional(),
 });
 export type ReplyEntry = z.output<typeof replyEntry>;
 

@@ -13,6 +13,9 @@ export const supportsSteer = (provider?: string | null) => provider === "claude"
  * Claude Code or Codex; the session's persistence record names that implementation, as for the coordinator's tools.
  * Without the record, the session's own provider name is all there is.
  */
+/** The implementation a session row runs on, for queue decisions: the profile's runtime, or its provider. */
+export const queueProvider = (row: { provider?: string | null; runtime?: string }) => row.runtime ?? row.provider ?? null;
+
 export function steerProvider(agent: { provider?: string | null; persistence?: { provider?: unknown; metadata?: unknown } | null }) {
   return conversationProvider(agent.persistence) ?? agent.provider ?? null;
 }

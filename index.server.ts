@@ -1,6 +1,6 @@
 import type { ReplyEntry } from "./shared/reply-history";
 import { randomUUID } from "node:crypto";
-import { canChangeQueue, manageQueuedAnswer, parallelWait, steerProvider, type QueueView } from "./shared/busy-delivery";
+import { canChangeQueue, manageQueuedAnswer, parallelWait, queueProvider, steerProvider, type QueueView } from "./shared/busy-delivery";
 import { sourceCoordinatorRecipient, type RoutedTrackedDecision, type TrackedResolution, pullKey, trackedFallbackRecipient, trackedRecipient, trackedReplyRoute, usesSourceCoordinator, type TrackedReplyReason } from "./shared/tracked-decisions";
 import { boardReadiness } from "./shared/readiness";
 import { SnapshotReads } from "./server/snapshot-reads";
@@ -193,7 +193,7 @@ export default function contribute(server: PluginServerContext) {
         }
         return;
       }
-      if (row && queue.at && canChangeQueue({...queue,at:queue.at},"parallel",row.runtime ?? row.provider,minutes)) {
+      if (row && queue.at && canChangeQueue({...queue,at:queue.at},"parallel",queueProvider(row),minutes)) {
         queue.offer = true;
         if (coordinator) queue.coordinatorId = coordinator;
       }

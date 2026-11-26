@@ -8,7 +8,8 @@ export const MAX_SKIPPED_REPLIES = 200;
  * Queued replies whose question closed some other way (a decision-applied line, a relayed answer, a ledger card, the
  * coordinator's judgment, the person closing it, another board reply). They are not sent: the decision was already made.
  * A reply queued with its question's key matches that key. One queued before the key was recorded matches a closed
- * question of the same session with the same words, unless the session has an open question with those words again.
+ * question of the same session with the same words, closed after the reply was queued, unless the session has an open
+ * question with those words again.
  */
 export function handledQueuedReplies(scope: Pick<Preferences, "queuedDecisions" | "closedQuestions" | "raisedQuestions">) {
   const found: { id: string; reason: string }[] = [];
@@ -23,7 +24,10 @@ export function handledQueuedReplies(scope: Pick<Preferences, "queuedDecisions" 
     if (!words) continue;
     const reopened = (scope.raisedQuestions?.[sessionId]?.questions ?? []).some(question => questionWords(question.question) === words);
     if (reopened) continue;
-    const closed = Object.values(scope.closedQuestions ?? {}).find(entry => entry.sessionId === sessionId && entry.question && questionWords(entry.question) === words);
+    // Only a question closed after the reply was queued: a reply left later answers the question asked again.
+    const queuedAt = Date.parse(queued.at);
+    const closed = Object.values(scope.closedQuestions ?? {}).find(entry => entry.sessionId === sessionId && entry.question &&
+      questionWords(entry.question) === words && Date.parse(entry.at) >= queuedAt);
     if (closed) found.push({ id, reason: closed.reason });
   }
   return found;
@@ -52,7 +56,8 @@ export function foldHandledQueuedReplies(scope: Preferences, now = Date.now()) {
 export function skippedReplyHistory(scope: Pick<Preferences, "skippedReplies">, selected: ReadonlySet<string>): ReplyEntry[] {
   return Object.entries(scope.skippedReplies ?? {}).filter(([, entry]) => selected.has(entry.projectId)).map(([id, entry]) => ({
     key: "skipped:" + id, title: entry.title, projectId: entry.projectId, at: entry.at, status: "closed" as const, skipped: true as const,
-    answer: entry.answer, recipientId: entry.recipientId, ...(entry.imageCount ? { imageCount: entry.imageCount, localPhotos: false } : {}),
+    // The queued photos were removed with the reply: the record says so instead of offering them.
+    answer: entry.answer, recipientId: entry.recipientId, ...(entry.imageCount ? { imageCount: entry.imageCount, localPhotos: false, photosDropped: true as const } : {}),
     origin: { sessionId: entry.sessionId, cardId: entry.sessionId, revision: id, questions: [] },
   }));
 }

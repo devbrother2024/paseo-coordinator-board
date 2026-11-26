@@ -3,7 +3,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canReceiveBoardInput } from "../server/discovery";
-import { parallelEligible, steerProvider } from "../shared/busy-delivery";
+import { parallelEligible, queueProvider, steerProvider } from "../shared/busy-delivery";
+import { sessionRow } from "../server/discovery";
+import { photoNote } from "../client/reply-followup";
 import { PreferenceStore } from "../server/preferences";
 import { NoteStore } from "../server/notes";
 import { ConversationReader } from "../server/conversation";
@@ -69,4 +71,42 @@ test("a queued reply to a question that closed some other way is folded as alrea
   expect(skippedReplyHistory(scope, new Set(["q"]))).toEqual([]);
   // Folding again changes nothing.
   expect([...sender.foldHandled(Date.parse("2030-01-02T12:05:00Z"))]).toEqual([]);
+});
+
+test("the session row carries the implementation a profile runs on, and the queue judges by it", () => {
+  const row = sessionRow({ id: "w", title: "w", status: "running", provider: "claude-2", persistence: { provider: "claude", sessionId: "s" },
+    updatedAt: "1", pendingPermissions: [] } as any, null);
+  expect(row).toMatchObject({ provider: "claude-2", runtime: "claude" });
+  expect(queueProvider(row)).toBe("claude");
+  const plain = sessionRow({ id: "w", title: "w", status: "idle", provider: "codex", updatedAt: "1", pendingPermissions: [] } as any, null);
+  expect(plain).not.toHaveProperty("runtime");
+  expect(queueProvider(plain)).toBe("codex");
+});
+
+test("an old queued reply left after the question closed and was asked again is not folded", () => {
+  const { prefs, sender } = fixture();
+  prefs.change(scope => {
+    // Closed at 01:00; the person replied at 03:00 to the question asked again (not on record yet).
+    scope.queuedDecisions["55555555-5555-4555-8555-555555555555"] = { ...scope.queuedDecisions["33333333-3333-4333-8333-333333333333"],
+      at: "2030-01-02T03:00:00.000Z", input: { ...scope.queuedDecisions["33333333-3333-4333-8333-333333333333"].input, requestKey: "request-legacy-0002" } };
+    // A reply to a card restored after a clarification whose question could not be found never matches a closure.
+    scope.queuedDecisions["66666666-6666-4666-8666-666666666666"] = { ...scope.queuedDecisions["11111111-1111-4111-8111-111111111111"],
+      question: "unmatched-restored-card", input: { ...scope.queuedDecisions["11111111-1111-4111-8111-111111111111"].input, requestKey: "request-restored-0001" } };
+  });
+  const folded = sender.foldHandled(Date.parse("2030-01-02T12:00:00Z"));
+  expect(folded.has("55555555-5555-4555-8555-555555555555")).toBe(false);
+  expect(folded.has("66666666-6666-4666-8666-666666666666")).toBe(false);
+  expect(Object.keys(prefs.read().queuedDecisions)).toContain("55555555-5555-4555-8555-555555555555");
+});
+
+test("a folded reply with photos says they were not sent and were removed", () => {
+  const { prefs, sender } = fixture();
+  prefs.change(scope => {
+    scope.queuedDecisions["11111111-1111-4111-8111-111111111111"].photos = [{ mimeType: "image/png", digest: "a".repeat(64) }];
+  });
+  sender.foldHandled(Date.parse("2030-01-02T12:00:00Z"));
+  const entry = skippedReplyHistory(prefs.read(), new Set(["p"])).find(item => item.title === "Q1 · Proxy resolution?")!;
+  expect(entry).toMatchObject({ imageCount: 1, photosDropped: true });
+  expect(photoNote(entry)).toEqual(["사진 1장은 보내지 않아 지웠습니다", "1 photo was not sent and was removed"]);
+  expect(photoNote({ imageCount: 2 } as any)).toBeNull();
 });
