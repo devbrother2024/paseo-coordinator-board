@@ -430,10 +430,14 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
   const knownRepositories = useMemo(() => knownPullRepositories(snapshot), [snapshot]);
   return (
     <KnownPullRepositories.Provider value={knownRepositories}>
-    <ScrollView ref={scroll} style={{ flex: 1, backgroundColor: c.surface0 }} contentContainerStyle={{ gap: 20, padding: layout.compact ? 12 : 22 }}>
+    <View style={{ flex: 1, backgroundColor: c.surface0 }}>
+    {/* The header and the project filter stay at the top while the board scrolls, so refresh, settings and the
+        project filter are always in reach (maintainer request, 2026-11-26). */}
+    <View style={{ gap: 10, paddingHorizontal: layout.compact ? 12 : 22, paddingTop: layout.compact ? 10 : 18, paddingBottom: 10,
+      borderBottomWidth: 1, borderColor: c.border, backgroundColor: c.surface0 }}>
       <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <View style={{ flex: 1, minWidth: 140, gap: 3 }}>
-          <Text style={{ color: c.foreground, fontSize: 22, fontWeight: "700" }} accessibilityRole="header">{settings ? t("코디네이터 보드 설정", "Coordinator board settings") : t("세션별 코디네이터 보드", "Session coordinator board")}</Text>
+          {!(layout.compact && !settings) && <Text style={{ color: c.foreground, fontSize: 22, fontWeight: "700" }} accessibilityRole="header">{settings ? t("코디네이터 보드 설정", "Coordinator board settings") : t("세션별 코디네이터 보드", "Session coordinator board")}</Text>}
           {error ? <Text accessibilityRole="button" accessibilityLiveRegion="polite" onPress={() => setShowError(open => !open)}
             style={{ color: c.statusDanger, fontSize: 13, textDecorationLine: "underline" }}>
             {snapshot ? t("갱신 실패 · 이전 결과 표시 · 오류 상세", "Refresh failed · Showing last result · Details") : t("조회 실패 · 오류 상세", "Could not load sessions · Details")}
@@ -444,12 +448,14 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
           setSettings(!settings); setManage(false); setPickSession(false);
         }} />
       </View>
+      {!settings && configured && <ProjectFilterBar theme={theme} groups={filterGroups} selected={filters} total={total}
+        clear={() => setChosenProjects([])} toggle={group => setChosenProjects(previous => toggleProjectFilter(filterGroups, previous, group))} />}
+    </View>
+    <ScrollView ref={scroll} style={{ flex: 1, backgroundColor: c.surface0 }} contentContainerStyle={{ gap: 20, padding: layout.compact ? 12 : 22, paddingTop: layout.compact ? 12 : 18 }}>
       {configured && <ReachExplanation banner reach={reach} theme={theme} onReplace={startReplace} />}
       {configured && <StaleCoordinatorTools tools={snapshot?.coordinatorTools} theme={theme} onReplace={startReplace} onOpen={openCoordinator} />}
       {replaceOpen && !settings && configured && coordinatorId && <CoordinatorReplaceLoader theme={theme} coordinator={coordinatorId} disabled={busy}
         onReplaced={onRefresh} onClose={() => setReplaceOpen(false)} />}
-      {!settings && configured && <ProjectFilterBar theme={theme} groups={filterGroups} selected={filters} total={total}
-        clear={() => setChosenProjects([])} toggle={group => setChosenProjects(previous => toggleProjectFilter(filterGroups, previous, group))} />}
       {!!error && showError && <Text selectable style={{ color: c.statusDanger }}>{error}</Text>}
       {settings && <BoardLanguageSetting theme={theme} />}
       {settings && configured && <ParallelWaitSetting theme={theme} onSaved={onRefresh} />}
@@ -555,6 +561,7 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         <RemoteRunning groups={visiblePeers} projects={activeProjects} open={onOpenHostSession} theme={theme} />
       </SessionProgress>}
     </ScrollView>
+    </View>
     </KnownPullRepositories.Provider>
   );
 }

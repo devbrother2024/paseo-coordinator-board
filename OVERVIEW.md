@@ -25,6 +25,8 @@ Open the board from the sidebar and select the projects you want in your digest.
 
 In **Session progress**, choose **All running** to see running sessions across the selected projects and visible hosts, ordered by recent activity. Each row shows its project and host and opens the corresponding session. Choose **By project** for the kanban layout. Your device remembers the last view.
 
+The header row (last update, **Refresh**, **Settings**) and the project filters stay at the top while the board scrolls. On narrow screens the header drops the board title to fit one line.
+
 In the desktop app and on the web, press **⌘+Enter** on Mac or **Ctrl+Enter** on Windows and Linux to send from the current request, reply or question field. **Enter** inserts a line break. Hover over the send button or focus it with Tab to see the shortcut for your device.
 
 **My decisions** shows overdue and urgent items first, followed by work waiting for a response or permission. Other items are ordered by deadline. Within a priority, the oldest known wait comes first. A card stays in place while you compose a reply or review a merge. Questions and explanations preserve line breaks and render Markdown lists, links, and inline code. Single tildes in date ranges or estimates remain visible. Use two tildes on each side for strikethrough, as in `~~text~~`.
