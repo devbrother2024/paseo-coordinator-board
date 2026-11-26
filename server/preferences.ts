@@ -147,7 +147,14 @@ const schema = z.object({
     input:decisionRequest.omit({images:true}), at:z.string().datetime(), title:z.string(), fingerprint:z.string(),
     serverId:z.string().nullable(), stopped:z.boolean(), parallel:parallelState.optional(),
     photos:z.array(z.object({mimeType:z.enum(WORK_IMAGE_MIME_TYPES),digest:z.string()})),
+    // The conversation question the reply answers, so it folds away if that question closes another way.
+    question:z.string().max(64).optional(),
   })).default({}),
+  // Queued replies not sent because their question was handled meanwhile.
+  skippedReplies: tolerantRecord(z.object({
+    title: z.string().max(2000), projectId: z.string(), sessionId: z.string(), recipientId: z.string(), answer: z.string().max(24000),
+    queuedAt: z.string(), at: z.iso.datetime(), reason: z.string().max(32), imageCount: z.number().int().positive().optional(),
+  })),
   decisionReceipts: z.record(z.string(), z.object({
     activity: replyDetails.optional(), response: z.string().optional(),
     messageHash:z.string().regex(/^[a-f0-9]{64}$/).optional(),

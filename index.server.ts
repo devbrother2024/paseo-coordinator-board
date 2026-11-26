@@ -1,6 +1,6 @@
 import type { ReplyEntry } from "./shared/reply-history";
 import { randomUUID } from "node:crypto";
-import { canChangeQueue, manageQueuedAnswer, parallelWait, type QueueView } from "./shared/busy-delivery";
+import { canChangeQueue, manageQueuedAnswer, parallelWait, steerProvider, type QueueView } from "./shared/busy-delivery";
 import { sourceCoordinatorRecipient, type RoutedTrackedDecision, type TrackedResolution, pullKey, trackedFallbackRecipient, trackedRecipient, trackedReplyRoute, usesSourceCoordinator, type TrackedReplyReason } from "./shared/tracked-decisions";
 import { boardReadiness } from "./shared/readiness";
 import { SnapshotReads } from "./server/snapshot-reads";
@@ -29,6 +29,7 @@ import { hostVisibility } from "./shared/hosts";
 import { decorateDecision, DecisionSender } from "./server/decisions";
 import { applyDoneNotes } from "./server/session-decisions";
 import { coordinatorClosures, judgeOpenQuestionTool, listOpenQuestionsTool, QuestionNotices } from "./server/question-judgments";
+import { skippedReplyHistory } from "./server/skipped-replies";
 import { sendDecision } from "./shared/decision-actions";
 import { isCurrentMembership, managedSessions, registerSessionLinks, releaseUnmanagedCoordinator } from "./server/session-links";
 import { registerRecommendation } from "./server/recommendation";
@@ -156,6 +157,10 @@ export default function contribute(server: PluginServerContext) {
     // Saving the record must not stop the board from showing. The next snapshot saves again.
     try { if (save(structuredClone(latest))) prefs.change(save); }
     catch { console.warn("Could not save the board's question records."); }
+    // A queued reply whose question closed another way is not sent. It leaves the top of the board for recent decisions.
+    let folded = new Set<string>();
+    try { folded = decisions.foldHandled(); }
+    catch { console.warn("Could not fold queued replies to handled questions."); }
     // Questions whose handling the board cannot tell go to the coordinator to judge. The board does not wait for it.
     void questionNotices.deliver(paseo).catch(() => console.warn("Could not tell the coordinator which questions to judge."));
     facts.decorate(visible, evidence, visibleNotes);
@@ -188,7 +193,7 @@ export default function contribute(server: PluginServerContext) {
         }
         return;
       }
-      if (row && queue.at && canChangeQueue({...queue,at:queue.at},"parallel",row.provider,minutes)) {
+      if (row && queue.at && canChangeQueue({...queue,at:queue.at},"parallel",row.runtime ?? row.provider,minutes)) {
         queue.offer = true;
         if (coordinator) queue.coordinatorId = coordinator;
       }
@@ -197,7 +202,7 @@ export default function contribute(server: PluginServerContext) {
       if (item.queuedReply && !item.historyUnavailable) showQueue(item.queuedReply,sourceCoordinatorRecipient(item,latest.coordinator,visible));
     }
     const queuedConversations = Object.entries(latest.queuedDecisions).flatMap(([messageId,q]) => {
-      if (!selected.has(q.input.projectId)) return [];
+      if (!selected.has(q.input.projectId) || folded.has(messageId)) return [];
       const queue = {messageId,projectId:q.input.projectId,sessionId:q.input.sessionId,version:q.input.version,title:q.title,
         recipientId:q.input.recipientId,answer:q.input.text,at:q.at,stopped:q.stopped,parallel:q.parallel,imageCount:q.photos.length};
       showQueue(queue,latest.coordinator,q.serverId ?? undefined);
@@ -279,6 +284,8 @@ export default function contribute(server: PluginServerContext) {
     });
     // Questions the coordinator judged handled, with its evidence.
     activity.push(...coordinatorClosures(latest, selected));
+    // Replies not sent because their question was already handled. Read again: this snapshot may have folded them.
+    activity.push(...skippedReplyHistory(prefs.read(), selected));
     const changes = changeRequestHistory(latest, selected, evidence);
     activity.push(...changes.entries);
     if (changes.responses.size || changes.confirmed.length) prefs.change(current => {
@@ -563,7 +570,7 @@ export default function contribute(server: PluginServerContext) {
     if (!agent || agent.id!==input.coordinatorId || agent.internal || agent.archivedAt ||
         !canReceiveBoardInput(agent,true)) return {status:"unavailable"};
     if (expected()!==input.coordinatorId) return {status:"changed"};
-    const request=control(recipient.provider);
+    const request=control(steerProvider(recipient));
     if (!request) return {status:"changed"};
     invalidateCount();
     const body=[

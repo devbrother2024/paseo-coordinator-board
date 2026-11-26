@@ -1,5 +1,6 @@
 import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
+import { conversationProvider } from "./coordinator-tools";
 
 export const parallelWait = defineSettings({
   id: "parallel-reply", scope: "host", version: 1,
@@ -7,6 +8,14 @@ export const parallelWait = defineSettings({
 });
 
 export const supportsSteer = (provider?: string | null) => provider === "claude" || provider === "codex";
+/**
+ * The implementation a session runs on, for whether it takes a reply during its turn. A profile ("claude-2") runs on
+ * Claude Code or Codex; the session's persistence record names that implementation, as for the coordinator's tools.
+ * Without the record, the session's own provider name is all there is.
+ */
+export function steerProvider(agent: { provider?: string | null; persistence?: { provider?: unknown; metadata?: unknown } | null }) {
+  return conversationProvider(agent.persistence) ?? agent.provider ?? null;
+}
 export function parallelEligible(at: string, provider: string | null | undefined, minutes: number, now = Date.now()) {
   return (!!provider && !supportsSteer(provider)) || now - Date.parse(at) >= minutes * 60000;
 }

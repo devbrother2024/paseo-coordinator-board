@@ -29,6 +29,8 @@ const session = z.object({
   sourceProjectTitle: z.string().optional(),
   model: z.string().nullable(),
   provider: z.string().nullable().optional(),
+  // The implementation a profile session runs on (Claude Code, Codex), when it differs from `provider`.
+  runtime: z.string().optional(),
   reporting: z.boolean().optional(),
   status: z.string().optional(),
   evidenceId: z.string().optional(),

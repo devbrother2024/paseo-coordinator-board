@@ -1,4 +1,4 @@
-import { supportsSteer } from "../shared/busy-delivery";
+import { steerProvider, supportsSteer } from "../shared/busy-delivery";
 import { createHash } from "node:crypto";
 import { readPages } from "../shared/pages";
 export { readPages } from "../shared/pages";
@@ -14,10 +14,10 @@ type WorkspacePage = Awaited<ReturnType<Sdk["workspaces"]["list"]>>;
 type Workspace = WorkspacePage["entries"][number];
 
 // Callers opt in to active-turn delivery only for operations that permit it.
-export function canReceiveBoardInput(agent:Pick<Entry["agent"],"status"|"activeTurn"|"pendingPermissions"|"attentionReason"|"provider">, allowActive:boolean) {
+export function canReceiveBoardInput(agent:Pick<Entry["agent"],"status"|"activeTurn"|"pendingPermissions"|"attentionReason"|"provider"> & {persistence?:Entry["agent"]["persistence"]}, allowActive:boolean) {
   if (agent.pendingPermissions.length || agent.attentionReason==="permission" || agent.attentionReason==="error") return false;
   if (agent.status==="idle" && !agent.activeTurn) return true;
-  return allowActive && agent.status==="running" && !!agent.activeTurn && supportsSteer(agent.provider);
+  return allowActive && agent.status==="running" && !!agent.activeTurn && supportsSteer(steerProvider(agent));
 }
 
 export function permissionVersion(agent: Entry["agent"]) {
@@ -70,6 +70,8 @@ export function sessionRow(agent: Entry["agent"], project: Entry["project"] | nu
     projectTitle: workspace?.projectCustomName?.trim() || workspace?.projectDisplayName || project?.projectName || "프로젝트 미확인",
     workspaceTitle: workspace?.title?.trim() || workspace?.name || project?.workspaceName || "워크스페이스 미확인",
     provider: agent.provider?.trim() || null,
+    // The implementation a profile runs on, when it differs from the provider name (for replies during a turn).
+    ...(steerProvider(agent) && steerProvider(agent) !== (agent.provider?.trim() || null) ? { runtime: steerProvider(agent)! } : {}),
     model: agent.model?.trim() || null,
     ...(agent.metadata?.[reportingKey] === true ? { reporting: true } : {}),
     status: agent.status, activityAt: agent.updatedAt,
