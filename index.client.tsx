@@ -11,6 +11,8 @@ import { BoardView } from "./client/board";
 import { NoteEditor } from "./client/note-editor";
 import { SessionPhotoMessage } from "./client/session-photos";
 import { boardPhotoMessageSchema, isBoardPhotoMessage } from "./shared/session-photos";
+import { ChatQuestionMessage } from "./client/chat-question";
+import { CHAT_QUESTION_KIND, chatQuestionItem, chatQuestionSchema } from "./shared/chat-question";
 import type { NoteInput, Snapshot } from "./client/model";
 
 function HostBoard({ host, theme, layout, navigation }: PluginScreenProps) {
@@ -130,7 +132,17 @@ export default function contribute(client: PluginClientContext): () => void {
       return { items: [{ type: "plugin", kind: "session-photos", version: 1, data: { messageId, text: item.text } }] };
     },
   });
+  // A session message ending in a question block shows its options in the session's own conversation too.
+  const removeQuestionRenderer = client.addTimelineRenderer({
+    kind: CHAT_QUESTION_KIND, version: 1, schema: chatQuestionSchema, Component: ChatQuestionMessage,
+  });
+  const removeQuestionTransformer = client.addTimelineTransformer({
+    id: "board-question-message", query: { itemType: "assistant_message" },
+    transform: ({ item, phase }) => chatQuestionItem(item.text, phase),
+  });
   return () => {
+    removeQuestionTransformer();
+    removeQuestionRenderer();
     removePhotoTransformer();
     removePhotoRenderer();
     removeSidebarItem();

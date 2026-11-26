@@ -195,6 +195,8 @@ To ask before deciding, write the question in the card's input, attach a screens
 
 When a session ends its message with a `board-question` code block, the board draws its questions and options like a ledger card. Choosing an option fills the card's input with a line such as `Q1 · Where should the cache live?: A · Memory`. A recommended option carries a **Recommended** mark, and **Use recommendation** puts `recommendedReply` into the input. The board reads what is chosen from the text in the input, so editing or deleting a line changes the highlight too. Nothing is sent until you press **Send**. An option's `does`, `pros` and `cons` show when **Evidence and history** is open.
 
+In the session's own conversation the block also shows as questions and options instead of JSON. Choosing an option writes the same line into that session's input, and nothing is sent until you send it. A message still being written changes once it is finished.
+
 ````markdown
 I compared two places. Please choose one.
 
