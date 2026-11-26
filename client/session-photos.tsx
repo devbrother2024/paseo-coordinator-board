@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Image, Pressable, Text, View } from "react-native";
 import type { z } from "zod";
 import { boardPhotoMessageSchema, readSessionPhoto } from "../shared/session-photos";
+import { boardReply } from "../shared/chat-question";
 import { MAX_WORK_IMAGES } from "../shared/work-images";
 import { Button, type Theme } from "./controls";
 import { BoardLanguageProvider, useBoardLanguage } from "./language";
@@ -60,8 +61,10 @@ export function AttachedPhoto({ sessionId, messageId, index, theme, onCount }: {
 
 function MessageBody({ agentId, item, theme }: MessageProps) {
   const [count, setCount] = useState(1);
+  // A board reply with photos shows the person's words without the board's context.
+  const text = boardReply(item.data.text)?.answer ?? item.data.text;
   return <View style={{ alignSelf: "flex-end", maxWidth: "95%", padding: 12, gap: 8, borderRadius: 12, backgroundColor: theme.colors.surface2 }}>
-    {item.data.text.length > 0 && <Text selectable style={{ color: theme.colors.foreground, lineHeight: 21 }}>{item.data.text}</Text>}
+    {text.length > 0 && <Text selectable style={{ color: theme.colors.foreground, lineHeight: 21 }}>{text}</Text>}
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
       {Array.from({ length: count }, (_, index) => <AttachedPhoto key={index} sessionId={agentId}
         messageId={item.data.messageId} index={index} theme={theme} onCount={index === 0 ? setCount : undefined} />)}

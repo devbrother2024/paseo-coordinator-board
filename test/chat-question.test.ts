@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { CHAT_QUESTION_KIND, chatQuestionItem, chatQuestionSchema } from "../shared/chat-question";
+import { BOARD_REPLY_KIND, boardReply, boardReplyItem, boardReplyMessageSchema, CHAT_QUESTION_KIND, chatQuestionItem, chatQuestionSchema, messageKey, questionAnswer } from "../shared/chat-question";
 
 const block = "```board-question\n" + JSON.stringify({ questions: [
   { id: "Q1", text: "Where should the cache live?", options: [{ key: "A", text: "Memory", recommended: true }, { key: "B", text: "Disk" }] },
@@ -25,4 +25,43 @@ test("a message without a valid block, or one still streaming, is left as Paseo 
   expect(chatQuestionItem("Text\n\n" + block, "streaming")).toBeUndefined();
   // An example inside another fence is part of that fence, not a question.
   expect(chatQuestionItem("How to ask:\n\n````markdown\n" + block + "\n````", "complete")).toBeUndefined();
+});
+
+const asked = "I compared two places.\n\n" + block;
+const reply = "[Coordinator Board · app · Cache]\n" + JSON.stringify({ cardId: "c", action: "reply", questions: [] }) + "\n\nQ1 · Where should the cache live?: A · Memory";
+const said = (type: string, text: string) => ({ item: { type, text } });
+
+test("a question message is answered by the first message from the person after it", () => {
+  const key = chatQuestionItem(asked, "complete")!.items[0].data.key;
+  expect(key).toBe(messageKey(asked.trim()));
+  // Nothing from the person yet: still open, also with the session's later work in between.
+  expect(questionAnswer([said("user_message", "Start"), said("assistant_message", asked)], key)).toEqual({ state: "open" });
+  expect(questionAnswer([said("assistant_message", asked), { item: { type: "tool_call" } }], key)).toEqual({ state: "open" });
+  // A board reply: the person's words without the board's heading and context.
+  expect(questionAnswer([said("assistant_message", asked), said("reasoning", "x"), said("user_message", reply)], key))
+    .toEqual({ state: "answered", reply: "Q1 · Where should the cache live?: A · Memory", viaBoard: true });
+  // A message typed in the session answers it too.
+  expect(questionAnswer([said("assistant_message", asked), said("user_message", "Go with disk")], key))
+    .toEqual({ state: "answered", reply: "Go with disk", viaBoard: false });
+  // The same question asked again later is the one that counts.
+  expect(questionAnswer([said("assistant_message", asked), said("user_message", "Hm"), said("assistant_message", asked)], key)).toEqual({ state: "open" });
+  // Out of the record read, it is not called answered.
+  expect(questionAnswer([said("user_message", "Go with disk")], key)).toEqual({ state: "unknown" });
+});
+
+test("only the board's own reply shape is read as a board reply", () => {
+  expect(boardReply(reply)).toEqual({ heading: "app · Cache", answer: "Q1 · Where should the cache live?: A · Memory" });
+  expect(boardReply("Just words")).toBeNull();
+  expect(boardReply("[Coordinator Board · x]\n{not json}\n\nhi")).toBeNull();
+  expect(boardReply("[Coordinator Board · x]\n{\"cardId\":\"c\"}\n\nhi")).toBeNull();
+  expect(messageKey("a")).not.toBe(messageKey("b"));
+});
+
+test("a board reply in the conversation shows the person's words and keeps the full message behind a toggle", () => {
+  const item = boardReplyItem(reply)!.items[0];
+  expect(item).toMatchObject({ type: "plugin", kind: BOARD_REPLY_KIND, version: 1,
+    data: { heading: "app · Cache", answer: "Q1 · Where should the cache live?: A · Memory", text: reply } });
+  expect(boardReplyMessageSchema.safeParse(item.data).success).toBe(true);
+  // A message the person typed is left as Paseo draws it.
+  expect(boardReplyItem("Go with disk")).toBeUndefined();
 });
