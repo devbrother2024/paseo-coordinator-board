@@ -445,9 +445,15 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
         </View>
         {!settings && <Button theme={theme} label={loading ? t("조회 중…", "Refreshing…") : t("새로 고침", "Refresh")} onPress={onRefresh} disabled={loading} />}
         <Button theme={theme} label={settings ? t("보드로 돌아가기", "Back to board") : t("설정", "Settings")} onPress={() => {
+          // The button stays on screen while the board scrolls, so the other view opens at its top, not mid-way.
           setSettings(!settings); setManage(false); setPickSession(false);
+          scroll.current?.scrollTo({ y: 0, animated: false });
         }} />
       </View>
+      {/* The details open under their toggle, which stays at the top, so they show wherever the board is scrolled. */}
+      {!!error && showError && <ScrollView style={{ maxHeight: 160 }}>
+        <Text selectable style={{ color: c.statusDanger }}>{error}</Text>
+      </ScrollView>}
       {!settings && configured && <ProjectFilterBar theme={theme} groups={filterGroups} selected={filters} total={total}
         clear={() => setChosenProjects([])} toggle={group => setChosenProjects(previous => toggleProjectFilter(filterGroups, previous, group))} />}
     </View>
@@ -456,7 +462,6 @@ export function BoardView({ snapshot, readiness, theme, layout, hostLabel, hostI
       {configured && <StaleCoordinatorTools tools={snapshot?.coordinatorTools} theme={theme} onReplace={startReplace} onOpen={openCoordinator} />}
       {replaceOpen && !settings && configured && coordinatorId && <CoordinatorReplaceLoader theme={theme} coordinator={coordinatorId} disabled={busy}
         onReplaced={onRefresh} onClose={() => setReplaceOpen(false)} />}
-      {!!error && showError && <Text selectable style={{ color: c.statusDanger }}>{error}</Text>}
       {settings && <BoardLanguageSetting theme={theme} />}
       {settings && configured && <ParallelWaitSetting theme={theme} onSaved={onRefresh} />}
       {!settings && snapshot?.queuedConversations?.filter(q=>inFilter(q.projectId)).map(q=><View key={q.messageId} style={{gap:5}}>
