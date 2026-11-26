@@ -36,15 +36,17 @@ export function decorateDecision(row: SessionRow, note: Note | undefined, prefs:
     // A question the session asked with a question block keeps the block's options, recommendation and reasons. The
     // coordinator's structured judgment carries only option labels, so it does not replace them (2026-11-26: a card
     // showed "this card does not say what A is" with the session's block right there).
-    const asked = () => {
+    // The card's question comes from the scan too: when the coordinator judged it, `classify` already put the
+    // judgment's text in `row.detail` and kept no question, and the block is only copied for a matching question.
+    const structuredJudgment = judgment?.kind === "question" && judgment.evidenceId === row.evidenceId && judgment.projectId === row.projectId;
+    const blockQuestion = structuredJudgment ? (() => {
       const scan = scanOf(row) ?? (evidence ? scanQuestions(evidence, row.id === prefs.coordinator, questionContext(prefs, row.id)) : undefined);
       const main = mainQuestion(scan);
-      return !!(main && questionDetails(main)?.block);
-    };
-    const structured = judgment?.kind === "question" && judgment.evidenceId === row.evidenceId && judgment.projectId === row.projectId && !asked();
-    content = structured
+      return main && questionDetails(main)?.block ? main.question : undefined;
+    })() : undefined;
+    content = structuredJudgment && !blockQuestion
       ? { ...judgment.content, source: "coordinator", question: judgment.content?.question || judgment.text }
-      : { source: "conversation", question: (row.keptQuestion && mainQuestion(scanOf(row))?.question) || row.detail.replace(/^세션의 확인 요청 · /, "") };
+      : { source: "conversation", question: blockQuestion || (row.keptQuestion && mainQuestion(scanOf(row))?.question) || row.detail.replace(/^세션의 확인 요청 · /, "") };
   } else if (noteQuestion && !answeredNote && row.status === "idle" && row.evidenceId) {
     content = { source: note.origin === "agent" ? "agent-note" : "person-note", question: note.text };
   } else {

@@ -59,7 +59,9 @@ const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // new request, a pasted clipboard) does not answer the question:
 // - the line the board card or the conversation writes (`Q1 · question: A · option`);
 // - a question id followed by an option key (`Q1은 A`, `Q1: A로`, `Q1 A`), for each question with an id;
-// - for a block with one question, a reply that starts with an option key (`A`, `A로 해`, `B안으로`).
+// - for a block with one question, a reply that is an option key alone or starts with one followed by punctuation
+//   or a Korean particle (`A`, `A.`, `A로 해`, `B안으로`). A key followed by a word is not one: "A quick question"
+//   starts with the article.
 export function answerPicks(reply: string, block: QuestionBlock): Record<number, string[]> {
   const picks = blockPicks(reply, block);
   block.questions.forEach((question, index) => {
@@ -69,7 +71,7 @@ export function answerPicks(reply: string, block: QuestionBlock): Record<number,
       ? new RegExp("(?:^|[^A-Za-z0-9])" + escape(question.id) + "\\s*(?:은|는|:|·|=|-)?\\s*(" + keys + ")(?![A-Za-z0-9])").exec(reply)
       : null;
     const lead = block.questions.length === 1
-      ? new RegExp("^\\s*(" + keys + ")(?=$|[\\s.,!)]|로|으로|안)").exec(reply)
+      ? new RegExp("^\\s*(" + keys + ")(?=\\s*$|[.,!)]|\\s*(?:로|으로|안))").exec(reply)
       : null;
     const key = (named ?? lead)?.[1];
     if (key) picks[index] = [key];

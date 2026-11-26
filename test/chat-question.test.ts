@@ -106,5 +106,9 @@ test("which option a reply names", () => {
   expect(answerPicks("A", one)).toEqual({ 0: ["A"] });
   expect(answerPicks("B안으로 가자", one)).toEqual({ 0: ["B"] });
   expect(answerPicks("A2UI 세션 얘기인데", one)).toEqual({});
+  // An English sentence starting with the article is not a choice (Bugbot on #78).
+  expect(answerPicks("A quick question about the cache", one)).toEqual({});
+  expect(answerPicks("A 로 해", one)).toEqual({ 0: ["A"] });
+  expect(answerPicks("B.", one)).toEqual({ 0: ["B"] });
   expect(answerPicks("이 표가 깨져", one)).toEqual({});
 });
