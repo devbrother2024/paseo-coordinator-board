@@ -1,5 +1,6 @@
 import { applyDoneNotes, decorateDecision, restoreClarifiedDecision } from "./session-decisions";
 import { mainQuestion, questionContext } from "./open-questions";
+import { foldHandledQueuedReplies, handledQueuedReplies } from "./skipped-replies";
 import { join } from "node:path";
 import { SessionPhotoStore } from "./session-photos";
 import { describePhotos, photoReceiptId, saveLocalPhotos, readLocalPhoto, removeLocalPhotos } from "./reply-photos";
@@ -193,7 +194,7 @@ export class DecisionSender {
     if (waitForTurn) {
       if (!prior && !inspectOnly) {
         const {images,...request} = input;
-        const entry = {input:request,at:new Date().toISOString(),title:decision.question,
+        const entry = {input:request,at:new Date().toISOString(),title:decision.question,...(answered ? {question:answered} : {}),
           fingerprint,serverId:destination.serverId ?? null,photos:describePhotos(images),stopped:false};
         const saved = saveLocalPhotos(this.queuePhotos,messageId,images ?? [],()=>{
           this.store.change(scope=>{scope.queuedDecisions[messageId]=entry;});
@@ -237,6 +238,15 @@ export class DecisionSender {
       return image;
     });
     return {...entry.input,...(images.length ? {images} : {})};
+  }
+
+  /** Folds queued replies whose question closed another way: not sent, kept in recent decisions as already handled. */
+  foldHandled(now = Date.now()) {
+    if (!handledQueuedReplies(this.store.read()).length) return new Set<string>();
+    let moved: { id: string; photos: number }[] = [];
+    this.store.change(scope => { moved = foldHandledQueuedReplies(scope, now); });
+    for (const { id, photos } of moved) removeLocalPhotos(this.queuePhotos, id, photos);
+    return new Set(moved.map(entry => entry.id));
   }
 
   hasWaiting(sessionId?:string) {

@@ -51,7 +51,7 @@ export type FoundQuestion = {
   turn?: AssistantEvent; earlier?: AssistantEvent[]; record?: RaisedQuestion;
 };
 export type QuestionScan = { epoch?: string; open: FoundQuestion[];
-  closed: { key: string; reason: ClosedReason; epoch: string; seq: number; by?: string; messageId?: string }[] };
+  closed: { key: string; reason: ClosedReason; epoch: string; seq: number; by?: string; messageId?: string; question?: string }[] };
 // A ledger card that carries a session's question. `owns`: matched by the same session and the same words (not an explicit
 // sessionMatch), so the ledger card alone shows it.
 export type LedgerLink = { card: string; owns: boolean };
@@ -201,7 +201,7 @@ export function scanQuestions(evidence: { epoch?: string; events?: readonly Ques
   const close = (item: Item, reason: ClosedReason, source?: { by: string; messageId: string }) => {
     if (item.closed) return;
     item.closed = true;
-    closed.push({ key: item.key, reason, epoch: item.epoch, seq: item.seq, ...(source ?? {}) });
+    closed.push({ key: item.key, reason, epoch: item.epoch, seq: item.seq, ...(source ?? {}), ...(item.question ? { question: item.question.slice(0, 340) } : {}) });
   };
   // Questions asked before the messages read: those still open, and in this timeline also those already closed, so a
   // settling line in the window finds the question it refers to.
@@ -396,7 +396,7 @@ export function saveScan(scope: Preferences, row: SessionLabel, scan: QuestionSc
   const at = new Date(now).toISOString();
   for (const item of scan.closed) {
     if (!Object.hasOwn(scope.closedQuestions, item.key)) scope.closedQuestions[item.key] = { sessionId: row.id, at, reason: item.reason, epoch: item.epoch, seq: item.seq,
-      ...(item.by ? { by: item.by } : {}), ...(item.messageId ? { messageId: item.messageId } : {}) };
+      ...(item.by ? { by: item.by } : {}), ...(item.messageId ? { messageId: item.messageId } : {}), ...(item.question ? { question: item.question } : {}) };
   }
   const saved = scope.raisedQuestions[row.id];
   const questions = new Map((saved?.questions ?? []).map(question => [question.key, question]));
@@ -454,7 +454,8 @@ export function recordDisplay(details: { question: string; markdown: string; con
 export function closeQuestionByPerson(scope: Preferences, sessionId: string, key: string, now = Date.now(), noteRevision?: number) {
   const saved = scope.raisedQuestions[sessionId];
   const record = saved?.questions.find(question => question.key === key);
-  scope.closedQuestions[key] = { sessionId, at: new Date(now).toISOString(), reason: "person", ...(record ? { epoch: record.epoch, seq: record.seq } : {}),
+  scope.closedQuestions[key] = { sessionId, at: new Date(now).toISOString(), reason: "person",
+    ...(record ? { epoch: record.epoch, seq: record.seq, question: record.question.slice(0, 340) } : {}),
     ...(noteRevision === undefined ? {} : { noteRevision }) };
   if (saved) {
     saved.questions = saved.questions.filter(question => question.key !== key);

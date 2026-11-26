@@ -277,3 +277,17 @@ test("a reply to a restored card closes the original question, and the session's
   expect(after.decision?.question).toContain("trim the intro");
   expect(after.keptQuestion?.older ?? []).toEqual([]);
 });
+
+test("a queued reply whose question closed another way leaves the top of the board in the same snapshot",async()=>{
+  const f=await fixture();
+  const at="2030-01-02T01:00:00.000Z";
+  new PreferenceStore(f.scopePath).change(scope=>{
+    scope.queuedDecisions["77777777-7777-4777-8777-777777777777"]={input:{projectId:"studio",sessionId:"editor",recipientId:"editor",version:"v1",action:"reply",
+      text:"Q1 · Padding?: A · 0.1s",requestKey:"request-editor-0001"},at,title:"Q1 · Padding?",fingerprint:"f",serverId:null,stopped:true,photos:[],question:"k-padding"};
+    scope.closedQuestions["k-padding"]={sessionId:"editor",at:"2030-01-02T02:00:00.000Z",reason:"coordinator",question:"Q1 · Padding?",evidence:"Answered on the ledger card.",by:"coordinator",projectId:"studio"};
+  });
+  const board=await f.snapshot();
+  expect(board.queuedConversations ?? []).toEqual([]);
+  expect(board.replyHistory?.some(entry=>entry.skipped && entry.title==="Q1 · Padding?")).toBe(true);
+  expect(f.sent).toEqual([]);
+});
