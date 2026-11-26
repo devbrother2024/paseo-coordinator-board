@@ -11,8 +11,8 @@ import { BoardView } from "./client/board";
 import { NoteEditor } from "./client/note-editor";
 import { SessionPhotoMessage } from "./client/session-photos";
 import { boardPhotoMessageSchema, isBoardPhotoMessage } from "./shared/session-photos";
-import { ChatQuestionMessage } from "./client/chat-question";
-import { CHAT_QUESTION_KIND, chatQuestionItem, chatQuestionSchema } from "./shared/chat-question";
+import { BoardReplyMessageView, ChatQuestionMessage } from "./client/chat-question";
+import { BOARD_REPLY_KIND, boardReplyItem, boardReplyMessageSchema, CHAT_QUESTION_KIND, chatQuestionItem, chatQuestionSchema } from "./shared/chat-question";
 import type { NoteInput, Snapshot } from "./client/model";
 
 function HostBoard({ host, theme, layout, navigation }: PluginScreenProps) {
@@ -128,7 +128,8 @@ export default function contribute(client: PluginClientContext): () => void {
     id: "session-photos", query: { itemType: "user_message" },
     transform({ item }) {
       const messageId = item.clientMessageId ?? item.messageId;
-      if (!messageId || !isBoardPhotoMessage(messageId)) return;
+      // A board reply without photos shows the person's words without the board's context.
+      if (!messageId || !isBoardPhotoMessage(messageId)) return boardReplyItem(item.text);
       return { items: [{ type: "plugin", kind: "session-photos", version: 1, data: { messageId, text: item.text } }] };
     },
   });
@@ -140,7 +141,11 @@ export default function contribute(client: PluginClientContext): () => void {
     id: "board-question-message", query: { itemType: "assistant_message" },
     transform: ({ item, phase }) => chatQuestionItem(item.text, phase),
   });
+  const removeReplyRenderer = client.addTimelineRenderer({
+    kind: BOARD_REPLY_KIND, version: 1, schema: boardReplyMessageSchema, Component: BoardReplyMessageView,
+  });
   return () => {
+    removeReplyRenderer();
     removeQuestionTransformer();
     removeQuestionRenderer();
     removePhotoTransformer();
