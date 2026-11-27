@@ -72,9 +72,6 @@ function Body({ agentId, item, theme }: Props) {
         </View>;
       })}
       {folded && <View style={{ gap: 6 }}>
-        {answered.choseNone && <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
-          {t("선택지를 고르지 않고 글로 답했습니다(아래 글).", "Answered in words without choosing an option (the message below).")}
-        </Text>}
         <View style={{ flexDirection: "row" }}>
           <Button theme={theme} label={t("선택지 다시 보기", "Show the options")} onPress={() => setReopened(true)} />
         </View>

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BOARD_REPLY_KIND, boardReply, boardReplyItem, boardReplyMessageSchema, CHAT_QUESTION_KIND, foldedAnswer, chatQuestionItem, chatQuestionSchema, messageKey, questionAnswer } from "../shared/chat-question";
+import { BOARD_REPLY_KIND, boardReply, boardReplyItem, boardReplyMessageSchema, CHAT_QUESTION_KIND, answerPicks, foldedAnswer, chatQuestionItem, chatQuestionSchema, messageKey, questionAnswer } from "../shared/chat-question";
 
 const block = "```board-question\n" + JSON.stringify({ questions: [
   { id: "Q1", text: "Where should the cache live?", options: [{ key: "A", text: "Memory", recommended: true }, { key: "B", text: "Disk" }] },
@@ -40,13 +40,25 @@ test("a question message is answered by the first message from the person after 
   // A board reply: the person's words without the board's heading and context.
   expect(questionAnswer([said("assistant_message", asked), said("reasoning", "x"), said("user_message", reply)], key))
     .toEqual({ state: "answered", reply: "Q1 · Where should the cache live?: A · Memory", viaBoard: true });
-  // A message typed in the session answers it too.
-  expect(questionAnswer([said("assistant_message", asked), said("user_message", "Go with disk")], key))
-    .toEqual({ state: "answered", reply: "Go with disk", viaBoard: false });
+  // A message typed in the session answers it only when it names an option.
+  expect(questionAnswer([said("assistant_message", asked), said("user_message", "Q1은 B로 해 주세요")], key))
+    .toEqual({ state: "answered", reply: "Q1은 B로 해 주세요", viaBoard: false });
+  expect(questionAnswer([said("assistant_message", asked), said("user_message", "B로 해")], key))
+    .toEqual({ state: "answered", reply: "B로 해", viaBoard: false });
+  // 2026-11-26: a later request about something else is not an answer; the question stays open.
+  const other = "And the second table on the board breaks. Let's check that too.";
+  expect(questionAnswer([said("assistant_message", asked), said("user_message", other)], key)).toEqual({ state: "open" });
+  expect(questionAnswer([said("assistant_message", asked), said("user_message", "Go with disk")], key)).toEqual({ state: "open" });
+  // A board reply in words only (a question about the card) does not answer it either.
+  const asking = reply.replace("Q1 · Where should the cache live?: A · Memory", "Why not disk?");
+  expect(questionAnswer([said("assistant_message", asked), said("user_message", asking)], key)).toEqual({ state: "open" });
+  // A follow-up first, the answer later: the answer is the later one.
+  expect(questionAnswer([said("assistant_message", asked), said("user_message", other), said("user_message", "Q1: A")], key))
+    .toEqual({ state: "answered", reply: "Q1: A", viaBoard: false });
   // The same question asked again later is the one that counts.
   expect(questionAnswer([said("assistant_message", asked), said("user_message", "Hm"), said("assistant_message", asked)], key)).toEqual({ state: "open" });
   // Out of the record read, it is not called answered.
-  expect(questionAnswer([said("user_message", "Go with disk")], key)).toEqual({ state: "unknown" });
+  expect(questionAnswer([said("user_message", "Q1은 A")], key)).toEqual({ state: "unknown" });
 });
 
 test("only the board's own reply shape is read as a board reply", () => {
@@ -66,15 +78,37 @@ test("a board reply in the conversation shows the person's words and keeps the f
   expect(boardReplyItem("Go with disk")).toBeUndefined();
 });
 
-test("a folded question shows the chosen options, never the answer's own words", () => {
+test("a folded question shows the chosen options, never the answer's own words, and folds only on a choice", () => {
   const question = chatQuestionItem(asked, "complete")!.items[0].data.block;
   expect(foldedAnswer({ state: "answered", reply: "Q1 · Where should the cache live?: A · Memory", viaBoard: true }, question))
-    .toEqual({ viaBoard: true, picks: { 0: ["A"] }, choseNone: false });
-  // A pasted clipboard or a follow-up question chooses nothing, and its text stays out of the card.
+    .toEqual({ viaBoard: true, picks: { 0: ["A"] } });
+  expect(foldedAnswer({ state: "answered", reply: "Q1은 B로", viaBoard: false }, question)).toEqual({ viaBoard: false, picks: { 0: ["B"] } });
+  // A pasted clipboard or a follow-up question chooses nothing: the question does not fold.
   const pasted = JSON.stringify({ type: "excalidraw/clipboard", elements: [{ text: "x".repeat(500) }] }) + "\nWhich computer was it?";
-  const folded = foldedAnswer({ state: "answered", reply: pasted, viaBoard: false }, question)!;
-  expect(folded).toEqual({ viaBoard: false, picks: {}, choseNone: true });
-  expect(JSON.stringify(folded)).not.toContain("excalidraw");
+  expect(foldedAnswer({ state: "answered", reply: pasted, viaBoard: false }, question)).toBeNull();
   expect(foldedAnswer({ state: "open" }, question)).toBeNull();
   expect(foldedAnswer({ state: "unknown" }, question)).toBeNull();
+});
+
+test("which option a reply names", () => {
+  const two = { questions: [
+    { id: "Q1", text: "Cache?", multi: false, options: [{ key: "A", text: "Memory", recommended: false }, { key: "B", text: "Disk", recommended: false }] },
+    { id: "Q2", text: "Checks?", multi: false, options: [{ key: "A", text: "Unit", recommended: false }, { key: "B", text: "Lint", recommended: false }] },
+  ] };
+  expect(answerPicks("Q1은 A, Q2는 B로 해 주세요", two)).toEqual({ 0: ["A"], 1: ["B"] });
+  expect(answerPicks("Q2: A", two)).toEqual({ 1: ["A"] });
+  // With two questions a bare key does not say which question it answers.
+  expect(answerPicks("A로 해", two)).toEqual({});
+  // A key glued to other letters or digits is not a choice, nor is Q10 an answer to Q1.
+  expect(answerPicks("Q1 AB", two)).toEqual({});
+  expect(answerPicks("Q10 A", two)).toEqual({});
+  const one = { questions: [two.questions[0]] };
+  expect(answerPicks("A", one)).toEqual({ 0: ["A"] });
+  expect(answerPicks("B안으로 가자", one)).toEqual({ 0: ["B"] });
+  expect(answerPicks("A2UI 세션 얘기인데", one)).toEqual({});
+  // An English sentence starting with the article is not a choice (Bugbot on #78).
+  expect(answerPicks("A quick question about the cache", one)).toEqual({});
+  expect(answerPicks("A 로 해", one)).toEqual({ 0: ["A"] });
+  expect(answerPicks("B.", one)).toEqual({ 0: ["B"] });
+  expect(answerPicks("이 표가 깨져", one)).toEqual({});
 });
