@@ -21,7 +21,7 @@ paseo plugin ls coordinator-board
 
 레지스트리로 설치한 보드의 새 버전을 확인하려면 `paseo plugin update coordinator-board --check`를 실행하세요. 업데이트하려면 `paseo plugin update coordinator-board`를 실행하고 제안된 변경을 확인합니다.
 
-**Git·ZIP 설치**도 가능합니다. Git이 있는 호스트에서는 `paseo plugin install git:devbrother2024/paseo-coordinator-board --ref main`으로 기본 브랜치를 설치합니다. 이 문서의 버전을 설치하려면 `main` 자리에 `v0.5.24`를 넣으세요. 전체 커밋 SHA도 사용할 수 있습니다. ZIP은 압축을 푼 뒤 `paseo-plugin.json`이 있는 폴더에서 `paseo plugin install .`을 실행하고 그 폴더를 보관하세요. [Paseo 플러그인 안내](https://paseo.sh/docs/plugins)
+**Git·ZIP 설치**도 가능합니다. Git이 있는 호스트에서는 `paseo plugin install git:devbrother2024/paseo-coordinator-board --ref main`으로 기본 브랜치를 설치합니다. 이 문서의 버전을 설치하려면 `main` 자리에 `v0.6.0`을 넣으세요. 전체 커밋 SHA도 사용할 수 있습니다. ZIP은 압축을 푼 뒤 `paseo-plugin.json`이 있는 폴더에서 `paseo plugin install .`을 실행하고 그 폴더를 보관하세요. [Paseo 플러그인 안내](https://paseo.sh/docs/plugins)
 
 **세션 진행 → 진행 중 모아보기**에서 선택한 프로젝트의 실행 중인 세션을 최근 활동순으로 확인하고 열 수 있습니다. 각 행에는 프로젝트와 실행 호스트가 표시됩니다. **프로젝트별**을 선택하면 칸반으로 돌아갑니다. 마지막으로 선택한 보기는 기기별로 저장됩니다.
 
