@@ -4,6 +4,7 @@ import type { SessionRow } from "../shared/contract";
 import type { Preferences } from "./preferences";
 import { labelDefinitions, questionChoices, type LabelDefinition } from "../shared/question-choices";
 import { splitQuestionBlock, type QuestionBlock } from "../shared/question-block";
+import { markdownTail } from "../shared/markdown-tail";
 import { withAssignmentHost } from "./host-assignment";
 import { waitsForIdle } from "../shared/busy-delivery";
 import { questionIn, turnQuestion } from "./turn-question";
@@ -96,7 +97,7 @@ export function excerpt(page: Page): Evidence {
     }
     if (!text) continue;
     laterInputs.length = 0;
-    turns.push({ role, text: shown.slice(-2000), ...(timestamp ? { at:timestamp } : {}), ...(shown.length > 2000 ? { truncated: true } : {}),
+    turns.push({ role, text: markdownTail(shown, 2000), ...(timestamp ? { at:timestamp } : {}), ...(shown.length > 2000 ? { truncated: true } : {}),
       ...(split.block ? { block: split.block } : {}) });
     full.set(turns.at(-1)!, item.text);
     if (role === "assistant") {
