@@ -37,8 +37,11 @@ function Body({ agentId, item, theme }: Props) {
   const picks = folded ? answered.picks : composer ? blockPicks(prompt, block) : {};
   const fill = (next: string) => {
     if (!composer) return;
-    composer.setPrompt(next);
-    void composer.focus().catch(() => {});
+    // Paseo writes into the input on screen only while that input is live; otherwise the text goes to the saved draft
+    // and the input on screen stays empty. Focus first so the input is live, then write (2026-11-26: the card showed
+    // A chosen while the input looked empty).
+    const write = () => composer.setPrompt(next);
+    void composer.focus().then(write, write);
   };
   return <View style={{ gap: 12 }}>
     {!!text && <HistoryMarkdown theme={theme} source={text} />}
@@ -76,6 +79,10 @@ function Body({ agentId, item, theme }: Props) {
           <Button theme={theme} label={t("선택지 다시 보기", "Show the options")} onPress={() => setReopened(true)} />
         </View>
       </View>}
+      {!folded && Object.keys(picks).length > 0 && <Text accessibilityLiveRegion="polite" style={{ color: c.statusWarning, fontSize: 12 }}>
+        {t("입력창에 넣었습니다. 아직 보내지 않았습니다. 입력창에서 보내야 세션에 전달됩니다.",
+          "Written into the input, not sent yet. Send it from the input to reach the session.")}
+      </Text>}
       {!folded && !!block.recommend && <View style={{ flexDirection: "row", gap: 6, alignItems: "baseline" }}>
         <Text style={{ color: c.foregroundMuted, fontSize: 12, fontWeight: "600", flexShrink: 0 }}>{t("추천", "Recommendation")}</Text>
         <View style={{ flexShrink: 1 }}><HistoryMarkdown theme={theme} source={block.recommend} /></View>
