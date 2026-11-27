@@ -189,6 +189,27 @@ test("tools match projects across path and Git URL formats and expose the reason
   expect((await s.plan()).location).toMatchObject({ serverId: local.serverId, reason: "board-tie", running: 2 });
 });
 
+test("remote assignment follows the selected project's model override and provider exclusions", async () => {
+  const s = scenario();
+  const override = { ...expectedRoute, effort: null };
+  s.store.change(scope => { scope.projectRouting[projectId] = { C: [override] }; });
+  const plan = await s.plan({ platform: "windows" });
+  expect(plan.location.serverId).toBe(remote.serverId);
+  expect(plan.routes.find(r => r.grade === "C").route).toEqual(override);
+
+  s.store.change(scope => { scope.projectExcludedProviders[projectId] = ["codex"]; });
+  const excluded = await s.plan({ platform: "windows" });
+  expect(excluded.routes.find(r => r.grade === "C").route).toBeNull();
+  const job = { ...s.job, platform: "windows" as const, expectedRoute: override };
+  await expect(s.assign(job)).rejects.toThrow();
+  expect(s.win.creates.size).toBe(0);
+
+  s.store.change(scope => { delete scope.projectExcludedProviders[projectId]; });
+  const assigned = await s.assign(job);
+  expect(assigned).toMatchObject({ route: override, location: { serverId: remote.serverId } });
+  expect(s.win.creates.size).toBe(1);
+});
+
 test("settings can pin a project pair, cap a host, and explain unavailable placements without creating an agent", async () => {
   const s = scenario();
   s.win.workspace.gitRuntime.remoteUrl = "https://git.example.com/team/different.git";
@@ -265,6 +286,16 @@ test("the coordinator can pin a different catalog route on the remote host and r
     sourceAgentId: coordinator, sourceAgentServerId: local.serverId, messageId: creationUuid(job.requestKey, "prompt"),
   }]);
   expect(s.win.sends).toHaveLength(1);
+});
+
+test("a coordinator-chosen route cannot create a remote worker with a provider excluded by the project", async () => {
+  const s = scenario();
+  s.store.change(scope => {
+    scope.projectExcludedProviders = { [projectId]: [expectedRoute.provider] };
+  });
+
+  await expect(s.assign({ ...s.job, routeSource: "coordinator" })).rejects.toThrow(/excluded provider/);
+  expect(s.mac.creates.size + s.win.creates.size).toBe(0);
 });
 
 test("remote first instructions work without agent steering and replay only once", async () => {

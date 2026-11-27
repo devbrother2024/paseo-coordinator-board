@@ -12,7 +12,7 @@ import { SentRequestStore } from "./sent-requests";
 import { createHash } from "node:crypto";
 import { askDigest, operationState, requestWork, setProviderInclusion, setWorkerMode, setupCoordinator, updateRouting, workPlacementText } from "../shared/operations";
 import { archiveRetiredCoordinator, coordinatorPinSettings, pinCurrentCoordinator, retiredCoordinatorState, setCoordinatorAutoPin } from "../shared/operations";
-import { dispatchInputSchema, dispatchProjectId, includedCatalog, sameRoute, workerGradeSchema, effectiveWorkerMode } from "../shared/dispatch";
+import { dispatchInputSchema, dispatchProjectId, includedCatalog, sameRoute, workerGradeSchema, effectiveWorkerMode, projectProviderExclusions, projectRouteOverrides, routingForProject } from "../shared/dispatch";
 import { placementFields } from "../shared/host-assignment";
 import {
   configForRoute,
@@ -47,6 +47,9 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
     if (scope.coordinator !== caller) throw new Error("현재 지정된 코디네이터만 작업을 배정할 수 있습니다.");
     return scope;
   }
+  function requireManagedProject(projects: string[], projectId: string) {
+    if (!projects.includes(projectId)) throw new Error("이 호스트에서 관리하는 프로젝트를 선택해 주세요. Choose a managed project on this host.");
+  }
   function register(server: PluginServerContext) {
     registerDispatchHosts(server, store, invalidate);
     server.handle(readSessionPhoto, async ({sessionId, messageId, index}) => sessionPhotos.read(sessionId, messageId, index));
@@ -75,19 +78,26 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
       const settings = view !== "setup";
       const initial = settings ? null : store.read();
       const needUsage = !initial || (initial.usageRouting && !initial.routing.M);
-      const [directory, usage] = await Promise.all([
+      const [directory, usage, projectList] = await Promise.all([
         readProviderDirectory(paseo, undefined, settings, true),
         needUsage ? readAccountUsage(paseo) : undefined,
+        settings ? paseo.projects.list() : undefined,
       ]);
+      // The host file adds display-only cards and reset passes. Routing uses Paseo's usage.
+      const host = settings ? await readDisplayUsage(store.directory, directory.providers, usage ?? []) : null;
       const scope = initial ?? store.read();
+      const routingProjects = projectList?.projects
+        .filter(project => scope.projects.includes(project.projectId))
+        .map(project => ({ id: project.projectId, title: project.projectCustomName || project.projectDisplayName, path: project.projectRootPath }));
+      const routingIds = new Set(routingProjects?.map(project => project.id));
       const catalog = includedCatalog(directory.catalog, scope.excludedProviders);
       const coordinator = resolveRoute("M", scope.routing, catalog, false, scope.usageRouting ? usage : []);
-      // Settings also read the host file: its display-only cards, and reset passes for accounts Paseo measures.
-      // Routing above has already used Paseo's own usage, so nothing from the file reaches assignment.
-      const host = settings ? await readDisplayUsage(store.directory, directory.providers, usage ?? []) : null;
       return {
         usage: host && usage ? host.usage : usage, usageRouting:scope.usageRouting,
-        ...(settings && { workerModeOverrides: scope.workerModeOverrides, displayUsage: host?.display ?? [] }),
+        ...(routingProjects && { routingProjects, workerModeOverrides: scope.workerModeOverrides, displayUsage: host?.display ?? [],
+          projectRouting: Object.fromEntries(Object.entries(scope.projectRouting).filter(([id]) => routingIds.has(id))),
+          projectExcludedProviders: Object.fromEntries(Object.entries(scope.projectExcludedProviders).filter(([id]) => routingIds.has(id))),
+        }),
         providers: directory.providers.map(p => ({ ...p, included: !scope.excludedProviders.includes(p.id) })),
         catalog, coordinatorMode: catalog.find(m => m.provider === coordinator?.provider)?.coordinatorMode ?? null,
         routing: scope.routing, revision: scope.routingRevision,
@@ -116,29 +126,60 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
       return { ok: true };
     });
     server.handle(setProviderInclusion, async (input, { paseo }) => {
-      const providers = await readProviderAvailability(paseo);
-      if (!providers.some(p => p.provider === input.provider))
+      const { projectId, provider, included, expectedRevision } = input;
+      if (projectId) requireManagedProject(store.read().projects, projectId);
+      const [providers, projectList] = await Promise.all([
+        readProviderAvailability(paseo),
+        projectId ? paseo.projects.list() : undefined,
+      ]);
+      if (projectId && !projectList?.projects.some(p => p.projectId === projectId))
+        throw new Error("이 호스트에서 프로젝트를 찾을 수 없습니다. Project not found on this host.");
+      if (!providers.some(p => p.provider === provider))
         throw new Error("현재 호스트에서 해당 실행기를 찾지 못했습니다. 목록을 새로 고쳐 주세요.");
       store.change(scope => {
-        if (scope.routingRevision !== input.expectedRevision)
+        if (scope.routingRevision !== expectedRevision)
           throw new Error("다른 화면에서 배정 설정이 바뀌었습니다. 새로 고친 뒤 다시 선택하세요.");
-        const wasIncluded = !scope.excludedProviders.includes(input.provider);
-        if (wasIncluded === input.included) return;
-        if (input.included) scope.excludedProviders = scope.excludedProviders.filter(p => p !== input.provider);
-        else scope.excludedProviders.push(input.provider);
+        if (projectId) requireManagedProject(scope.projects, projectId);
+        const excluded = projectId ? projectProviderExclusions(scope.projectExcludedProviders, projectId) : scope.excludedProviders;
+        const wasIncluded = !excluded.includes(provider);
+        if (wasIncluded === included) return;
+        if (projectId && !included && scope.excludedProviders.includes(provider))
+          throw new Error("이 실행기는 호스트 설정에서 제외되어 있습니다. This provider is excluded on the host.");
+        const next = included ? excluded.filter(p => p !== provider) : [...excluded, provider];
+        if (!projectId) scope.excludedProviders = next;
+        else if (next.length) scope.projectExcludedProviders = { ...scope.projectExcludedProviders, [projectId]: next };
+        else delete scope.projectExcludedProviders[projectId];
         scope.routingRevision++;
       });
       return { ok: true };
     });
     server.handle(updateRouting, async (input, { paseo }) => {
-      const catalog = input.candidates.length ? await readCatalog(paseo, undefined, input.grade === "M") : [];
+      const projectId = "projectId" in input ? input.projectId : undefined;
+      if (projectId) requireManagedProject(store.read().projects, projectId);
+      const [catalog, projectList] = await Promise.all([
+        input.candidates.length ? readCatalog(paseo, undefined, input.grade === "M") : [],
+        projectId ? paseo.projects.list() : undefined,
+      ]);
+      if (projectId && !projectList?.projects.some(p => p.projectId === projectId))
+        throw new Error("이 호스트에서 프로젝트를 찾을 수 없습니다. Project not found on this host.");
       store.change((scope) => {
         if (scope.routingRevision !== input.expectedRevision)
           throw new Error("다른 화면에서 배정표가 바뀌었습니다. 새로 고친 뒤 다시 선택하세요.");
-        if (input.candidates.length) {
-          validateCandidates(input.grade, input.candidates, includedCatalog(catalog, scope.excludedProviders), scope.routing[input.grade]);
-          scope.routing[input.grade] = input.candidates;
-        } else delete scope.routing[input.grade];
+        const { grade, candidates } = input;
+        if (candidates.length) {
+          const policy = projectId ? routingForProject(scope.routing, scope.projectRouting, projectId) : scope.routing;
+          const projectExclusions = projectProviderExclusions(scope.projectExcludedProviders, projectId);
+          validateCandidates(grade, candidates, includedCatalog(catalog, scope.excludedProviders, projectExclusions), policy[grade]);
+        }
+        if ("projectId" in input) {
+          requireManagedProject(scope.projects, input.projectId);
+          const overrides = { ...projectRouteOverrides(scope.projectRouting, input.projectId) };
+          if (candidates.length) overrides[input.grade] = candidates;
+          else delete overrides[input.grade];
+          if (Object.keys(overrides).length) scope.projectRouting = { ...scope.projectRouting, [input.projectId]: overrides };
+          else delete scope.projectRouting[input.projectId];
+        } else if (candidates.length) scope.routing[input.grade] = candidates;
+        else delete scope.routing[input.grade];
         scope.routingRevision++;
       });
       return { ok: true };
@@ -240,6 +281,7 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
       const first = ownerScope(agent.id);
       if (!projectId && (host || platform) && first.projects.length !== 1) throw new Error("대상 프로젝트를 먼저 선택해 주세요. Select a managed project.");
       const selectedProject = projectId ?? ((host || platform) ? first.projects[0] : undefined);
+      if (selectedProject) requireManagedProject(first.projects, selectedProject);
       const [placement, rows, projectList] = await Promise.all([
         selectedProject ? assignment.plan(paseo, first, selectedProject, { platform, host }) : null,
         managedRowsForCoordinator(paseo, store, agent.id),
@@ -251,18 +293,26 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
         first.usageRouting ? readAccountUsage(sdk) : [],
       ]));
       const latest = ownerScope(agent.id);
-      if (placement && (latest.assignmentRevision !== first.assignmentRevision || !latest.projects.includes(selectedProject!)))
+      if (selectedProject && (latest.assignmentRevision !== first.assignmentRevision || !latest.projects.includes(selectedProject)))
         throw new Error("호스트 설정이 바뀌었습니다. 배정 미리보기를 다시 확인해 주세요. / Host settings changed. Preview the assignment again.");
-      const selected = (id: string) => first.projects.includes(id) && latest.projects.includes(id);
+      const selected = (id: string) => (!selectedProject || id === selectedProject) && first.projects.includes(id) && latest.projects.includes(id);
+      const hostCatalog = includedCatalog(catalog, latest.excludedProviders);
       const projects = projectList.projects
         .filter((p) => selected(p.projectId))
-        .map((p) => ({
-          id: p.projectId,
-          title: p.projectCustomName || p.projectDisplayName,
-          path: p.projectRootPath,
-        }));
+        .map((p) => {
+          const policy = routingForProject(latest.routing, latest.projectRouting, p.projectId);
+          const projectCatalog = includedCatalog(hostCatalog, projectProviderExclusions(latest.projectExcludedProviders, p.projectId));
+          const routes = workerGradeSchema.options.map(grade => {
+            const route = resolveRoute(grade, policy, projectCatalog, needsHooks, latest.usageRouting ? usage : []);
+            const expectedModeId = route ? effectiveWorkerMode(route.provider, latest.workerModeOverrides) : undefined;
+            return { grade, route, expectedModeId };
+          });
+          return { id: p.projectId, title: p.projectCustomName || p.projectDisplayName, path: p.projectRootPath, routes };
+        });
+      if (selectedProject && !projects.length)
+        throw new Error("이 호스트에서 관리하는 프로젝트를 찾을 수 없습니다. Managed project not found on this host.");
       const sessions = rows
-        .filter((r) => isCurrentMembership(r, first) && isCurrentMembership(r, latest))
+        .filter((r) => (!selectedProject || r.projectId === selectedProject) && isCurrentMembership(r, first) && isCurrentMembership(r, latest))
         .map(({ id, title, projectId, sourceProjectId, workspaceTitle, status, assignment }) => ({
           id,
           title,
@@ -272,18 +322,16 @@ export function createOperations(store: PreferenceStore, operatingRoot: string, 
           status,
           ...(assignment && { location: assignment }),
         }));
-      const allowed = includedCatalog(catalog, latest.excludedProviders);
-      const routes = workerGradeSchema.options.map(grade => {
-        const route = resolveRoute(grade, latest.routing, allowed, needsHooks, latest.usageRouting ? usage : []);
-        const expectedModeId = route ? effectiveWorkerMode(route.provider, latest.workerModeOverrides) : undefined;
-        return { grade, route, expectedModeId };
-      });
+      const plannedProjectIds = new Set(projects.map(project => project.id));
+      const commonRoutes = projects[0]?.routes;
+      const signature = JSON.stringify(commonRoutes);
+      const shared = commonRoutes && projects.every(project => JSON.stringify(project.routes) === signature);
       return {
         text: JSON.stringify({
           projects,
-          workspaces: workspaces.filter((w) => selected(w.projectId)),
+          workspaces: workspaces.filter((w) => plannedProjectIds.has(w.projectId)),
           sessions,
-          routes,
+          ...(shared && { routes: commonRoutes }),
           ...(placement && { location: placement.location, reason: placement.explanation }),
         }),
       };

@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { explainEmptyRoute, savedCandidateIssue } from "../client/route-options";
+import { projectRoutingSettings, explainEmptyRoute, savedCandidateIssue } from "../client/route-options";
+import { modelChoices } from "../client/model-choices";
+import { resolveRoute } from "../shared/dispatch";
+import type { Operations } from "../shared/operations";
 import type { CatalogModel, Grade, ProviderEntry, RouteChoice } from "../shared/dispatch";
 
 function provider(id: string, extra: Partial<ProviderEntry> = {}): ProviderEntry {
@@ -58,4 +61,33 @@ test("영어 경고를 표시하면서 실행기 이름과 모델 ID를 보존�
   expect(savedCandidateIssue(data, "C", row, en)).toMatch(/effort/);
   expect(explainEmptyRoute(data, "C", en)).toContain("Back to recommended");
   expect(data.routing.C).toEqual([row]);
+});
+
+test("the project preview and model browser use effective providers while retaining saved candidates", () => {
+  const codex = { provider: "codex", model: "first", effort: "high" };
+  const cursor = { provider: "cursor", model: "second", effort: null };
+  const board: Operations = {
+    catalog: [model("codex", "first"), model("cursor", "second")],
+    providers: [provider("codex"), provider("cursor"), provider("claude", { included: false })],
+    coordinatorMode: null, revision: 1,
+    routing: { C: [codex, cursor], M: [codex] },
+    projectRouting: { project: { D: [cursor] } },
+    projectExcludedProviders: { project: ["codex"] },
+  };
+
+  const scoped = projectRoutingSettings(board, "project");
+  expect(scoped.projectExclusions).toEqual(["codex"]);
+  expect(scoped.data.providers.filter(p => p.included).map(p => p.id)).toEqual(["cursor"]);
+  expect(scoped.data.routing.D).toEqual([cursor]);
+  expect(scoped.data.routing.C).toEqual([codex, cursor]);
+  expect(resolveRoute("C", scoped.data.routing, scoped.data.catalog)).toEqual(cursor);
+  const choices = modelChoices(scoped.data, "C", "");
+  expect(choices.groups.map(group => group.provider)).toEqual(["cursor"]);
+  expect(choices.unavailable.map(provider => provider.provider)).toContain("codex");
+  expect(savedCandidateIssue(scoped.data, "C", codex)).toContain("꺼짐");
+  expect(projectRoutingSettings(board, null).data).toEqual(board);
+  expect(projectRoutingSettings(board, "other").projectExclusions).toEqual([]);
+  const old = { ...board, projectExcludedProviders: undefined };
+  expect(projectRoutingSettings(old, "project").projectExclusions).toBeUndefined();
+  expect(projectRoutingSettings(old, "project").data.routing.D).toEqual([cursor]);
 });

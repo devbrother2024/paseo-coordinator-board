@@ -1,8 +1,23 @@
-import { eligibleProvider, type Grade, type ProviderEntry, type RouteChoice } from "../shared/dispatch";
+import { eligibleProvider, includedCatalog, projectProviderExclusions, routingForProject, type Grade, type ProviderEntry, type RouteChoice } from "../shared/dispatch";
 import type { Operations } from "../shared/operations";
 import type { Translate } from "./language";
 
 export const koreanText: Translate = ko => ko;
+
+export function projectRoutingSettings(data: Operations, projectId: string | null) {
+  if (!projectId) return { data, projectExclusions: undefined };
+  const routing = routingForProject(data.routing, data.projectRouting, projectId);
+  if (!data.projectExcludedProviders) return { data: { ...data, routing }, projectExclusions: undefined };
+  const projectExclusions = projectProviderExclusions(data.projectExcludedProviders, projectId);
+  return {
+    data: {
+      ...data, routing,
+      catalog: includedCatalog(data.catalog, projectExclusions),
+      providers: data.providers.map(p => projectExclusions.includes(p.id) ? { ...p, included: false } : p),
+    },
+    projectExclusions,
+  };
+}
 
 type ModelDirectory = Pick<Operations, "providers" | "catalog" | "routing">;
 
@@ -20,12 +35,18 @@ export function savedCandidateIssue(data: ModelDirectory, grade: Grade, row: Rou
   return null;
 }
 
-export function explainEmptyRoute(data: ModelDirectory, grade: Grade, t: Translate = koreanText) {
+export function explainEmptyRoute(
+  data: ModelDirectory,
+  grade: Grade,
+  t: Translate = koreanText,
+  resetLabel: string | null = t("추천으로 되돌리기", "Back to recommended"),
+) {
   const saved = data.routing[grade];
   if (saved?.length) {
     const problems = [...new Set(saved.map(row => savedCandidateIssue(data, grade, row, t)).filter(Boolean))];
-    return t(`저장된 후보를 사용할 수 없습니다 (${problems.join(", ")}). 실행기 설정을 확인하거나, 다른 후보를 추가하거나 ‘추천으로 되돌리기’를 선택하세요.`,
-      `Saved candidates are unavailable (${problems.join(", ")}). Check provider settings, add another candidate, or choose Back to recommended.`);
+    const message = t(`저장된 후보를 사용할 수 없습니다 (${problems.join(", ")}). 실행기 설정을 확인하거나 배정 후보를 바꿔 주세요.`,
+      `Saved candidates are unavailable (${problems.join(", ")}). Check provider settings or change the candidate list.`);
+    return resetLabel ? message + t(` ‘${resetLabel}’을 선택할 수도 있습니다.`, ` You can also choose ${resetLabel}.`) : message;
   }
   if (!data.providers.length) return t("Paseo에서 실행기를 연결한 뒤 목록을 새로 고쳐 주세요.", "Connect a provider in Paseo, then refresh the catalog.");
   const eligible = data.providers.filter(p => eligibleProvider(grade, p.id, false, data.catalog) ||

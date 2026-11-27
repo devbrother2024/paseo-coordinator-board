@@ -1,7 +1,7 @@
 import { useRpc } from "@getpaseo/plugin/client";
 import { AutoGrowInput } from "./auto-grow-input";
 import { SendButton } from "./send-input";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import {
   operationState,
@@ -25,7 +25,8 @@ import { CoordinatorReplace } from "./coordinator-replace";
 import { RetiredCoordinator } from "./retired-coordinator";
 import { RouteEditor, routeName, wrap, type RoutingSave } from "./route-editor";
 import { useBoardLanguage } from "./language";
-import { explainEmptyRoute } from "./route-options";
+import { projectFilterNames } from "./model";
+import { explainEmptyRoute, projectRoutingSettings } from "./route-options";
 import { DigestFeedback, type CoordinatorAction, type DigestRequest } from "./digest-request";
 import { SentRequestHistory } from "./sent-requests";
 import { WorkPlacement } from "./dispatch-hosts";
@@ -36,13 +37,15 @@ type Props = {
   settings: boolean;
   coordinator: string | null;
   configured: boolean;
+  projectMembershipKey: string | null;
+  scopeChanging?: boolean;
   refreshBoard: () => void;
   openCoordinator?: (id: string) => void;
   action: CoordinatorAction;
   digest: DigestRequest;
 };
 
-export function OperationsPanel({ theme, settings, coordinator, configured, refreshBoard, openCoordinator, action: { pending, busy, setBusy }, digest }: Props) {
+export function OperationsPanel({ theme, settings, coordinator, configured, projectMembershipKey, scopeChanging, refreshBoard, openCoordinator, action: { pending, busy, setBusy }, digest }: Props) {
   const { t, language, languageReady } = useBoardLanguage();
   const fetchState = useRpc(operationState),
     setup = useRpc(setupCoordinator),
@@ -50,9 +53,17 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
     saveWorkerMode = useRpc(setWorkerMode),
     changeUsageRouting = useRpc(setUsageRouting),
     savePolicy = useRpc(updateRouting);
+  const [selectedProject, setProject] = useState<string | null>(null);
+  const view = settings ? "settings" : configured && !coordinator ? "setup" : null;
+  const membership = settings && !scopeChanging ? projectMembershipKey : null;
+  const readScope = useMemo(() => {
+    if (!view || (view === "settings" && membership === null)) return null;
+    return { view, membership };
+  }, [view, membership]);
+  const [read, setRead] = useState<{ scope: NonNullable<typeof readScope>; data: Operations | null; loading: boolean } | null>(null);
+  const data = read?.scope === readScope ? read.data : null;
+  const loading = !!readScope && (read?.scope !== readScope || read.loading);
   const sendWork = useRpc(requestWork);
-  const [data, setData] = useState<Operations | null>(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [text, setText] = useState("");
@@ -69,30 +80,32 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   const delivery = useRef({ payload: "", key: "" });
   const fetchRef = useRef(fetchState);
   fetchRef.current = fetchState;
-  const refresh = useCallback(async (clearError = true, setupPreview = false) => {
+  const activeSettings = useRef({ readScope, selectedProject });
+  activeSettings.current = { readScope, selectedProject };
+  const refresh = useCallback(async (clearError = true) => {
+    if (!live.current || !readScope || activeSettings.current.readScope !== readScope) return;
     const token = ++generation.current;
-    setLoading(true);
+    const matches = () => live.current && token === generation.current && activeSettings.current.readScope === readScope;
+    setRead(previous => ({ scope: readScope, data: previous?.scope === readScope ? previous.data : null, loading: true }));
     try {
       // An older daemon may still accept only the original empty input.
-      const result = setupPreview ? await fetchRef.current({ view: "setup" }).catch(error => {
+      const result = readScope.view === "setup" ? await fetchRef.current({ view: "setup" }).catch(error => {
         if (!/unrecognized[_ ]keys?|invalid (?:rpc )?input|unexpected key/i.test(String(error))) throw error;
         return fetchRef.current({});
       }) : await fetchRef.current({});
-      if (live.current && token === generation.current) {
-        setData(result);
+      if (matches()) {
+        setRead({ scope: readScope, data: result, loading: false });
         if (clearError) setError("");
       }
       return result;
     } catch (e) {
-      if (live.current && token === generation.current) {
+      if (matches()) {
+        setRead({ scope: readScope, data: null, loading: false });
         setFeedbackArea("provider");
         setError(e instanceof Error ? e.message : String(e));
       }
-    } finally {
-      if (live.current && token === generation.current) setLoading(false);
     }
-  }, []);
-  const needsModels = settings || (configured && !coordinator);
+  }, [readScope]);
   useEffect(() => {
     live.current = true;
     return () => {
@@ -101,8 +114,8 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
     };
   }, []);
   useEffect(() => {
-    if (needsModels) void refresh(true, !settings);
-  }, [needsModels, settings, refresh]);
+    if (readScope) void refresh();
+  }, [readScope, refresh]);
   useEffect(() => {
     delivery.current = { payload: "", key: "" };
     setPlatform(undefined);
@@ -137,6 +150,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   // A routing change reports back to its own row. A refusal carries the latest stored revision so
   // the row can tell a lost race from a rejected candidate.
   async function saveRouting(input: Parameters<typeof savePolicy>[0]): Promise<RoutingSave> {
+    if (!settingsAreCurrent()) return { ok: false, message: t("배정 설정이 바뀌었습니다. 새로 고쳐 주세요.", "Routing settings changed. Refresh and try again."), revision: null };
     if (pending.current) return { ok: false, message: t("다른 설정을 저장하는 중입니다. 잠시 뒤 다시 시도해 주세요.", "Another setting is being saved. Try again in a moment."), revision: input.expectedRevision };
     pending.current = true;
     setBusy(true);
@@ -195,7 +209,7 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
   </>;
 
   function connect() {
-    if (!model || !mode || !configured || !languageReady) return;
+    if (!model || !mode || !configured || !languageReady || loading || activeSettings.current.readScope !== readScope) return;
     void act(
       () => setup({ expectedCoordinator: coordinator, replace: !!coordinator, expectedRoute: model, expectedModeId: mode.id, language }),
       t("운영 세션을 연결했습니다.", "Coordinator session connected."),
@@ -206,32 +220,80 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
     });
   }
 
+  const projects = data?.projectRouting ? data.routingProjects ?? [] : [];
+  const projectNames = projectFilterNames(projects);
+  const projectId = selectedProject;
+  const projectUnavailable = !!data && projectId !== null && !projectNames.has(projectId);
+  const routingSettings = data && !projectUnavailable ? projectRoutingSettings(data, projectId) : null;
+  const projectExclusions = routingSettings?.projectExclusions;
+  const canEditProviders = !projectId || projectExclusions !== undefined;
+  const settingsDisabled = busy || loading;
+  const renderedGeneration = generation.current;
+  function settingsAreCurrent() {
+    return !!routingSettings && !settingsDisabled && renderedGeneration === generation.current
+      && activeSettings.current.readScope === readScope && activeSettings.current.selectedProject === projectId;
+  }
   if (settings) return <View style={{ gap: 14 }}>
     <FactReplyControls theme={theme} />
     <MergeJudgmentControls theme={theme} />
     <CoordinatorPinControls theme={theme} coordinator={coordinator} />
+    {data && (projects.length > 0 || projectUnavailable) && <View style={section}>
+      <Text accessibilityRole="header" style={heading}>{t("배정 설정 범위", "Routing scope")}</Text>
+      <View style={wrap}>
+        <Button theme={theme} label={t("보드 기본값", "Board defaults")} selected={!projectId} disabled={settingsDisabled} onPress={() => setProject(null)} />
+        {projects.map(p => (
+          <Button key={p.id} theme={theme}
+            label={projectNames.get(p.id) ?? p.title}
+            selected={projectId === p.id} disabled={settingsDisabled} onPress={() => setProject(p.id)} />
+        ))}
+      </View>
+      {projectUnavailable && <Text accessibilityLiveRegion="polite" style={{ color: muted }}>{t(
+        "이 프로젝트의 배정 설정을 사용할 수 없습니다. 다른 배정 범위를 선택해 주세요.",
+        "Routing settings for this project are unavailable. Choose a routing scope.",
+      )}</Text>}
+    </View>}
     <View style={section}>
       <View style={{ ...wrap, alignItems: "center", justifyContent: "space-between" }}>
         <Text accessibilityRole="header" style={heading}>{t("Paseo 실행기", "Paseo providers")}</Text>
-        <Button theme={theme} label={loading ? t("실행기 조회 중…", "Loading providers\u2026") : t("실행기·모델 새로 고침", "Refresh providers and models")} disabled={loading || busy} onPress={() => void refresh()} />
+        <Button theme={theme} label={loading ? t("실행기 조회 중…", "Loading providers\u2026") : t("실행기·모델 새로 고침", "Refresh providers and models")} disabled={!readScope || settingsDisabled} onPress={() => void refresh()} />
       </View>
-      <Text style={{ color: muted }}>{t("새로 발견한 실행기는 기본으로 포함됩니다. 연결된 모델이 있는 실행기에 작업을 배정합니다.", "New providers are included by default. Providers with available models can receive assignments.")}</Text>
-      {data && <ProviderSettings theme={theme} providers={data.providers} catalog={data.catalog} busy={busy || loading}
-        overrides={data.workerModeOverrides}
+      {!readScope && <Text style={{ color: muted }}>{t("프로젝트 목록을 확인하고 있습니다.", "Waiting for the managed project list.")}</Text>}
+      {routingSettings && <Text style={{ color: muted }}>{!canEditProviders
+        ? t("이 호스트에서는 보드 기본값에서 실행기 설정을 바꿀 수 있습니다.", "To change providers on this host, select Board defaults.")
+        : projectExclusions
+          ? t("이 프로젝트의 A~D 작업은 보드의 실행기 설정을 따릅니다. 이 프로젝트에서만 실행기를 제외할 수 있습니다.", "This project inherits the board's providers for worker grades A through D. You can exclude providers for this project.")
+          : t("이 설정은 호스트 전체에 적용됩니다. 새로 발견한 실행기는 기본으로 포함됩니다.", "These settings apply across the host. New providers are included by default.")}</Text>}
+      {canEditProviders && data && routingSettings && <ProviderSettings theme={theme} providers={data.providers} catalog={routingSettings.data.catalog} busy={settingsDisabled}
+        projectExclusions={projectExclusions} overrides={data.workerModeOverrides}
         setMode={async (provider, modeId) => {
+          if (!settingsAreCurrent() || projectId) return;
           const result = await act(() => saveWorkerMode({ provider, modeId, expectedRevision: data.revision }),
             t("다음 작업 세션의 권한을 저장했습니다.", "Saved permissions for new worker sessions."), "provider");
           if (live.current) await refresh(!!result);
         }}
-        />}
+        change={async (provider, included) => {
+          if (!settingsAreCurrent()) return;
+          const result = await act(
+            () => includeProvider({ provider, included, expectedRevision: data.revision, ...(projectId && projectExclusions && { projectId }) }),
+            projectExclusions
+              ? included ? t("이 실행기는 이제 보드 기본값을 따릅니다.", "This provider now follows the board default.")
+                : t("이 프로젝트의 새 작업 배정에서 실행기를 제외했습니다.", "Provider excluded from new assignments in this project.")
+              : included ? t("이 실행기를 보드 배정에 포함했습니다.", "Provider included in board routing.")
+                : t("이 실행기를 보드 배정에서 제외했습니다.", "Provider excluded from board routing."),
+            "provider",
+          );
+          if (live.current) await refresh(!!result);
+        }} />}
       {feedbackArea === "provider" && feedback}
     </View>
-    {data && <UsageRouting theme={theme} providers={data.providers} reports={data.usage ?? []} supplemental={data.displayUsage} busy={busy || loading}
+    {!projectId && data && <UsageRouting theme={theme} providers={data.providers} reports={data.usage ?? []} supplemental={data.displayUsage} busy={settingsDisabled}
       usage={{ enabled: data.usageRouting ?? false, ready: !!data.usage, onToggle: () => void (async () => {
+        if (!settingsAreCurrent()) return;
         const result = await act(() => changeUsageRouting({enabled:!data.usageRouting,expectedRevision:data.revision}), t("사용량으로 순서를 정하는 설정을 저장했습니다.","Saved the usage ordering preference."), "accounts");
         if (live.current) await refresh(!!result);
       })() }}
       onInclude={async (provider, included) => {
+        if (!settingsAreCurrent()) return;
         const result = await act(() => includeProvider({ provider, included, expectedRevision: data.revision }),
           included ? t("이 계정을 자동 배정에 사용합니다.", "This account is used for automatic assignment.") : t("이 계정을 자동 배정에서 껐습니다.", "This account is off for automatic assignment."), "accounts");
         if (live.current) await refresh(!!result);
@@ -240,8 +302,12 @@ export function OperationsPanel({ theme, settings, coordinator, configured, refr
     <View style={section}>
       <Text accessibilityRole="header" style={heading}>{t("모델 배정", "Model routing")}</Text>
       <Text style={{ color: muted }}>{t("어떤 일에 어떤 모델을 쓰는지 한눈에 보고, 그 줄에서 바로 바꿉니다. 바꾼 내용은 바로 저장되어 다음 배정부터 적용됩니다.", "See which model each kind of work uses and change it on its row. Changes are saved at once and apply from the next assignment.")}</Text>
-      {data && <RouteEditor data={data} theme={theme} busy={busy || loading}
-        save={(grade, candidates, expectedRevision) => saveRouting({ grade, candidates, expectedRevision })} />}
+      {routingSettings && <RouteEditor key={JSON.stringify(projectId)} data={routingSettings.data} projectId={projectId}
+        theme={theme} busy={settingsDisabled} save={(grade, candidates, expectedRevision) => {
+          if (!projectId) return saveRouting({ grade, candidates, expectedRevision });
+          if (grade !== "M") return saveRouting({ grade, candidates, expectedRevision, projectId });
+          return Promise.resolve({ ok: false, message: t("코디네이터 모델은 보드 설정에서 바꿔 주세요.", "Change the coordinator model in board settings."), revision: null });
+        }} />}
       {feedbackArea === "routing" && feedback}
     </View>
     {configured && coordinator && <CoordinatorReplace theme={theme} coordinator={coordinator} data={data} loading={loading} disabled={busy}

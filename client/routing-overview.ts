@@ -42,7 +42,7 @@ export type RoutingRow = {
   notice: string | null;
 };
 
-export function routingRow(data: Directory, grade: Grade, t: Translate = koreanText): RoutingRow {
+export function routingRow(data: Directory, grade: Grade, t: Translate = koreanText, resetLabel?: string | null): RoutingRow {
   const usage = data.usageRouting ? data.usage : undefined;
   const saved = data.routing[grade];
   const active = resolveRoute(grade, data.routing, data.catalog, false, usage);
@@ -55,7 +55,7 @@ export function routingRow(data: Directory, grade: Grade, t: Translate = koreanT
   });
   const first = candidates[0];
   const mode: RoutingMode = saved ? "custom" : active && preferred && !sameRoute(active, preferred) ? "usage" : "recommended";
-  const notice = !active ? explainEmptyRoute(data, grade, t)
+  const notice = !active ? explainEmptyRoute(data, grade, t, resetLabel)
     : saved && first?.issue ? t(`1순위 ${first.route.provider} / ${first.route.model}을 쓸 수 없어 예비 후보를 씁니다 · ${first.issue}`,
       `Priority 1 (${first.route.provider} / ${first.route.model}) is unavailable, so a fallback is in use · ${first.issue}`)
       : null;
@@ -63,8 +63,8 @@ export function routingRow(data: Directory, grade: Grade, t: Translate = koreanT
     fallbacks: candidates.filter(candidate => !candidate.issue && !candidate.active).length, notice };
 }
 
-export function routingOverview(data: Directory, t: Translate = koreanText): RoutingRow[] {
-  return routingGrades.map(grade => routingRow(data, grade, t));
+export function routingOverview(data: Directory, t: Translate = koreanText, resetLabel?: (grade: Grade) => string | null): RoutingRow[] {
+  return routingGrades.map(grade => routingRow(data, grade, t, resetLabel?.(grade)));
 }
 
 export function modeLabel(mode: RoutingMode, t: Translate = koreanText) {

@@ -324,10 +324,10 @@ export default function contribute(server: PluginServerContext) {
     catalog: Awaited<ReturnType<PluginHandlerContext["paseo"]["projects"]["list"]>>,
     rows: Awaited<ReturnType<typeof discoverSessions>>) {
     const known = new Map(catalog.projects.map(p => [p.projectId, {
-      id: p.projectId, title: p.projectCustomName || p.projectDisplayName || p.projectId, path: p.projectRootPath || "",
+      id: p.projectId, title: p.projectCustomName || p.projectDisplayName || p.projectId, path: p.projectRootPath || "", catalogued: true,
     }]));
     for (const row of rows) {
-      if (!row.serverId && !known.has(row.projectId)) known.set(row.projectId, { id: row.projectId, title: row.projectTitle, path: "" });
+      if (!row.serverId && !known.has(row.projectId)) known.set(row.projectId, { id: row.projectId, title: row.projectTitle, path: "", catalogued: false });
     }
     const saved = prefs.read();
     const scope = { ...saved, projects: saved.projects.filter(id => known.has(id)) };

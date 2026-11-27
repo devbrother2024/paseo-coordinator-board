@@ -32,7 +32,11 @@ export const catalogModelSchema = z.object({
   efforts: z.array(identifier), isDefault: z.boolean(),
   coordinatorMode: z.object({ id: identifier, label: z.string() }).nullable().optional(),
 });
-export const routePolicySchema = z.partialRecord(gradeSchema, z.array(routeChoiceSchema).min(1).max(12));
+const candidateList = z.array(routeChoiceSchema).min(1).max(12);
+export const routePolicySchema = z.partialRecord(gradeSchema, candidateList);
+const projectRoutePolicySchema = z.partialRecord(workerGradeSchema, candidateList);
+export const projectRoutingSchema = z.record(dispatchProjectId, projectRoutePolicySchema);
+export const projectExcludedProvidersSchema = z.record(dispatchProjectId, z.array(identifier));
 export const workspaceChoiceSchema = z.object({ id: identifier, projectId: dispatchProjectId, title: z.string() });
 export const dispatchInputSchema = z.strictObject({
   projectId: dispatchProjectId, workspaceId: identifier, grade: workerGradeSchema,
@@ -48,8 +52,23 @@ export type WorkerGrade = z.infer<typeof workerGradeSchema>;
 export type RouteChoice = z.infer<typeof routeChoiceSchema>;
 export type CatalogModel = z.infer<typeof catalogModelSchema>;
 export type RoutePolicy = z.infer<typeof routePolicySchema>;
+export type ProjectRouting = z.infer<typeof projectRoutingSchema>;
+export type ProjectExcludedProviders = z.infer<typeof projectExcludedProvidersSchema>;
 export type WorkspaceChoice = z.infer<typeof workspaceChoiceSchema>;
 export type DispatchInput = z.infer<typeof dispatchInputSchema>;
+
+export function projectRouteOverrides(projectRouting: ProjectRouting | undefined, projectId: string) {
+  return projectRouting && Object.hasOwn(projectRouting, projectId) ? projectRouting[projectId] : undefined;
+}
+
+export function routingForProject(routing: RoutePolicy, projectRouting: ProjectRouting | undefined, projectId: string): RoutePolicy {
+  const overrides = projectRouteOverrides(projectRouting, projectId);
+  return overrides ? { ...routing, ...overrides } : routing;
+}
+
+export function projectProviderExclusions(exclusions: ProjectExcludedProviders | undefined, projectId?: string): readonly string[] {
+  return exclusions && projectId && Object.hasOwn(exclusions, projectId) ? exclusions[projectId] : [];
+}
 
 function primary(provider: string) {
   return provider === "claude" || provider === "codex";
@@ -95,8 +114,8 @@ export function available(choice: RouteChoice, catalog: CatalogModel[]) {
     (choice.effort === null || m.efforts.includes(choice.effort)));
 }
 
-export function includedCatalog(catalog: CatalogModel[], excludedProviders: readonly string[]) {
-  const excluded = new Set(excludedProviders);
+export function includedCatalog(catalog: CatalogModel[], excludedProviders: readonly string[], projectExclusions: readonly string[] = []) {
+  const excluded = new Set([...excludedProviders, ...projectExclusions]);
   return catalog.filter(m => !excluded.has(m.provider));
 }
 

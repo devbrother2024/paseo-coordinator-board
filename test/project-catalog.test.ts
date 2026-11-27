@@ -77,7 +77,7 @@ test("a deleted project stays removable in settings but its missing ledger does 
 
     const board = await snapshot();
     expect(board.projects).toEqual([
-      { id: "active", title: "Active", path: active, selected: true, rootKey: await projectRootKey(active), temporary: true },
+      { id: "active", title: "Active", path: active, selected: true, catalogued: true, rootKey: await projectRootKey(active), temporary: true },
       { id: "deleted", title: "deleted", path: "", selected: true, missing: true, temporary: false },
     ]);
     expect(board.trackedDecisions.status).toBe("ok");
@@ -95,7 +95,7 @@ test("a deleted project stays removable in settings but its missing ledger does 
     });
     entries.push({ agent: { id: "sample-agent", status: "idle", pendingPermissions: [] }, project: { projectKey: "", projectName: "Direct session" } });
     const fallback = (await snapshot()).projects.find(p => p.id === "unassigned");
-    expect(fallback).toEqual({ id: "unassigned", title: "Direct session", path: "", selected: false, temporary: false });
+    expect(fallback).toEqual({ id: "unassigned", title: "Direct session", path: "", selected: false, catalogued: false, temporary: false });
     await rpc(boardScope, { kind: "project", projectId: "unassigned", enabled: true });
     expect((await snapshot()).sessions.some(row => row.id === "sample-agent")).toBe(true);
     expect((await snapshot()).projects.find(p => p.id === "unassigned").selected).toBe(true);

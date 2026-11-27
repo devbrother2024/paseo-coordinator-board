@@ -4,7 +4,7 @@ import { accountUsage } from "./usage-routing";
 import { workImages } from "./work-images";
 import { placementFields, type TaskPlatform } from "./host-assignment";
 export { WORK_IMAGE_MIME_TYPES, MAX_WORK_IMAGES, MAX_WORK_IMAGE_BYTES, MAX_WORK_IMAGES_BYTES, type WorkImage } from "./work-images";
-import { catalogModelSchema, providerEntrySchema, workerModeProvider, gradeSchema, routeChoiceSchema, routePolicySchema } from "./dispatch";
+import { catalogModelSchema, providerEntrySchema, workerModeProvider, gradeSchema, workerGradeSchema, routeChoiceSchema, routePolicySchema, dispatchProjectId, projectRoutingSchema, projectExcludedProvidersSchema } from "./dispatch";
 
 export const operationState = defineRpc({
   name: "board.operations",
@@ -16,6 +16,9 @@ export const operationState = defineRpc({
     usage: z.array(accountUsage).optional(), displayUsage: z.array(accountUsage).optional(), usageRouting: z.boolean().optional(),
     coordinatorMode: z.object({ id: z.string(), label: z.string() }).nullable(),
     routing: routePolicySchema,
+    routingProjects: z.array(z.object({ id: dispatchProjectId, title: z.string(), path: z.string() })).optional(),
+    projectRouting: projectRoutingSchema.optional(),
+    projectExcludedProviders: projectExcludedProvidersSchema.optional(),
     revision: z.number().int().nonnegative(),
   }),
 });
@@ -29,18 +32,23 @@ export const setProviderInclusion = defineRpc({
   name: "board.set-provider-inclusion",
   input: z.strictObject({
     provider: z.string().min(1).max(256), included: z.boolean(), expectedRevision: z.number().int().nonnegative(),
+    projectId: dispatchProjectId.optional(),
   }),
   output: z.object({ ok: z.boolean() }),
 });
+const routingEdit = {
+  candidates: z.array(routeChoiceSchema).max(12),
+  expectedRevision: z.number().int().nonnegative(),
+};
 export const updateRouting = defineRpc({
   name: "board.update-routing",
-  input: z.strictObject({
-    grade: gradeSchema,
-    candidates: z.array(routeChoiceSchema).max(12),
-    expectedRevision: z.number().int().nonnegative(),
-  }),
+  input: z.union([
+    z.strictObject({ ...routingEdit, grade: gradeSchema }),
+    z.strictObject({ ...routingEdit, projectId: dispatchProjectId, grade: workerGradeSchema }),
+  ]),
   output: z.object({ ok: z.boolean() }),
 });
+export type RoutingEdit = z.input<typeof updateRouting.input>;
 export const setupCoordinator = defineRpc({
   name: "board.setup-coordinator",
   input: z.strictObject({
